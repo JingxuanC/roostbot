@@ -3,6 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "files": ["*.json", "README.md"],
-  "scripts": { "check": "node -e \"require('node:fs').accessSync('event.schema.json')\"" }
+  "files": [
+    "*.json",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node -e \"require('node:fs').accessSync('event.schema.json')\""
+  },
+  "license": "Apache-2.0"
 }

@@ -17,3 +17,9 @@
 | [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户模型 |
 | [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时必须提供的七条契约 |
 | [docs/decisions/](docs/decisions/) | 命名、记忆、许可等决策记录 |
+
+## 许可
+
+Apache License 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+
+第三方组件登记在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
