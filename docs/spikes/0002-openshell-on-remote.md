@@ -214,12 +214,48 @@ $ ROOST_API=http://127.0.0.1:8787 ROOST_RUNTIME_TOKEN=… \
 第二条尤其值得记：schema 文档说「有网络规则时」才加 baseline 路径，我们默认拒绝出网 →
 没有网络规则 → 必须自己把动态链接器路径列全。
 
+## DSH 在沙箱里跑完一个回合（2026-11-03）
+
+worker 的回复路径切到 `ROOST_SANDBOX_TURN=dsh`：沙箱内起 mock 模型（loopback），
+执行 `dsh --profile headless --json "<房间消息>"`，解析 `final` 事件，把文本写回房间。
+
+远端实测（房间里的两条消息）：
+
+```
+[user] 盘前看一下异动
+[bot]  「这是沙箱内的 mock 模型回复：DSH 已在沙箱里跑完一个回合。」
+       （沙箱内 DSH 回合 · mock 模型 · openshell）
+```
+
+`dsh --json` 的原始事件（沙箱内 stdout）：
+
+```
+{"type":"session","sessionId":"session-ef12c8eb-…","cwd":"/workspace"}
+{"type":"text","text":"这是沙箱内的 mock 模型回复：…"}
+{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}
+{"type":"final","text":"…"}
+```
+
+镜像：`roost/dsh-runtime:dev` = `node:22-slim` + `npm i -g @deepseek-ai/dsh@0.2.1-rc.5`
+（glibc 让 native binding 用预编译包；alpine 的 musl 没验证）。
+
+**这一轮又踩到三件事**：
+
+| 坑 | 现象 | 修法 |
+|---|---|---|
+| 镜像的 CMD 立刻退出 | `sandbox is not ready (phase: Error)`，exec 被拒 | `create --detach` 必须带长期存活的 canonical process（默认 `sh -lc 'exec sleep infinity'`） |
+| DSH 走 Anthropic Messages API | mock 只实现 `/chat/completions` 时 404 `/v1/messages` | mock 同时实现 `/v1/messages`（含 SSE 流式事件） |
+| DSH_HOME 要可写 | `/var/lib/dsh` 不在 read_write 会失败 | 策略加 `/var/lib/dsh` 可写；`/proc`、`/opt` 只读 |
+
+**换成真模型只改环境变量**：`ROOST_DSH_BASE_URL` 指向模型代理、`ROOST_DSH_MODEL` 指定模型、
+`ROOST_DSH_MOCK=0`。密钥按设计应当走 provider，不进 `--env`。
+
 ## 对项目的意义
 
 - 选型成立：gateway + docker 驱动 + 策略模型的形状与我们的 `SandboxBackend` 一致；
 - **沙箱隔离在远端已真实验证**（默认拒绝 + 白名单 + 非 root），不再是纸面；
 - 唯一硬约束：**docker 驱动要求 Docker ≥ 28**，写进 `sandboxing.md` 与部署文档；
-- worker 的回合已经真的在沙箱里执行（探针），只差把探针换成 DSH 入口；
+- **worker 的回合已经是沙箱里的 DSH 回合**（模型用 mock，路径是真的）；
 - 远端留着可用的 gateway（mTLS + docker28 socket）与独立 dockerd，下一次调试不用从零开始：
 
 ```sh
