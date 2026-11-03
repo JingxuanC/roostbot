@@ -247,8 +247,49 @@ worker 的回复路径切到 `ROOST_SANDBOX_TURN=dsh`：沙箱内起 mock 模型
 | DSH 走 Anthropic Messages API | mock 只实现 `/chat/completions` 时 404 `/v1/messages` | mock 同时实现 `/v1/messages`（含 SSE 流式事件） |
 | DSH_HOME 要可写 | `/var/lib/dsh` 不在 read_write 会失败 | 策略加 `/var/lib/dsh` 可写；`/proc`、`/opt` 只读 |
 
-**换成真模型只改环境变量**：`ROOST_DSH_BASE_URL` 指向模型代理、`ROOST_DSH_MODEL` 指定模型、
-`ROOST_DSH_MOCK=0`。密钥按设计应当走 provider，不进 `--env`。
+## 真实模型 + 凭据不进沙箱（2026-11-03）
+
+按设计走了 **provider 注入**，而不是把 key 塞进 `--env`：
+
+```sh
+# 1) 导入 DeepSeek provider profile（端点 api.deepseek.com + bearer 头）
+openshell provider profile import -f deepseek-provider.yaml --global
+# 2) 建 provider（key 存在网关侧，沙箱看不到）
+openshell provider create --name deepseek --type deepseek --credential DEEPSEEK_API_KEY=…
+# 3) 沙箱带 --provider deepseek，**不设** DEEPSEEK_API_KEY
+openshell sandbox create --from roost/dsh-runtime:dev --provider deepseek --policy /tmp/dsh-policy.yaml \
+  -- sh -lc 'export HOME=/workspace; dsh --profile headless --json "1+1 等于几？"'
+```
+
+沙箱内实测（真实 DeepSeek 返回）：
+
+```
+[llm-deepseek-api-key] model listing from https://api.deepseek.com/models loaded 2 model(s)
+{"type":"text","text":"1+1 等于 2。"}
+{"type":"status","phase":"turn_end","reason":{"kind":"completed"}}
+{"type":"final","text":"1+1 等于 2。"}
+```
+
+**反例（重要）**：如果沙箱里设了 `DEEPSEEK_API_KEY=openshell-managed`，DSH 会自己发
+`Authorization`，OpenShell 的注入被绕过，直接 401：
+
+```
+Authentication Fails, Your api key: ****aged is invalid
+```
+
+所以 provider 模式的纪律是：**沙箱内绝不能设置该环境变量**。这条已经写进 worker/sandbox-runner。
+
+**worker 端到端**（房间里的真实对话）：
+
+```
+[user] 用一句话说明：为什么盘前要看成交额异常？
+[bot]  「盘前看成交额异常，是因为它能提前暴露资金异动和消息面突变（如大宗交易、
+        机构调仓、突发利好利空），据此判断个股或板块当天可能的强弱与风险，
+        避免开盘后被动追涨杀跌。」
+        （沙箱内 DSH 回合 · 真实模型（凭据由 OpenShell provider「deepseek」注入） · openshell）
+```
+
+模型是真实的（有 usage 计数），沙箱里没有 key 的任何副本——这正是 `sandboxing.md` §4 的设计。
 
 ## 对项目的意义
 
