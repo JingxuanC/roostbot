@@ -96,6 +96,30 @@ test('会话 token 只存 hash：库里搜不到明文', async () => {
   })
 })
 
+test('房间：真实 SQLite 建房间、发消息、读回、SSE 可用', async () => {
+  await withApi(async ({ base }) => {
+    const code = ((await (await post(base, '/api/pairing/code', { accountId: 'acc_room' })).json()) as { code: string }).code
+    const token = ((await (await post(base, '/api/pairing/claim', { code })).json()) as { sessionToken: string }).sessionToken
+    const workspace = ((await (
+      await post(base, '/api/workspaces', { name: '量化研究组' }, token)
+    ).json()) as { workspace: { id: string } }).workspace
+
+    const roomRes = await post(base, '/api/rooms', { workspaceId: workspace.id, name: '量化研究组' }, token)
+    assert.equal(roomRes.status, 201)
+    const room = ((await roomRes.json()) as { room: { id: string } }).room
+
+    const msgRes = await post(base, `/api/rooms/${room.id}/messages`, { text: '盘前看一下' }, token)
+    assert.equal(msgRes.status, 201)
+    const message = ((await msgRes.json()) as { message: { seq: number } }).message
+
+    const read = await fetch(`${base}/api/rooms/${room.id}/messages?after=${message.seq - 1}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const body = (await read.json()) as { messages: Array<{ text: string }> }
+    assert.deepEqual(body.messages.map((m) => m.text), ['盘前看一下'])
+  })
+})
+
 test('设备与会话落库：一个设备 + 一条会话，账号正确', async () => {
   await withApi(async ({ base, store }) => {
     const code = ((await (await post(base, '/api/pairing/code', { accountId: 'acc_dev' })).json()) as { code: string }).code

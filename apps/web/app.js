@@ -150,6 +150,24 @@ const PEER_SUMMARY_CHARS = 40
  *   domain / kind / actor / audience / payload
  * 私聊额外带 peer 字段，对应 provenance.ts 的 PeerLabel（名字、动作、完成条件）。
  */
+/** 控制面地址：`?api=` 可指定；默认同源（控制面自己伺服本页）。 */
+const API_BASE = (() => {
+  try {
+    return (new URLSearchParams(location.search).get('api') || '').trim().replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
+})()
+
+/** 调试/测试时用 ?stream=0 关掉 SSE（静态截图、受限环境）；默认开。 */
+const STREAM_ENABLED = (() => {
+  try {
+    return new URLSearchParams(location.search).get('stream') !== '0'
+  } catch {
+    return true
+  }
+})()
+
 const ROOM = {
   id: 'r_quant',
   name: '量化研究组',
@@ -556,9 +574,7 @@ function setupPairing() {
   const submit = $('#pair-submit')
   const note = $('#api-note')
 
-  const rawApi = new URLSearchParams(location.search).get('api') || ''
-  const apiBase = rawApi.trim().replace(/\/+$/, '')
-  note.textContent = apiBase ? `API：${apiBase}` : 'API：同源（?api=http://127.0.0.1:8787 可指定）'
+  note.textContent = API_BASE ? `API：${API_BASE}` : 'API：同源（?api=http://127.0.0.1:8787 可指定）'
 
   const code = () => boxes.map((box) => box.value).join('')
   const focusBox = (index) => {
@@ -638,7 +654,7 @@ function setupPairing() {
     clearError()
     setBusy(true)
     try {
-      const response = await fetch(apiBase ? `${apiBase}/api/pairing/claim` : '/api/pairing/claim', {
+      const response = await fetch(API_BASE ? `${API_BASE}/api/pairing/claim` : '/api/pairing/claim', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -661,7 +677,13 @@ function setupPairing() {
       const token = body && (body.token || body.sessionToken || (body.session && body.session.token))
       if (typeof token === 'string' && token) sessionToken = token
 
-      enterRoom('paired')
+      try {
+        await enterLiveRoom(token)
+      } catch (cause) {
+        const reason = cause instanceof Error ? cause.message : String(cause)
+        enterRoom('paired')
+        showError(`配对成功，但房间没载入（${reason}）。可以稍后刷新重试。`)
+      }
     } catch (cause) {
       // fetch 本身失败（没服务、file://、CORS）——把原因摊开说，不假装成功。
       const reason = cause instanceof Error ? cause.message : String(cause)
@@ -675,8 +697,138 @@ function setupPairing() {
   preview.addEventListener('click', () => enterRoom('preview'))
 }
 
+
 // ---------------------------------------------------------------------------
-// 六、房间交互（全部本地）
+// 六之二、真实房间（控制面 API + SSE）
+// ---------------------------------------------------------------------------
+// 配对成功后才走这里：房间、消息都来自控制面；预览模式仍然用固定样例。
+// 消息形状保持与 events.md 一致（chat.message 事件），只是由服务端消息投影出来。
+
+const LIVE = {
+  active: false,
+  token: '',
+  roomId: '',
+  rooms: [],
+  lastSeq: 0,
+  seen: new Set(),
+  stream: null,
+}
+
+function toEvent(message, roomId) {
+  const isUser = message.actor && message.actor.kind === 'user'
+  return {
+    seq: message.seq,
+    domain: 'chat',
+    kind: 'chat.message',
+    actor: message.actor,
+    audience: `room:${roomId}`,
+    payload: {
+      role: isUser ? 'user' : 'bot',
+      text: message.text,
+      framing: isUser ? 'user' : 'room',
+    },
+  }
+}
+
+async function apiFetch(path, options = {}, token = LIVE.token) {
+  const base = API_BASE ? `${API_BASE}${path}` : path
+  const response = await fetch(base, {
+    ...options,
+    headers: {
+      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  })
+  return response
+}
+
+async function ensureRoom() {
+  let rooms = []
+  const roomsRes = await apiFetch('/api/rooms')
+  if (roomsRes.ok) rooms = (await roomsRes.json()).rooms || []
+
+  if (rooms.length === 0) {
+    // 新账号还没有 workspace：先建一个，再建房间（失败就把原因说出来）。
+    let wsRes = await apiFetch('/api/workspaces')
+    let workspaces = wsRes.ok ? (await wsRes.json()).workspaces || [] : []
+    if (workspaces.length === 0) {
+      const created = await apiFetch('/api/workspaces', {
+        method: 'POST',
+        body: JSON.stringify({ name: '我的工作区' }),
+      })
+      if (!created.ok) throw new Error(await serverMessage(created))
+      workspaces = [(await created.json()).workspace]
+    }
+    const roomRes = await apiFetch('/api/rooms', {
+      method: 'POST',
+      body: JSON.stringify({ workspaceId: workspaces[0].id, name: '量化研究组' }),
+    })
+    if (!roomRes.ok) throw new Error(await serverMessage(roomRes))
+    rooms = [(await roomRes.json()).room]
+  }
+  return rooms
+}
+
+function appendLiveEvent(message) {
+  if (LIVE.seen.has(message.seq)) return
+  LIVE.seen.add(message.seq)
+  LIVE.lastSeq = Math.max(LIVE.lastSeq, message.seq)
+  const list = $('#messages')
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
+  list.append(renderEvent(toEvent(message, LIVE.roomId)))
+  if (nearBottom) list.scrollTop = list.scrollHeight
+}
+
+function openStream() {
+  if (!STREAM_ENABLED) return
+  if (LIVE.stream !== null) LIVE.stream.close()
+  const url = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?access_token=${encodeURIComponent(LIVE.token)}&after=${LIVE.lastSeq}`
+  const stream = new EventSource(API_BASE ? `${API_BASE}${url}` : url)
+  stream.addEventListener('message', (event) => {
+    try {
+      appendLiveEvent(JSON.parse(event.data))
+    } catch {
+      // 坏帧不该打断整条流；服务端会重连补拉。
+    }
+  })
+  stream.addEventListener('error', () => {
+    // EventSource 自己会重连；这里只把状态说出来。
+    $('#working-text').textContent = '连接断开，正在重连…'
+  })
+  LIVE.stream = stream
+}
+
+/** 配对成功后进入真实房间；失败就退回样例并说明原因。 */
+async function enterLiveRoom(token) {
+  LIVE.token = token
+  const rooms = await ensureRoom()
+  const room = rooms[0]
+  LIVE.rooms = rooms
+  LIVE.roomId = room.id
+  ROOM.name = room.name
+  ROOM.events = []
+
+  const messagesRes = await apiFetch(`/api/rooms/${encodeURIComponent(room.id)}/messages`)
+  if (!messagesRes.ok) throw new Error(await serverMessage(messagesRes))
+  const { messages } = await messagesRes.json()
+  ROOM.events = messages.map((message) => toEvent(message, room.id))
+  for (const message of messages) {
+    LIVE.seen.add(message.seq)
+    LIVE.lastSeq = Math.max(LIVE.lastSeq, message.seq)
+  }
+
+  LIVE.active = true
+  renderMessages()
+  $('#room-name').textContent = ROOM.name
+  document.title = `${ROOM.name} · Roost`
+  openStream()
+
+  enterRoom('live')
+}
+
+// ---------------------------------------------------------------------------
+// 六、房间交互
 // ---------------------------------------------------------------------------
 
 function enterRoom(mode) {
@@ -685,10 +837,16 @@ function enterRoom(mode) {
   room.hidden = false
   $('#room-name').textContent = ROOM.name
   $('#working-text').textContent = ROOM.working.text
-  $('#demo-strip-text').textContent =
-    mode === 'paired'
-      ? '已配对，但房间内容仍是固定样例（room API 未接入）；发送不会请求服务端。'
-      : '假数据预览：未配对，房间内容为固定样例；发送不会请求服务端。'
+  const stripText = $('#demo-strip-text')
+  if (mode === 'live') {
+    if (stripText) stripText.hidden = true
+  } else if (stripText) {
+    stripText.hidden = false
+    stripText.textContent =
+      mode === 'paired'
+        ? '已配对，但房间仍是固定样例（房间接口未接上）；发送不会请求服务端。'
+        : '假数据预览：未配对，房间内容为固定样例；发送不会请求服务端。'
+  }
   document.title = `${ROOM.name} · Roost`
   $('#composer').focus()
 }
@@ -753,11 +911,27 @@ function setupComposer() {
     event.preventDefault()
     const text = input.value.trim()
     if (!text) return
-    appendUserMessage(text)
     input.value = ''
     sync()
     grow()
     input.focus()
+
+    if (LIVE.active) {
+      // 真实房间：写服务端，消息由 SSE 推回来（自己先不画，避免重复）。
+      apiFetch(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ text, idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }),
+      })
+        .then(async (response) => {
+          if (response.ok) return
+          const reason = await serverMessage(response)
+          showError(`发送失败：${reason}`)
+        })
+        .catch((cause) => showError(`发送失败：${cause instanceof Error ? cause.message : String(cause)}`))
+      return
+    }
+
+    appendUserMessage(text)
   })
 
   sync()

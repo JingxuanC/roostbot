@@ -171,3 +171,29 @@ export interface CreateSessionInput {
   createdAt: number
   expiresAt: number
 }
+
+export interface Room {
+  id: string
+  workspaceId: string
+  name: string
+  notice: string | null
+  replyMode: string
+  createdAt: number
+}
+
+export interface RoomMessage {
+  seq: number
+  /** ISO 8610（与 events.at 一致）。 */
+  at: string
+  actor: Actor
+  roomId: string
+  text: string
+}
+
+export interface SendMessageInput {
+  roomId: string
+  text: string
+  actor: Actor
+  idem?: string
+  at?: number
+}

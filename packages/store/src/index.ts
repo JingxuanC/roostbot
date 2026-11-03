@@ -51,3 +51,6 @@ export {
   touchSession,
 } from './sessions.ts'
 export type { CreateSessionInput, Session } from './types.ts'
+
+export { createRoom, getRoom, listRooms, readMessages, sendMessage, REPLY_MODES } from './rooms.ts'
+export type { Room, RoomMessage, SendMessageInput } from './types.ts'

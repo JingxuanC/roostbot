@@ -12,6 +12,11 @@ import { randomUUID } from 'node:crypto'
 import {
   StoreError,
   claimPairingCode as claimInStore,
+  createRoom as createRoomInStore,
+  getRoom as getRoomInStore,
+  listRooms as listRoomsInStore,
+  readMessages as readMessagesInStore,
+  sendMessage as sendMessageInStore,
   createPairingCode as createPairingInStore,
   createSession as createSessionInStore,
   createWorkspace as createWorkspaceInStore,
@@ -28,6 +33,8 @@ import {
   type CreateSessionInput,
   type CreateWorkspaceInput,
   type PairingRecord,
+  type RoomMessageRecord,
+  type RoomRecord,
   type SessionRecord,
   type StorePort,
   type WorkspaceRecord,
@@ -160,6 +167,55 @@ export function createStorePort(store: Store): StorePort {
       }
     },
 
+    async listRooms(input): Promise<RoomRecord[]> {
+      const rows = store.db
+        .prepare(
+          `SELECT r.id, r.workspace_id, r.name, r.notice, r.reply_mode, r.created_at
+             FROM rooms r JOIN workspace_members m ON m.workspace_id = r.workspace_id
+            WHERE m.user_id = ?${input.workspaceId === undefined ? '' : ' AND r.workspace_id = ?'}
+            ORDER BY r.created_at, r.id`,
+        )
+        .all(...(input.workspaceId === undefined ? [input.accountId] : [input.accountId, input.workspaceId])) as RoomRow[]
+      return rows.map(toRoomRecord)
+    },
+
+    async createRoom(input): Promise<RoomRecord> {
+      requireMembership(store, input.workspaceId, input.accountId)
+      const room = createRoomInStore(store, {
+        workspaceId: input.workspaceId,
+        name: input.name,
+        createdAt: input.now,
+      })
+      return toRoomRecord({
+        id: room.id,
+        workspace_id: room.workspaceId,
+        name: room.name,
+        notice: room.notice,
+        reply_mode: room.replyMode,
+        created_at: room.createdAt,
+      })
+    },
+
+    async readMessages(input): Promise<RoomMessageRecord[]> {
+      requireRoomMembership(store, input.roomId, input.accountId)
+      return readMessagesInStore(store, {
+        roomId: input.roomId,
+        ...(input.afterSeq === undefined ? {} : { afterSeq: input.afterSeq }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      }).map(toMessageRecord)
+    },
+
+    async postMessage(input): Promise<RoomMessageRecord> {
+      requireRoomMembership(store, input.roomId, input.accountId)
+      const message = sendMessageInStore(store, {
+        roomId: input.roomId,
+        text: input.text,
+        actor: { kind: 'user', id: input.accountId },
+        ...(input.idem === undefined ? {} : { idem: input.idem }),
+      })
+      return toMessageRecord(message)
+    },
+
     async findSessionByToken(tokenHash: string): Promise<SessionRecord | null> {
       const session = findSessionByTokenHash(store, tokenHash)
       if (session === null) return null
@@ -177,6 +233,57 @@ export function createStorePort(store: Store): StorePort {
       }
     },
   }
+}
+
+interface RoomRow {
+  id: string
+  workspace_id: string
+  name: string
+  notice: string | null
+  reply_mode: string
+  created_at: number | bigint
+}
+
+function toRoomRecord(row: RoomRow): RoomRecord {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    ...(row.notice === null ? {} : { notice: row.notice }),
+    replyMode: row.reply_mode as RoomRecord['replyMode'],
+    createdAt: Number(row.created_at),
+  }
+}
+
+function toMessageRecord(message: {
+  seq: number
+  at: string
+  actor: { kind: string; id: string }
+  roomId: string
+  text: string
+}): RoomMessageRecord {
+  return {
+    seq: message.seq,
+    at: message.at,
+    actorKind: message.actor.kind as RoomMessageRecord['actorKind'],
+    actorId: message.actor.id,
+    text: message.text,
+  }
+}
+
+function requireMembership(store: Store, workspaceId: string, accountId: string): void {
+  const row = store.db
+    .prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+    .get(workspaceId, accountId) as { role: string } | undefined
+  if (row === undefined) {
+    throw new StoreError('FORBIDDEN', `account ${accountId} is not a member of ${workspaceId}`)
+  }
+}
+
+function requireRoomMembership(store: Store, roomId: string, accountId: string): void {
+  const room = getRoomInStore(store, roomId)
+  if (room === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${roomId}`)
+  requireMembership(store, room.workspaceId, accountId)
 }
 
 function roleOf(store: Store, workspaceId: string, accountId: string): WorkspaceRole {

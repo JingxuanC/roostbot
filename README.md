@@ -38,18 +38,29 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 控制面同时伺服网页；配对 → 房间（房间目前是假数据）。验收脚本：
 
 ```sh
-sh scripts/verify.sh      # 90 个测试 + healthz/pairing/claim/workspaces 真实 HTTP
+sh scripts/verify.sh      # 101 个测试 + healthz/pairing/claim/workspaces/rooms 真实 HTTP
+```
+
+想直接看有内容的房间（不手动发消息）：
+
+```sh
+node --experimental-strip-types scripts/seed-demo.ts /tmp/roost.db   # 种一个 workspace + 房间 + 4 条消息
+ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 ```
 
 ![配对](docs/assets/m2-pairing.png)
-![房间](docs/assets/m2-room.png)
+
+**真实房间**（消息来自控制面 SQLite；空房间会自动建一个）：
+
+![房间](docs/assets/m3-room-live.png)
 
 **这一版有什么/没有什么**（诚实清单）：
 
 | 有了 | 还没有 |
 |---|---|
-| 事件日志 + 幂等 + 迁移（SQLite） | DSH 真跑在容器里（只有 sidecar 与镜像声明） |
-| 控制面：配对、会话、workspace | 房间/消息的真实接口（前端是固定样例） |
-| 网页：配对页 + 房间样例 + 程序化图标 | 投递方式、流式、审批、连接器、插件页 |
+| 事件日志 + 幂等 + 迁移（SQLite） | 多端同步（同一 workspace 两个窗口还没一起测） |
+| 控制面：配对、会话、workspace | DSH 真跑在容器里（只有 sidecar 与镜像声明） |
+| 房间/消息的真实接口 + SSE 推送 | 多端同步（同一 workspace 两个窗口还没一起测） |
+| 网页：配对页 + 真实房间（SSE）+ 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
 | sidecar 6 个测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
 

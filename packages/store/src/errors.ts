@@ -21,6 +21,7 @@ export const STORE_ERROR_CODES = [
   'PAIRING_CODE_LOCKED',
   'PAIRING_CODE_CONFLICT',
   'PAIRING_WRITE_FAILED',
+  'INVALID_ROOM',
 ] as const
 
 export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number]

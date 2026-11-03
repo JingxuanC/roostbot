@@ -109,6 +109,55 @@ export interface CreateSessionInput {
  * 控制面存储端口。真实实现（packages/store）必须满足文件头的五条契约。
  * 所有方法都可能失败（数据库错误等），API 会把它变成 500 JSON 而不是挂起连接。
  */
+
+// ---- 房间与消息（docs/design/messaging.md）----------------------------------
+// 房间属于 workspace；只有该 workspace 的成员能读写。消息本体是 chat.message 事件，
+// seq 是它的身份，所以 API 不需要自己的消息 id。
+
+export interface RoomRecord {
+  id: string
+  workspaceId: string
+  name: string
+  notice?: string
+  replyMode: 'admin' | 'everyone' | 'mentions'
+  createdAt: number
+}
+
+export interface RoomMessageRecord {
+  seq: number
+  /** ISO 8601。 */
+  at: string
+  actorKind: 'user' | 'bot' | 'system' | 'control-plane'
+  actorId: string
+  text: string
+}
+
+export interface ListRoomsInput {
+  accountId: string
+  workspaceId?: string
+}
+
+export interface CreateRoomInput {
+  accountId: string
+  workspaceId: string
+  name: string
+  now: number
+}
+
+export interface ReadMessagesInput {
+  accountId: string
+  roomId: string
+  afterSeq?: number
+  limit?: number
+}
+
+export interface PostMessageInput {
+  accountId: string
+  roomId: string
+  text: string
+  idem?: string
+}
+
 export interface StorePort {
   createPairingCode(input: CreatePairingCodeInput): Promise<PairingRecord>
   claimPairingCode(input: ClaimPairingCodeInput): Promise<ClaimPairingCodeResult>
@@ -117,6 +166,14 @@ export interface StorePort {
   listWorkspaces(input: { accountId: string }): Promise<WorkspaceRecord[]>
   createSession(input: CreateSessionInput): Promise<SessionRecord>
   findSessionByToken(tokenHash: string): Promise<SessionRecord | null>
+
+  /** 列出该账号可见的房间；给了 workspaceId 就只列那一个。 */
+  listRooms(input: ListRoomsInput): Promise<RoomRecord[]>
+  createRoom(input: CreateRoomInput): Promise<RoomRecord>
+  /** 读消息按 seq 升序；afterSeq 用于 SSE 断线补拉。 */
+  readMessages(input: ReadMessagesInput): Promise<RoomMessageRecord[]>
+  /** 写一条消息，返回它的 seq（幂等由 idem 保证）。 */
+  postMessage(input: PostMessageInput): Promise<RoomMessageRecord>
 }
 
 /** 6 位码空间很小：签发时必须能发现「同一个码还活着」，由 API 换一个重试。 */

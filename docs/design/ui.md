@@ -421,3 +421,15 @@ Run     62 / 200
 2. **投递方式（立即/排队）默认哪个？** 倾向：默认"立即读取"，高级用户可改默认。
 3. **审批是否支持"本会话允许"**？（`messaging`/`sandbox` 都提到单次授权）倾向：v1 只做单次，长期授权放设置。
 4. **移动端是否支持发图/语音**？倾向：v1 支持发图，语音后置。
+
+## 13. 实现状态（M3）
+
+| 界面 | 状态 |
+|---|---|
+| 配对页 | ✅ 真接口（`POST /api/pairing/claim`），错误原样显示 |
+| 房间页 | ✅ 消息来自 `GET /api/rooms/:id/messages`，新消息经 SSE（`/stream`）；发送写 `POST` |
+| Bot 私聊折叠 | ✅ 渲染规则在 `packages/messaging` 与 app.js 各一份，等前端接包后只剩一份 |
+| 需要你 | ⏳ 抽屉与卡片是样例，接口未做 |
+| Bot 设置 / 插件 / 连接器 / 用量 | ⏳ 未做 |
+
+**SSE 的实现偏差**：浏览器 `EventSource` 不能带 `Authorization` 头，所以 `/stream` 额外接受 `?access_token=`（仅回环、no-store）。上公网前要换成同源 cookie 或 fetch 流。

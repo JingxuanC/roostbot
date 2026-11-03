@@ -39,3 +39,8 @@ export function newEventId(at: number = Date.now()): string {
 export function newWorkspaceId(at: number = Date.now()): string {
   return `ws_${body(at)}`
 }
+
+/** 通用：`<prefix>_<ulid body>`，用于房间等不是 events/workspaces 的实体。 */
+export function newRoostId(prefix: string, at: number = Date.now()): string {
+  return `${prefix}_${body(at)}`
+}

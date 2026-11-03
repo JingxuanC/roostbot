@@ -46,6 +46,8 @@ const SESSION_TOKEN_PATTERN = /^[0-9a-f]{64}$/
 const PLATFORMS: readonly DevicePlatform[] = ['web', 'desktop', 'ios', 'android', 'cli']
 
 export interface ServerOptions {
+  /** SSE 轮询间隔（毫秒）；默认 700，测试里调小。 */
+  streamPollMs?: number
   store: StorePort
   /** 注入时钟（测试用）。默认 Date.now。 */
   now?: () => number
@@ -547,6 +549,236 @@ async function serveStatic(res: ServerResponse, path: string): Promise<boolean> 
   }
 }
 
+
+// ---- 房间与消息（docs/design/messaging.md）---------------------------------
+
+interface RoomRouteContext extends HandlerContext {
+  /** SSE 轮询间隔（测试可调小）。 */
+  streamPollMs: number
+}
+
+function roomJson(room: RoomRecord): Record<string, unknown> {
+  return {
+    id: room.id,
+    workspaceId: room.workspaceId,
+    name: room.name,
+    replyMode: room.replyMode,
+    createdAt: room.createdAt,
+    ...(room.notice === undefined ? {} : { notice: room.notice })
+  }
+}
+
+function messageJson(message: RoomMessageRecord): Record<string, unknown> {
+  return {
+    seq: message.seq,
+    at: message.at,
+    actor: { kind: message.actorKind, id: message.actorId },
+    text: message.text
+  }
+}
+
+
+/**
+ * 房间接口的存储错误映射：不认识的房间/workspace 是 404（不是 500），
+ * 权限不足是 403；其余一律 500，并把原始错误留在日志里。
+ */
+function sendStoreFailure(res: ServerResponse, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/unknown room/i.test(message)) {
+    sendError(res, 404, 'room_not_found', message)
+    return
+  }
+  if (/unknown workspace/i.test(message)) {
+    sendError(res, 404, 'workspace_not_found', message)
+    return
+  }
+  if (/not a member|forbidden/i.test(message)) {
+    sendError(res, 403, 'forbidden', message)
+    return
+  }
+  console.error('roost api: room store failure', err)
+  sendError(res, 500, 'internal_error', 'room store failure')
+}
+
+async function handleListRooms(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  const workspaceId = url.searchParams.get('workspaceId') ?? undefined
+  try {
+    const rooms = await ctx.store.listRooms({
+      accountId: auth.session.accountId,
+      ...(workspaceId === undefined ? {} : { workspaceId })
+    })
+    sendJson(res, 200, { rooms: rooms.map(roomJson) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+async function handleCreateRoom(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const name = typeof body.name === 'string' ? body.name.trim() : ''
+  if (name === '' || name.length > 60) {
+    return sendError(res, 400, 'invalid_body', 'body.name must be 1..60 characters')
+  }
+  // workspaceId 省略时，用这个账号的第一个 workspace；一个都没有就 409（先建 workspace）。
+  const owned = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
+  const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : owned[0]?.id
+  if (workspaceId === undefined || !owned.some((workspace) => workspace.id === workspaceId)) {
+    return sendError(res, 409, 'no_workspace', 'create a workspace before a room')
+  }
+  try {
+    const room = await ctx.store.createRoom({
+      accountId: auth.session.accountId,
+      workspaceId,
+      name,
+      now: ctx.now()
+    })
+    sendJson(res, 201, { room: roomJson(room) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  const afterRaw = url.searchParams.get('after')
+  const afterSeq = afterRaw === null ? undefined : Number.parseInt(afterRaw, 10)
+  if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
+    return sendError(res, 400, 'invalid_body', 'after must be a non-negative integer seq')
+  }
+  const roomId = roomIdFromPath(url.pathname)
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  try {
+    const messages = await ctx.store.readMessages({
+      accountId: auth.session.accountId,
+      roomId,
+      ...(afterSeq === undefined ? {} : { afterSeq })
+    })
+    sendJson(res, 200, { messages: messages.map(messageJson) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const text = typeof body.text === 'string' ? body.text.trim() : ''
+  if (text === '' || text.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
+  }
+  const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
+  const roomId = roomIdFromPath(url.pathname)
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  try {
+    const message = await ctx.store.postMessage({
+      accountId: auth.session.accountId,
+      roomId,
+      text,
+      ...(idem === undefined ? {} : { idem })
+    })
+    sendJson(res, 201, { message: messageJson(message) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+/**
+ * SSE：新消息推送。用轮询读 store（SQLite 是唯一真相，轮询不会漏；写侧不需要广播）。
+ * 浏览器 EventSource 不能带 Authorization 头，所以这条路由额外接受 ?access_token=。
+ * 仅本机回环 + no-store；上公网前要改成同源 cookie 或 fetch 流。
+ */
+async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const headerToken = /^Bearer[ ]+(\S+)$/.exec((req.headers.authorization ?? '').trim())
+  const queryToken = url.searchParams.get('access_token')
+  const token = headerToken?.[1] ?? queryToken
+  if (token === null || token === undefined || !SESSION_TOKEN_PATTERN.test(token)) {
+    return sendError(res, 401, 'unauthenticated', 'stream needs a session token')
+  }
+  const session = await ctx.store.findSessionByToken(hashSessionToken(token))
+  if (session === null) return sendError(res, 401, 'unauthenticated', 'unknown session token')
+  if (session.expiresAt <= ctx.now()) return sendError(res, 401, 'session_expired', 'session expired')
+
+  const roomId = roomIdFromPath(url.pathname)
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  const afterRaw = url.searchParams.get('after')
+  let lastSeq = afterRaw === null ? 0 : Number.parseInt(afterRaw, 10)
+  if (!Number.isSafeInteger(lastSeq) || lastSeq < 0) lastSeq = 0
+
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no'
+  })
+  res.write(': connected\n\n')
+
+  let closed = false
+  const heartbeat = setInterval(() => {
+    if (!closed) res.write(': ping\n\n')
+  }, 15_000)
+  heartbeat.unref?.()
+
+  const pump = async (): Promise<void> => {
+    while (!closed) {
+      let batch: RoomMessageRecord[]
+      try {
+        batch = await ctx.store.readMessages({
+          accountId: session.accountId,
+          roomId,
+          afterSeq: lastSeq,
+          limit: 200
+        })
+      } catch {
+        // 房间被删或权限变化：结束流，让客户端重连并处理。
+        res.write('event: error\ndata: {"code":"stream_unavailable"}\n\n')
+        break
+      }
+      for (const message of batch) {
+        lastSeq = message.seq
+        res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(messageJson(message))}\n\n`)
+      }
+      if (batch.length > 0) res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
+      await sleep(ctx.streamPollMs)
+    }
+  }
+
+  req.on('close', () => {
+    closed = true
+    clearInterval(heartbeat)
+  })
+
+  await pump()
+  clearInterval(heartbeat)
+  if (!res.writableEnded) res.end()
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+function roomIdFromPath(pathname: string): string | null {
+  const match = /^\/api\/rooms\/([^/]+)(?:\/(?:messages|stream))?$/.exec(pathname)
+  if (match === null) return null
+  try {
+    return decodeURIComponent(match[1]!)
+  } catch {
+    return null
+  }
+}
+
 function notFound(req: IncomingMessage, res: ServerResponse, method: string, path: string): void {
   req.resume()
   sendError(res, 404, 'not_found', `no route for ${method} ${path}`)
@@ -604,6 +836,41 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (path === '/api/rooms') {
+    if (method === 'GET') {
+      await handleListRooms(ctx as RoomRouteContext, req, res, url)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateRoom(ctx as RoomRouteContext, req, res)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/messages$/.test(path)) {
+    if (method === 'GET') {
+      await handleReadMessages(ctx as RoomRouteContext, req, res, url)
+      return
+    }
+    if (method === 'POST') {
+      await handlePostMessage(ctx as RoomRouteContext, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/stream$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleStream(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
   // 同源网页：GET 未命中 API 路由时，尝试 apps/web 里的静态文件。
   if ((method === 'GET' || method === 'HEAD') && (await serveStatic(res, path))) return
 
@@ -613,11 +880,12 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
 /** 返回未监听的 node:http Server；要直接起服务用 startServer()。 */
 export function createServer(options: ServerOptions): http.Server {
   const now: Clock = options.now ?? (() => Date.now())
-  const ctx: HandlerContext = {
+  const ctx: RoomRouteContext = {
     store: options.store,
     now,
     startedAt: now(),
-    claimFailures: []
+    claimFailures: [],
+    streamPollMs: options.streamPollMs ?? 700
   }
 
   const server = http.createServer((req, res) => {

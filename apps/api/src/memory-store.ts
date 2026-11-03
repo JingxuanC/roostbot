@@ -15,6 +15,8 @@ import type {
   DevicePlatform,
   HomeMode,
   PairingRecord,
+  RoomMessageRecord,
+  RoomRecord,
   SessionRecord,
   StorePort,
   WorkspaceRecord,
@@ -50,6 +52,10 @@ export function createMemoryStore(): StorePort {
   const workspaces = new Map<string, WorkspaceEntry>()
   const sessions = new Map<string, SessionRecord>()
   const devices = new Map<string, DeviceEntry>()
+  const rooms = new Map<string, RoomRecord>()
+  const messages = new Map<string, RoomMessageRecord[]>()
+  const idemSeen = new Map<string, RoomMessageRecord>()
+  let nextSeq = 1
 
   function fail(record: PairingRecord, input: ClaimPairingCodeInput, reason: 'expired' | 'used'): ClaimPairingCodeResult {
     record.attempts += 1
@@ -153,6 +159,66 @@ export function createMemoryStore(): StorePort {
     async findSessionByToken(tokenHash: string): Promise<SessionRecord | null> {
       const session = sessions.get(tokenHash)
       return session === undefined ? null : { ...session }
+    },
+
+    async listRooms(input): Promise<RoomRecord[]> {
+      const workspaceIds = new Set(
+        [...workspaces.entries()].filter(([, entry]) => entry.members.has(input.accountId)).map(([id]) => id)
+      )
+      const all = [...rooms.values()].filter((room) => workspaceIds.has(room.workspaceId))
+      const filtered = input.workspaceId === undefined ? all : all.filter((room) => room.workspaceId === input.workspaceId)
+      return filtered
+        .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+        .map((room) => ({ ...room }))
+    },
+
+    async createRoom(input): Promise<RoomRecord> {
+      const entry = workspaces.get(input.workspaceId)
+      if (entry === undefined || !entry.members.has(input.accountId)) {
+        throw new Error(`unknown workspace ${input.workspaceId}`)
+      }
+      const name = input.name.trim()
+      if (name === '') throw new Error('room name is empty')
+      const room: RoomRecord = {
+        id: newId('rm'),
+        workspaceId: input.workspaceId,
+        name,
+        replyMode: 'admin',
+        createdAt: input.now
+      }
+      rooms.set(room.id, room)
+      messages.set(room.id, [])
+      return { ...room }
+    },
+
+    async readMessages(input): Promise<RoomMessageRecord[]> {
+      const room = rooms.get(input.roomId)
+      if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
+      const after = input.afterSeq ?? 0
+      const limit = input.limit ?? 200
+      return (messages.get(room.id) ?? []).filter((message) => message.seq > after).slice(0, limit).map((m) => ({ ...m }))
+    },
+
+    async postMessage(input): Promise<RoomMessageRecord> {
+      const room = rooms.get(input.roomId)
+      if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
+      const text = input.text.trim()
+      if (text === '') throw new Error('message text is empty')
+      if (input.idem !== undefined) {
+        const seen = idemSeen.get(`${room.id}:${input.idem}`)
+        if (seen !== undefined) return { ...seen }
+      }
+      const message: RoomMessageRecord = {
+        seq: nextSeq,
+        at: new Date().toISOString(),
+        actorKind: 'user',
+        actorId: input.accountId,
+        text
+      }
+      nextSeq += 1
+      messages.get(room.id)?.push(message)
+      if (input.idem !== undefined) idemSeen.set(`${room.id}:${input.idem}`, message)
+      return { ...message }
     }
   }
 }

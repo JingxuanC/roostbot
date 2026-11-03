@@ -37,6 +37,15 @@ if [ -f apps/api/src/main.ts ]; then
   TOKEN=$(python3 -c "import json;print(json.load(open('/tmp/c.json')).get('sessionToken',''))" 2>/dev/null)
   printf '  workspaces: '; curl -sS -m 5 -o /tmp/w.json -w '%{http_code} ' "$base/api/workspaces" -H "authorization: Bearer $TOKEN"; head -c 120 /tmp/w.json; echo
   printf '  no token  : '; curl -sS -m 5 -o /tmp/n.json -w '%{http_code} ' "$base/api/workspaces"; head -c 80 /tmp/n.json; echo
+  WSID=$(python3 -c "import json;d=json.load(open('/tmp/w.json'));print(d['workspaces'][0]['id'] if d.get('workspaces') else '')" 2>/dev/null)
+  if [ -z "$WSID" ]; then
+    curl -sS -m 5 -o /tmp/wc.json -X POST "$base/api/workspaces" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"name":"我的工作区"}' >/dev/null
+    WSID=$(python3 -c "import json;print(json.load(open('/tmp/wc.json'))['workspace']['id'])" 2>/dev/null)
+  fi
+  printf '  room      : '; curl -sS -m 5 -o /tmp/rc.json -w '%{http_code} ' -X POST "$base/api/rooms" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d "{\"workspaceId\":\"$WSID\",\"name\":\"量化研究组\"}"; head -c 100 /tmp/rc.json; echo
+  ROOMID=$(python3 -c "import json;print(json.load(open('/tmp/rc.json'))['room']['id'])" 2>/dev/null)
+  printf '  message   : '; curl -sS -m 5 -o /tmp/mc.json -w '%{http_code} ' -X POST "$base/api/rooms/$ROOMID/messages" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"text":"盘前看一下异动"}'; head -c 100 /tmp/mc.json; echo
+  printf '  messages  : '; curl -sS -m 5 -o /tmp/mr.json -w '%{http_code} ' "$base/api/rooms/$ROOMID/messages" -H "authorization: Bearer $TOKEN"; head -c 140 /tmp/mr.json; echo
   kill "$API_PID" 2>/dev/null
   wait "$API_PID" 2>/dev/null
 else
