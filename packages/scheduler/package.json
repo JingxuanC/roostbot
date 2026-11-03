@@ -1,0 +1,11 @@
+{
+  "name": "@roost/scheduler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Activation and run lifecycle for Roost Bot: one primitive for clock, event and repair triggers.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}
