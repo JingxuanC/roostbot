@@ -1,0 +1,11 @@
+{
+  "name": "@roost/assignment",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One unit of delegated work between bots: state machine, outcome, budgets and the transitions that are legal.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}

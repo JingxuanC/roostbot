@@ -16,7 +16,7 @@
 | [docs/vision.md](docs/vision.md) | 做什么、不做什么、为谁做 |
 | [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户模型 |
 | [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时必须提供的七条契约 |
-| [docs/design/](docs/design/) | 设计文档：loop 与上下文、消息与投递、调度与激活、工作区与多端 |
+| [docs/design/](docs/design/) | 设计文档：loop 与上下文、消息与投递、协作状态机、调度与激活、工作区与多端 |
 | [docs/spikes/](docs/spikes/) | 可复现的实验与结论（含环境限制） |
 | [docs/decisions/](docs/decisions/) | 命名、记忆、许可等决策记录 |
 
