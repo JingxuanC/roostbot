@@ -200,6 +200,7 @@ CREATE TABLE sandbox_denials (
 | 真 CLI 参数对齐 | ✅ 已实测并修正后端（无 `--mount`、exec `--timeout` 秒、stop 保留工作区） |
 | 远端 gateway（Docker 驱动 + mTLS 认证） | ✅ 可用 |
 | 真沙箱执行（远端验证） | ✅ 默认拒绝出网 + 白名单放行 + 非 root，见 spike 0002 |
+| worker 回合在沙箱里执行 | ✅ 探针命令（uid/hostname 证据写回房间）；DSH 入口未接 |
 | 部署硬约束 | **docker 驱动要求 Docker ≥ 28**（26/27 会把 `1000:1000` 当用户名查 getent） |
 
 更新的实测（2026-11-03，远端）：

@@ -182,11 +182,44 @@ wget: can't connect to remote host (198.18.0.3): Permission denied
 | 独立 dockerd 28 + `socket_path` | 不动系统 Docker，已验证可行；多一个守护进程要管 |
 | 换 Podman 驱动 | 需要能装 podman 的发行版（alinux 4 源里没有） |
 
+## worker 接入沙箱（端到端，2026-11-03）
+
+`apps/runtime/sandbox-runner.ts` 把 worker 的「想」放进沙箱：起一个沙箱，每条回复在里面跑一次探针命令，
+把证据写回房间。远端实际跑通：
+
+```
+$ ROOST_API=http://127.0.0.1:8787 ROOST_RUNTIME_TOKEN=… \
+  ROOST_SANDBOX=openshell ROOST_BOT_ID=selector \
+  node --experimental-strip-types apps/runtime/worker.ts
+
+[sandbox] sandbox roost-uk8sbb00v8 created
+[room-worker] replied in rm_01M6HDQ… to seq 1
+```
+
+房间里收到的 Bot 消息：
+
+```
+[user] 盘前看一下异动
+[bot]  收到：「盘前看一下异动」。这条回复由 openshell 沙箱内的同名进程生成
+       （uid=1000 gid=1000 · host=eadc2b1188d8）；DSH 回合还没接进来。
+```
+
+再加两个实测约束（都已在代码里修掉）：
+
+| 坑 | 现象 | 修法 |
+|---|---|---|
+| sandbox 名上限 19 字符 | `name exceeds maximum length (21 > 19)` | 名字改成 `roost-` + 10 位随机；后端先校验 `[a-z0-9][a-z0-9-]{0,18}` |
+| 没有网络规则时**不会**自动加 baseline 路径 | `/bin/sh` 启动即 `Permission denied (os error 13)` | 策略里显式列 `/lib`、`/lib64`、`/sbin`、`/dev/null` |
+
+第二条尤其值得记：schema 文档说「有网络规则时」才加 baseline 路径，我们默认拒绝出网 →
+没有网络规则 → 必须自己把动态链接器路径列全。
+
 ## 对项目的意义
 
 - 选型成立：gateway + docker 驱动 + 策略模型的形状与我们的 `SandboxBackend` 一致；
 - **沙箱隔离在远端已真实验证**（默认拒绝 + 白名单 + 非 root），不再是纸面；
 - 唯一硬约束：**docker 驱动要求 Docker ≥ 28**，写进 `sandboxing.md` 与部署文档；
+- worker 的回合已经真的在沙箱里执行（探针），只差把探针换成 DSH 入口；
 - 远端留着可用的 gateway（mTLS + docker28 socket）与独立 dockerd，下一次调试不用从零开始：
 
 ```sh

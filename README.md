@@ -76,5 +76,5 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 | 网页：配对页 + 真实房间（SSE）+ Bot 回复 + 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
 | sidecar 测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
 | 沙箱策略模型 + OpenShell 后端 | 真沙箱已在远端验证（需 Docker ≥ 28，见 spike 0002） |
-| 沙箱接进 runtime / DSH 容器 | **未接入**（策略与后端就绪，还没接到 worker 上） |
+| worker 的回复在沙箱里执行（远端验证） | DSH 回合还没进沙箱（探针命令代替） |
 
