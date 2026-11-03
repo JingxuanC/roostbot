@@ -38,7 +38,14 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 控制面同时伺服网页；配对 → 房间（房间目前是假数据）。验收脚本：
 
 ```sh
-sh scripts/verify.sh      # 101 个测试 + healthz/pairing/claim/workspaces/rooms 真实 HTTP
+sh scripts/verify.sh      # 108 个测试 + 配对/房间/消息/Bot 回合 的真实 HTTP 检查
+```
+
+想看 Bot 回话，再起一个 worker（另一个终端）：
+
+```sh
+ROOST_RUNTIME_TOKEN=dev-token node --experimental-strip-types apps/runtime/worker.ts
+# worker 用 ROOST_API（默认 127.0.0.1:8787）和 ROOST_BOT_ID（默认 selector）连控制面
 ```
 
 想直接看有内容的房间（不手动发消息）：
@@ -54,6 +61,10 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 
 ![房间](docs/assets/m3-room-live.png)
 
+**Bot 真的在房间里说话**（worker 订阅事件、以 Bot 身份写回；v0 是占位回复，接口已经固定）：
+
+![Bot 回复](docs/assets/m4-bot-reply.png)
+
 **这一版有什么/没有什么**（诚实清单）：
 
 | 有了 | 还没有 |
@@ -61,6 +72,7 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 | 事件日志 + 幂等 + 迁移（SQLite） | 多端同步（同一 workspace 两个窗口还没一起测） |
 | 控制面：配对、会话、workspace | DSH 真跑在容器里（只有 sidecar 与镜像声明） |
 | 房间/消息的真实接口 + SSE 推送 | 多端同步（同一 workspace 两个窗口还没一起测） |
-| 网页：配对页 + 真实房间（SSE）+ 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
+| **Bot 真的在房间里说话**（worker + 占位回复 + 幂等 + 不自激） | 回复是**模板**不是模型（DSH 回合还没接） |
+| 网页：配对页 + 真实房间（SSE）+ Bot 回复 + 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
 | sidecar 6 个测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
 

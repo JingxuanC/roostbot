@@ -52,6 +52,33 @@ export function createMemoryStore(): StorePort {
   const workspaces = new Map<string, WorkspaceEntry>()
   const sessions = new Map<string, SessionRecord>()
   const devices = new Map<string, DeviceEntry>()
+  const postMessageAs = (input: {
+    roomId: string
+    text: string
+    idem?: string
+    actor: { kind: string; id: string }
+  }): RoomMessageRecord => {
+    const room = rooms.get(input.roomId)
+    if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
+    const text = input.text.trim()
+    if (text === '') throw new Error('message text is empty')
+    if (input.idem !== undefined) {
+      const seen = idemSeen.get(`${room.id}:${input.idem}`)
+      if (seen !== undefined) return { ...seen }
+    }
+    const message: RoomMessageRecord = {
+      seq: nextSeq,
+      at: new Date().toISOString(),
+      actorKind: input.actor.kind as RoomMessageRecord['actorKind'],
+      actorId: input.actor.id,
+      text
+    }
+    nextSeq += 1
+    messages.get(room.id)?.push(message)
+    if (input.idem !== undefined) idemSeen.set(`${room.id}:${input.idem}`, message)
+    return { ...message }
+  }
+
   const rooms = new Map<string, RoomRecord>()
   const messages = new Map<string, RoomMessageRecord[]>()
   const idemSeen = new Map<string, RoomMessageRecord>()
@@ -199,26 +226,29 @@ export function createMemoryStore(): StorePort {
       return (messages.get(room.id) ?? []).filter((message) => message.seq > after).slice(0, limit).map((m) => ({ ...m }))
     },
 
-    async postMessage(input): Promise<RoomMessageRecord> {
+    async listAllRooms(): Promise<RoomRecord[]> {
+      return [...rooms.values()].sort((a, b) => a.createdAt - b.createdAt).map((room) => ({ ...room }))
+    },
+
+    async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
+      return postMessageAs({ roomId: input.roomId, text: input.text, idem: input.idem, actor: { kind: 'bot', id: input.botId } })
+    },
+
+    async readMessagesInternal(input): Promise<RoomMessageRecord[]> {
       const room = rooms.get(input.roomId)
       if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
-      const text = input.text.trim()
-      if (text === '') throw new Error('message text is empty')
-      if (input.idem !== undefined) {
-        const seen = idemSeen.get(`${room.id}:${input.idem}`)
-        if (seen !== undefined) return { ...seen }
-      }
-      const message: RoomMessageRecord = {
-        seq: nextSeq,
-        at: new Date().toISOString(),
-        actorKind: 'user',
-        actorId: input.accountId,
-        text
-      }
-      nextSeq += 1
-      messages.get(room.id)?.push(message)
-      if (input.idem !== undefined) idemSeen.set(`${room.id}:${input.idem}`, message)
-      return { ...message }
+      const after = input.afterSeq ?? 0
+      const limit = input.limit ?? 200
+      return (messages.get(room.id) ?? []).filter((message) => message.seq > after).slice(0, limit).map((m) => ({ ...m }))
+    },
+
+    async postMessage(input): Promise<RoomMessageRecord> {
+      return postMessageAs({
+        roomId: input.roomId,
+        text: input.text,
+        idem: input.idem,
+        actor: { kind: 'user', id: input.accountId }
+      })
     }
   }
 }

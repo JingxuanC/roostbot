@@ -10,7 +10,8 @@
   "scripts": {
     "check": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "test": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
-    "dev:api": "node --experimental-strip-types apps/api/src/main.ts"
+    "dev:api": "node --experimental-strip-types apps/api/src/main.ts",
+    "dev:worker": "node --experimental-strip-types apps/runtime/worker.ts"
   },
   "license": "Apache-2.0",
   "type": "module"

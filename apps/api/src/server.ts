@@ -48,6 +48,11 @@ const PLATFORMS: readonly DevicePlatform[] = ['web', 'desktop', 'ios', 'android'
 export interface ServerOptions {
   /** SSE 轮询间隔（毫秒）；默认 700，测试里调小。 */
   streamPollMs?: number
+  /**
+   * 内部接口的 runtime token（`ROOST_RUNTIME_TOKEN`）。不给 = 内部接口关闭（404）。
+   * 只有同机的 runtime worker 持有它，不走用户会话。
+   */
+  runtimeToken?: string
   store: StorePort
   /** 注入时钟（测试用）。默认 Date.now。 */
   now?: () => number
@@ -553,6 +558,7 @@ async function serveStatic(res: ServerResponse, path: string): Promise<boolean> 
 // ---- 房间与消息（docs/design/messaging.md）---------------------------------
 
 interface RoomRouteContext extends HandlerContext {
+  runtimeToken?: string
   /** SSE 轮询间隔（测试可调小）。 */
   streamPollMs: number
 }
@@ -582,6 +588,85 @@ function messageJson(message: RoomMessageRecord): Record<string, unknown> {
  * 房间接口的存储错误映射：不认识的房间/workspace 是 404（不是 500），
  * 权限不足是 403；其余一律 500，并把原始错误留在日志里。
  */
+
+// ---- 服务端内部接口（runtime worker 专用，runtime token 鉴权）----------------
+// 这不是给浏览器用的：worker 要能发现房间、按 seq 读、以 Bot 身份说话。
+
+function runtimeTokenFrom(req: IncomingMessage): string | null {
+  const header = (req.headers['x-runtime-token'] ?? '').toString()
+  if (header !== '') return header
+  const auth = (req.headers.authorization ?? '').trim()
+  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
+  return match === null ? null : match[1]!
+}
+
+function authorizeRuntime(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): boolean {
+  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
+    // 没配置 = 功能关闭：404 而不是 401，避免暴露"这里有内部接口"。
+    sendError(res, 404, 'not_found', 'internal api is disabled')
+    return false
+  }
+  const token = runtimeTokenFrom(req)
+  if (token === null || token !== ctx.runtimeToken) {
+    sendError(res, 401, 'unauthenticated', 'runtime token required')
+    return false
+  }
+  return true
+}
+
+async function handleInternalRooms(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!authorizeRuntime(ctx, req, res)) return
+  try {
+    sendJson(res, 200, { rooms: (await ctx.store.listAllRooms()).map(roomJson) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (!authorizeRuntime(ctx, req, res)) return
+  const roomId = internalRoomIdFromPath(url.pathname)
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  const afterRaw = url.searchParams.get('after')
+  const afterSeq = afterRaw === null ? undefined : Number.parseInt(afterRaw, 10)
+  if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
+    return sendError(res, 400, 'invalid_body', 'after must be a non-negative integer seq')
+  }
+  try {
+    const messages = await ctx.store.readMessagesInternal({
+      roomId,
+      ...(afterSeq === undefined ? {} : { afterSeq })
+    })
+    sendJson(res, 200, { messages: messages.map(messageJson) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (!authorizeRuntime(ctx, req, res)) return
+  const roomId = roomIdFromPath(url.pathname)
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const botId = typeof body.botId === 'string' ? body.botId.trim() : ''
+  const text = typeof body.text === 'string' ? body.text.trim() : ''
+  if (botId === '' || botId.length > 64) {
+    return sendError(res, 400, 'invalid_body', 'body.botId must be 1..64 characters')
+  }
+  if (text === '' || text.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
+  }
+  const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
+  try {
+    const message = await ctx.store.postBotMessage({ roomId, botId, text, ...(idem === undefined ? {} : { idem }) })
+    sendJson(res, 201, { message: messageJson(message) })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
 function sendStoreFailure(res: ServerResponse, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
   if (/unknown room/i.test(message)) {
@@ -769,8 +854,18 @@ function sleep(ms: number): Promise<void> {
   })
 }
 
-function roomIdFromPath(pathname: string): string | null {
-  const match = /^\/api\/rooms\/([^/]+)(?:\/(?:messages|stream))?$/.exec(pathname)
+function roomIdFromPath(pathname: string, suffix = '(?:messages|stream|say)'): string | null {
+  const match = new RegExp(`^/api/rooms/([^/]+)(?:/${suffix})?$`).exec(pathname)
+  if (match === null) return null
+  try {
+    return decodeURIComponent(match[1]!)
+  } catch {
+    return null
+  }
+}
+
+function internalRoomIdFromPath(pathname: string): string | null {
+  const match = /^\/api\/internal\/rooms\/([^/]+)\/messages$/.exec(pathname)
   if (match === null) return null
   try {
     return decodeURIComponent(match[1]!)
@@ -871,6 +966,33 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (path === '/api/internal/rooms') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalRooms(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (/^\/api\/internal\/rooms\/[^/]+\/messages$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalMessages(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/say$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleSay(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
   // 同源网页：GET 未命中 API 路由时，尝试 apps/web 里的静态文件。
   if ((method === 'GET' || method === 'HEAD') && (await serveStatic(res, path))) return
 
@@ -885,7 +1007,8 @@ export function createServer(options: ServerOptions): http.Server {
     now,
     startedAt: now(),
     claimFailures: [],
-    streamPollMs: options.streamPollMs ?? 700
+    streamPollMs: options.streamPollMs ?? 700,
+    runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN
   }
 
   const server = http.createServer((req, res) => {

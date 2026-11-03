@@ -174,6 +174,14 @@ export interface StorePort {
   readMessages(input: ReadMessagesInput): Promise<RoomMessageRecord[]>
   /** 写一条消息，返回它的 seq（幂等由 idem 保证）。 */
   postMessage(input: PostMessageInput): Promise<RoomMessageRecord>
+
+  // ---- 服务端内部（runtime worker 用；只由持有 runtime token 的进程调用）----
+  /** 所有房间（worker 启动时发现要盯哪些房间）。 */
+  listAllRooms(): Promise<RoomRecord[]>
+  /** 以 Bot 身份写一条消息。 */
+  postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord>
+  /** 内部读：不走成员校验，调用方已经用 runtime token 证明过身份。 */
+  readMessagesInternal(input: { roomId: string; afterSeq?: number; limit?: number }): Promise<RoomMessageRecord[]>
 }
 
 /** 6 位码空间很小：签发时必须能发现「同一个码还活着」，由 API 换一个重试。 */

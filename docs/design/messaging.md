@@ -264,3 +264,22 @@ Bot 之间的私聊（`message` / `reply` / `delegate` / `consult` / `proactive`
 3. 展开一次只影响当前会话视图，不关掉开关（下次回来看还是折叠）
 4. 开关存在房间记录里（跨端一致），不是设备偏好——这是房间的展示约定，不是个人习惯
 5. 折叠**不影响模型上下文**：只是渲染层的行为，Bot 仍然看到全量
+
+
+### 14.3 谁替 Bot 说话（v0 已落地）
+
+```
+人 → POST /api/rooms/:id/messages
+        → chat.message 事件（actor.kind=user）
+        ↓ worker 轮询内部接口（runtime token）
+      GET /api/internal/rooms/:id/messages?after=seq
+        ↓ 看到新的 user 消息 → 想 → 
+      POST /api/rooms/:id/say { botId, text, idem }
+        → chat.message 事件（actor.kind=bot）
+        ↓
+      网页 SSE 收到 → 渲染成 Bot 消息
+```
+
+v0 的「想」是**固定模板**（诚实说明这是占位，不假装模型输出）。替换成 DSH 回合时只改 worker 的 `reply()`，接口与事件形状不变。
+
+两条防自激规则：worker **只回人的消息**；回复带 `idem: reply-<room>-<seq>`，重启重放不会重复。

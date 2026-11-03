@@ -26,7 +26,8 @@ echo
 echo "== 2) API 冒烟（真实 HTTP）"
 if [ -f apps/api/src/main.ts ]; then
   PORT=$(python3 -c "import random;print(random.randint(18000,19999))")
-  ROOST_DB=/tmp/roost-verify-$$.db PORT=$PORT $NODE --experimental-strip-types apps/api/src/main.ts >/tmp/roost-api.log 2>&1 &
+  RUNTIME_TOKEN="rt_verify_$(date +%s)"
+  ROOST_RUNTIME_TOKEN="$RUNTIME_TOKEN" ROOST_DB=/tmp/roost-verify-$$.db PORT=$PORT $NODE --experimental-strip-types apps/api/src/main.ts >/tmp/roost-api.log 2>&1 &
   API_PID=$!
   sleep 2
   base="http://127.0.0.1:$PORT"
@@ -46,6 +47,20 @@ if [ -f apps/api/src/main.ts ]; then
   ROOMID=$(python3 -c "import json;print(json.load(open('/tmp/rc.json'))['room']['id'])" 2>/dev/null)
   printf '  message   : '; curl -sS -m 5 -o /tmp/mc.json -w '%{http_code} ' -X POST "$base/api/rooms/$ROOMID/messages" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"text":"盘前看一下异动"}'; head -c 100 /tmp/mc.json; echo
   printf '  messages  : '; curl -sS -m 5 -o /tmp/mr.json -w '%{http_code} ' "$base/api/rooms/$ROOMID/messages" -H "authorization: Bearer $TOKEN"; head -c 140 /tmp/mr.json; echo
+  printf '  internal  : '; curl -sS -m 5 -o /tmp/ir.json -w '%{http_code} ' "$base/api/internal/rooms" -H "x-runtime-token: $RUNTIME_TOKEN"; head -c 80 /tmp/ir.json; echo
+
+  # Bot 回合（v0 是占位 worker）：起 worker 后新消息应该收到 Bot 回复。
+  ROOST_API="$base" ROOST_RUNTIME_TOKEN="$RUNTIME_TOKEN" $NODE --experimental-strip-types apps/runtime/worker.ts >/tmp/roost-worker.log 2>&1 &
+  WORKER_PID=$!
+  curl -sS -m 5 -o /dev/null -X POST "$base/api/rooms/$ROOMID/messages" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"text":"第二句：Bot 会回我吗"}'
+  BOT_OK=""
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    BOT_OK=$(curl -sS -m 5 "$base/api/rooms/$ROOMID/messages" -H "authorization: Bearer $TOKEN" | python3 -c "import sys,json;d=json.load(sys.stdin);print('yes' if any(m['actor']['kind']=='bot' for m in d['messages']) else '')" 2>/dev/null)
+    [ "$BOT_OK" = "yes" ] && break
+    sleep 0.4
+  done
+  printf '  bot reply : %s\n' "${BOT_OK:-no}"
+  kill $WORKER_PID 2>/dev/null
   kill "$API_PID" 2>/dev/null
   wait "$API_PID" 2>/dev/null
 else

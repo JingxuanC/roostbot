@@ -428,6 +428,7 @@ Run     62 / 200
 |---|---|
 | 配对页 | ✅ 真接口（`POST /api/pairing/claim`），错误原样显示 |
 | 房间页 | ✅ 消息来自 `GET /api/rooms/:id/messages`，新消息经 SSE（`/stream`）；发送写 `POST` |
+| Bot 消息 | ✅ 由 runtime worker 经内部接口写入（v0 占位回复）；渲染走 §3.2 的 Bot 消息样式 |
 | Bot 私聊折叠 | ✅ 渲染规则在 `packages/messaging` 与 app.js 各一份，等前端接包后只剩一份 |
 | 需要你 | ⏳ 抽屉与卡片是样例，接口未做 |
 | Bot 设置 / 插件 / 连接器 / 用量 | ⏳ 未做 |

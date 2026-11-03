@@ -216,6 +216,31 @@ export function createStorePort(store: Store): StorePort {
       return toMessageRecord(message)
     },
 
+    async listAllRooms(): Promise<RoomRecord[]> {
+      const rows = store.db
+        .prepare('SELECT id, workspace_id, name, notice, reply_mode, created_at FROM rooms ORDER BY created_at, id')
+        .all() as RoomRow[]
+      return rows.map(toRoomRecord)
+    },
+
+    async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
+      const message = sendMessageInStore(store, {
+        roomId: input.roomId,
+        text: input.text,
+        actor: { kind: 'bot', id: input.botId },
+        ...(input.idem === undefined ? {} : { idem: input.idem }),
+      })
+      return toMessageRecord(message)
+    },
+
+    async readMessagesInternal(input): Promise<RoomMessageRecord[]> {
+      return readMessagesInStore(store, {
+        roomId: input.roomId,
+        ...(input.afterSeq === undefined ? {} : { afterSeq: input.afterSeq }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      }).map(toMessageRecord)
+    },
+
     async findSessionByToken(tokenHash: string): Promise<SessionRecord | null> {
       const session = findSessionByTokenHash(store, tokenHash)
       if (session === null) return null
