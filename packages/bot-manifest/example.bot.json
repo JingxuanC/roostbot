@@ -1,0 +1,14 @@
+{
+  "schema": "roostbot.bot/v1",
+  "id": "selector",
+  "name": "选股师",
+  "role": "选股",
+  "description": "从可交易域里筛候选，给出证据与反例，不给买卖建议。",
+  "instructions": "skills/selector.md",
+  "model": { "tier": "standard", "providerRef": "user-default" },
+  "tools": { "allow": ["mcp__data__*", "report_engine.stock_snapshot"], "deny": ["bash"] },
+  "skills": ["batch-screening", "stock-snapshot"],
+  "approvals": ["network_egress"],
+  "memory": { "enabled": true, "scopes": ["team", "room"], "retentionDays": 180 },
+  "schedule": { "cron": "30 15 * * 1-5", "timezone": "Asia/Shanghai", "checks": ["market-open", "new-drafts"] }
+}

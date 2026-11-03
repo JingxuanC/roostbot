@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roostbot.io/schemas/bot-manifest/v1.json",
+  "title": "Roost Bot manifest",
+  "description": "A bot is a versioned declaration: who it is, what it may use, what it remembers. The runtime loads one manifest per bot.",
+  "type": "object",
+  "required": ["schema", "id", "name", "role", "instructions"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "roostbot.bot/v1" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,40}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "role": { "type": "string", "minLength": 1, "maxLength": 20 },
+    "description": { "type": "string", "maxLength": 400 },
+    "instructions": { "type": "string", "minLength": 1, "description": "Markdown body or a skill path." },
+    "color": { "type": "string", "pattern": "^[a-z]+$" },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tier": { "enum": ["fast", "standard", "deep"] },
+        "providerRef": { "type": "string", "description": "Name of a provider credential, never the token itself." }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "deny": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "skills": { "type": "array", "items": { "type": "string" }, "maxItems": 60 },
+    "approvals": {
+      "type": "array",
+      "items": { "enum": ["write_outside_workspace", "network_egress", "spend", "install_plugin", "read_secret"] }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "scopes": { "type": "array", "items": { "enum": ["team", "room", "member"] } },
+        "retentionDays": { "type": "integer", "minimum": 1, "maximum": 3650 }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cron": { "type": "string" },
+        "timezone": { "type": "string" },
+        "checks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Plain-code checks run before any model turn; a quiet tick costs nothing."
+        }
+      }
+    }
+  }
+}

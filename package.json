@@ -1,0 +1,12 @@
+{
+  "name": "roostbot",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Roost Bot — a team of bots that lives on a cloud machine and can reach back into your local DSH.",
+  "packageManager": "pnpm@11.28.5",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "check": "pnpm -r --if-present check",
+    "test": "pnpm -r --if-present test"
+  }
+}

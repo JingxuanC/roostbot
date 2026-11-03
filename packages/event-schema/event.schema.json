@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roostbot.io/schemas/event/v1.json",
+  "title": "Roost Bot event",
+  "description": "Append-only fact. Rooms, metering, audit and multi-client sync all derive from this log.",
+  "type": "object",
+  "required": ["v", "seq", "at", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "seq": { "type": "integer", "minimum": 1, "description": "Monotonic within a room." },
+    "at": { "type": "string", "format": "date-time" },
+    "room": { "type": "string" },
+    "kind": {
+      "enum": [
+        "user.message",
+        "bot.message",
+        "tool.call",
+        "tool.result",
+        "approval.request",
+        "approval.decision",
+        "run.started",
+        "run.settled",
+        "memory.written",
+        "error"
+      ]
+    },
+    "bot": { "type": "string" },
+    "member": { "type": "string" },
+    "parent": { "type": "integer", "description": "seq this event answers." },
+    "idem": { "type": "string", "description": "Client-supplied idempotency key." },
+    "content": { "type": "string", "maxLength": 20000 },
+    "data": { "type": "object" },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inTokens": { "type": "integer", "minimum": 0 },
+        "outTokens": { "type": "integer", "minimum": 0 },
+        "toolCalls": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "audience": {
+      "enum": ["team", "room", "member"],
+      "description": "Who may see this event; enforced on read and write."
+    }
+  }
+}

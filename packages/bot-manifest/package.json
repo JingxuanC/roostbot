@@ -1,0 +1,8 @@
+{
+  "name": "@roost/bot-manifest",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": ["*.json", "README.md"],
+  "scripts": { "check": "node -e \"require('node:fs').accessSync('bot.schema.json')\"" }
+}
