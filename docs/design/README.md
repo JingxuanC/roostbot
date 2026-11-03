@@ -18,6 +18,7 @@
 | 12 | [storage.md](storage.md) | 内容存哪：接口化，默认本地卷 |
 | 13 | [ui.md](ui.md) | 界面：安静优先、诚实优先、一个模型多个窗口 |
 | 14 | [plugins.md](plugins.md) | 插件怎么装：同一套 DSH 模型 + 预检/无人值守/信任 |
+| 15 | [artifacts.md](artifacts.md) | 产物怎么到用户手上：内容寻址 + 消息级授权 + 渲染矩阵 |
 
 ## 读法建议
 

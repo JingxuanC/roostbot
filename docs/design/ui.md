@@ -230,6 +230,33 @@ Run     62 / 200
 
 **失败要能回滚**：安装前给 profile 打快照，失败自动恢复（`workspace.md` 的快照能力）。
 
+### 3.9 对话里的产物渲染
+
+消息可能带一张图、一份 PDF、一个 HTML 报告、一张表。规则（完整见 `artifacts.md`）：
+
+| 产物 | 聊天里 | 打开方式 |
+|---|---|---|
+| 图片 | 缩略图（长边 320），点击灯箱 | 原图 / 保存 |
+| PDF | 卡片：文件名 + 大小 + 首页缩略图 | 下载 / 新标签（沙箱） |
+| HTML 报告 | 卡片：标题 + 摘要 + 「打开」 | **只在沙箱 iframe 里**，绝不注入聊天 DOM |
+| 表格 | 前 20 行 + 行数 | 下载 / 展开 |
+| 代码 | 代码块，> 20 行折叠 | 复制 |
+
+**三条渲染纪律**：
+
+1. **不内嵌 HTML**：产物是脚本，只能进独立源的 iframe（或新标签）
+2. **流式渲染幂等**：Markdown 按块提交，未闭合不乱跳；同一段重放不重复
+3. **占位不跳版**：图片/PDF 加载前先占好高度，避免滚动位置被顶掉
+
+**流式与工具**：
+
+```
+选股师  我先拉一遍涨跌幅 ▍            ← 光标在流式末尾，旁边有「停止」
+  ├ 工具 get_a_realtime · 1.2s        ← 折叠一行，可展开看参数/结果
+```
+
+工具结果超过阈值只显示头部 + 路径，全文在产物里（可点开）。
+
 ## 4. 多端差异
 
 | 端 | 差异 |
@@ -290,6 +317,8 @@ Run     62 / 200
 | DeviceList | `auth.paired` / `auth.session.revoked` |
 | Timeline | 全部事件按 seq 倒序 |
 | PluginRow | `plugin.installed/updated/disabled` 事件 + 兼容性检查 |
+| ArtifactCard | `artifact.published` + 消息 attachments[] |
+| ToolRow | `tool.call` / `tool.result`（折叠一行） |
 | BotSettingsForm | bot profile（配置）+ `bot.updated` 事件 |
 
 ## 8. 交互细则
