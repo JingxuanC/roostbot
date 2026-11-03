@@ -12,5 +12,6 @@
     "test": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "dev:api": "node --experimental-strip-types apps/api/src/main.ts"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "type": "module"
 }

@@ -5,10 +5,13 @@
 // 约定：
 // - 零依赖：只用 node:http 与 node:crypto；无构建，node --experimental-strip-types 直接跑。
 // - 只依赖 port.ts 的 StorePort。真实存储在 packages/store，由 Lead 写适配器接进来。
-// - 所有响应都是 JSON + cache-control: no-store；错误统一 { ok: false, error: { code, message } }。
+// - 所有响应都是 JSON + cache-control: no-store；错误统一 { ok: false, error: { code, message: human } }。
 // - 默认监听 127.0.0.1（回环）：这是本机控制面，不是公网入口。
 import { createHash, randomBytes, randomInt } from 'node:crypto'
 import http from 'node:http'
+import { readFile, stat } from 'node:fs/promises'
+import { extname, join, normalize, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { PairingCodeCollisionError } from './port.ts'
 import type {
@@ -92,6 +95,27 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
   res.end(payload)
 }
 
+
+// 面向人的文案（auth.md §8 要求中文话术）；code 保持英文稳定，前端按 code 分支。
+// 未列出的 code 原样返回调用点给的 message（保留技术细节，便于排查）。
+const ERROR_TEXT: Record<string, string> = {
+  unauthenticated: '请先配对：缺少有效的会话令牌',
+  session_expired: '会话已过期，请重新配对',
+  session_revoked: '会话已被吊销，请重新配对',
+  invalid_body: '请求内容不完整或格式不对',
+  invalid_json: '请求体不是合法的 JSON',
+  payload_too_large: '请求体过大',
+  forbidden_origin: '写操作只允许来自本机回环页面',
+  pairing_code_invalid: '配对码不对',
+  pairing_code_used: '这个配对码已经用过了',
+  pairing_code_expired: '配对码已过期，请重新生成',
+  pairing_code_locked: '尝试次数过多，请重新生成配对码',
+  too_many_attempts: '尝试次数过多，请稍后再试',
+  workspace_name_invalid: 'workspace 名字不能为空，且不超过 60 字',
+  workspace_not_found: '找不到这个 workspace',
+  internal_error: '服务出错了，请稍后重试'
+}
+
 function sendError(
   res: ServerResponse,
   status: number,
@@ -99,7 +123,9 @@ function sendError(
   message: string,
   headers: Record<string, string> = {}
 ): void {
-  sendJson(res, status, { ok: false, error: { code, message } }, headers)
+  // code 是稳定契约；message 面向人（中文），技术细节放在括号里便于排查。
+  const human = ERROR_TEXT[code] === undefined ? message : `${ERROR_TEXT[code]}（${message}）`
+  sendJson(res, status, { ok: false, error: { code, message: human } }, headers)
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -483,6 +509,44 @@ async function handleCreateWorkspace(ctx: HandlerContext, req: IncomingMessage, 
   sendJson(res, 201, { workspace: workspaceJson(workspace) })
 }
 
+
+// ---- 同源伺服 apps/web -------------------------------------------------------
+// 浏览器直连 ?api= 会触发跨源预检，而控制面没有 CORS（有意：v0 不回 CORS 头）。
+// 所以把网页也从控制面伺服，页面用同源相对路径调 API，一个进程就是完整应用。
+
+const WEB_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../web')
+const STATIC_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2'
+}
+
+async function serveStatic(res: ServerResponse, path: string): Promise<boolean> {
+  const relative = path === '/' ? 'index.html' : path.replace(/^\/+/, '')
+  if (relative.includes('..') || relative.startsWith('.')) return false
+  const filePath = join(WEB_ROOT, normalize(relative))
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile()) return false
+    const body = await readFile(filePath)
+    res.writeHead(200, {
+      'content-type': STATIC_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
+      'content-length': String(body.byteLength),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    })
+    res.end(body)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function notFound(req: IncomingMessage, res: ServerResponse, method: string, path: string): void {
   req.resume()
   sendError(res, 404, 'not_found', `no route for ${method} ${path}`)
@@ -539,6 +603,9 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     notFound(req, res, method, path)
     return
   }
+
+  // 同源网页：GET 未命中 API 路由时，尝试 apps/web 里的静态文件。
+  if ((method === 'GET' || method === 'HEAD') && (await serveStatic(res, path))) return
 
   notFound(req, res, method, path)
 }

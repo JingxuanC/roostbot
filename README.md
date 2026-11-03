@@ -25,3 +25,31 @@
 Apache License 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
 
 第三方组件登记在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+## 跑起来（M2 切片）
+
+零依赖、无需构建；Node ≥ 22.18（用内置 `node:sqlite` 与类型擦除）。
+
+```sh
+git clone https://github.com/JingxuanC/roostbot && cd roostbot
+ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
+# 打开 http://127.0.0.1:8787/ ，配对页就是同源网页
+```
+
+控制面同时伺服网页；配对 → 房间（房间目前是假数据）。验收脚本：
+
+```sh
+sh scripts/verify.sh      # 90 个测试 + healthz/pairing/claim/workspaces 真实 HTTP
+```
+
+![配对](docs/assets/m2-pairing.png)
+![房间](docs/assets/m2-room.png)
+
+**这一版有什么/没有什么**（诚实清单）：
+
+| 有了 | 还没有 |
+|---|---|
+| 事件日志 + 幂等 + 迁移（SQLite） | DSH 真跑在容器里（只有 sidecar 与镜像声明） |
+| 控制面：配对、会话、workspace | 房间/消息的真实接口（前端是固定样例） |
+| 网页：配对页 + 房间样例 + 程序化图标 | 投递方式、流式、审批、连接器、插件页 |
+| sidecar 6 个测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
+

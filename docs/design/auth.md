@@ -167,3 +167,19 @@ CREATE TABLE invites (
 2. **桌面端能不能免配对**（本机回环 + 文件权限证明）？倾向：仍要配对，但可自动续期。
 3. **OIDC 与密码同邮箱合并策略**：自动合并（方便）还是拒绝（安全）？
 4. **二次确认**用密码还是邮箱验证码（高风险操作时）？
+
+## 12. 实现说明（v0 已落地的部分）
+
+代码在 `apps/api`（控制面）与 `packages/store`（SQLite 存储）。与上文有意不同的地方：
+
+| 文档 | 实现 | 原因 |
+|---|---|---|
+| `POST /api/pairing/codes`（§10） | `POST /api/pairing/code` | 单数，与 claim 配对 |
+| token 放 HttpOnly cookie（§7） | `Authorization: Bearer` + 前端内存变量 | v0 还没有同源 HTTPS 部署；cookie 与 CSRF 一起留给 v1 |
+| `claim` 响应只写 `{deviceId, sessionToken}` | 多返回 `expiresAt` | 前端要显示"这设备何时需要重新配对" |
+| 签到配对码需要 owner/admin 会话（§5） | **v0 不鉴权**（只收 `accountId`） | 还没有账号登录；上公网前必须收紧 |
+| 「5 次/分钟锁 10 分钟」 | 失败累计 5 次即锁；成功清零；已用码再试也计一次失败 | 表里没有时间窗列；码本身 5 分钟过期 |
+| 会话续期「<15 天续到 180 天」 | v0 固定 30 天，过期重配 | 续期需要 `touchSession` + 策略，留 v1 |
+| 中文话术 | `{code, message}`：message 中文 + 括号里保留技术细节 | 前端可以按 `code` 分支，人能看懂 |
+
+同源伺服：`apps/api` 同时伺服 `apps/web`（`GET /`），所以不需要 CORS；`?api=` 跨源在 v0 仍会被浏览器拦。
