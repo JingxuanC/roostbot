@@ -116,6 +116,9 @@ export class OpenShellBackend implements SandboxBackend {
     }
     const args = [...this.commonArgs, 'sandbox', 'create', '--name', input.name, '--policy', policyPath, '--detach']
     if (input.image !== undefined) args.push('--from', input.image)
+    for (const provider of input.providers ?? []) {
+      args.push('--provider', provider)
+    }
     for (const [key, value] of Object.entries(input.env ?? {})) {
       args.push('--env', `${key}=${value}`)
     }

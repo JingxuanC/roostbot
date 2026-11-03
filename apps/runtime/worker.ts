@@ -175,9 +175,15 @@ async function main(): Promise<void> {
       ...(process.env.ROOST_SANDBOX_NAME === undefined ? {} : { name: process.env.ROOST_SANDBOX_NAME }),
       ...(dshTurn ? { mockModel: process.env.ROOST_DSH_MOCK === '1' } : {}),
       ...(process.env.ROOST_DSH_BASE_URL === undefined ? {} : { modelBaseUrl: process.env.ROOST_DSH_BASE_URL }),
-      ...(process.env.ROOST_DSH_MODEL === undefined ? {} : { model: process.env.ROOST_DSH_MODEL })
+      ...(process.env.ROOST_DSH_MODEL === undefined ? {} : { model: process.env.ROOST_DSH_MODEL }),
+      ...(process.env.ROOST_DSH_PROVIDER === undefined ? {} : { provider: process.env.ROOST_DSH_PROVIDER })
     })
-    const modelLabel = process.env.ROOST_DSH_MOCK === '1' ? 'mock 模型' : 'DSH provider'
+    const modelLabel =
+      process.env.ROOST_DSH_PROVIDER !== undefined
+        ? `真实模型（凭据由 OpenShell provider「${process.env.ROOST_DSH_PROVIDER}」注入）`
+        : process.env.ROOST_DSH_MOCK === '1'
+          ? 'mock 模型'
+          : 'DSH provider'
     const handle = await startRoomWorker({
       apiBase,
       runtimeToken,

@@ -16,6 +16,11 @@ export interface CreateSandboxInput {
   /** 额外环境变量；**不允许放凭据**（凭据只在网关侧注入）。 */
   env?: Record<string, string>
   /**
+   * 附加的 OpenShell provider 名（凭据由网关在出站时注入，沙箱内不可见）。
+   * 每个 provider 会带来它自己声明的 network 规则。
+   */
+  providers?: string[]
+  /**
    * canonical main process。`--detach` 时必须给一个不立刻退出的命令，
    * 否则沙箱会在 exec 之前就进入非 Ready 状态（实测）。
    * 默认 `sh -lc 'exec sleep infinity'`。

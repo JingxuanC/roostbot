@@ -95,7 +95,8 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
       name: 'ws-test',
       policyYaml: renderPolicyYaml(policy),
       image: 'roost/engine:dev',
-      env: { ROOST_RUN: 'run_1' }
+      env: { ROOST_RUN: 'run_1' },
+      providers: ['deepseek']
     })
     assert.equal(handle.id, 'sb_created_123')
     assert.equal(handle.name, 'ws-test')
@@ -111,6 +112,7 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
     assert.match(createCall!, /--from roost\/engine:dev/)
     assert.match(createCall!, /--env ROOST_RUN=run_1/)
     assert.match(createCall!, /-- sh -lc exec sleep infinity/)
+    assert.match(createCall!, /--provider deepseek/)
 
     // 策略文件真的写了，且内容就是 renderPolicyYaml 的输出。
     const written = readFileSync(join(fake.dir, 'ws-test.policy.yaml'), 'utf8')

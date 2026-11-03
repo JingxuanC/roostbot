@@ -22,6 +22,8 @@ export interface SandboxRunnerOptions {
   modelBaseUrl?: string
   /** 模型名。 */
   model?: string
+  /** OpenShell provider 名：凭据由网关注入，沙箱内不设 key。 */
+  provider?: string
   log?: (line: string) => void
 }
 
@@ -70,7 +72,8 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
       name,
       policyYaml: sandboxPolicy(),
       image: options.image ?? 'docker.io/library/node:22-alpine',
-      ...(options.env === undefined ? {} : { env: options.env })
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.provider === undefined ? {} : { providers: [options.provider] })
     })
     log(`sandbox ${handle.name} created (${handle.id})`)
   }
@@ -81,12 +84,16 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
       ? 'node /opt/mock-openai.mjs > /tmp/mock.log 2>&1 & MOCK=$!; sleep 1; '
       : ''
     const cleanup = options.mockModel === true ? '; RC=$?; kill $MOCK 2>/dev/null; exit $RC' : ''
-    const env = [
-      'export HOME=/workspace',
-      ...(options.modelBaseUrl === undefined ? [] : [`DEEPSEEK_BASE_URL=${options.modelBaseUrl}`]),
-      'DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-mock-key}',
-      ...(options.model === undefined ? [] : [`DEEPSEEK_DEFAULT_MODEL=${options.model}`])
-    ].join(' ')
+    const envParts = ['export HOME=/workspace']
+    if (options.provider === undefined) {
+      // 没有 provider：走 mock/自建 endpoint，需要一个（假的或真的）key 环境变量。
+      if (options.modelBaseUrl !== undefined) envParts.push(`DEEPSEEK_BASE_URL=${options.modelBaseUrl}`)
+      envParts.push('DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-mock-key}')
+      if (options.model !== undefined) envParts.push(`DEEPSEEK_DEFAULT_MODEL=${options.model}`)
+    }
+    // provider 模式：**不设** DEEPSEEK_API_KEY —— 设置后 DSH 会自己发 Authorization，
+    // 反而绕过了 OpenShell 的注入（实测 401）。
+    const env = envParts.join(' ')
     return ['sh', '-lc', `${env}; ${mock}dsh --profile headless --json ${quoted}${cleanup}`]
   }
 
