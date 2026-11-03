@@ -10,14 +10,14 @@
 //   GET  <base>/activity       busy + last activity, from ds-bot's inflight.json and
 //                              the newest session file mtime (the only in-process signals
 //                              available without kernel changes)
-//   *    <base>/...            proxied to DSH with <base> stripped; API calls need the
-//                              runtime token, browser navigation may use the cookie
+//   *    <base>/...            proxied to DSH with <base> stripped; every proxied
+//                              call needs the runtime token or the DSH cookie
 //
 // Config (env):
 //   UPSTREAM       http://127.0.0.1:<dsh port>   (required)
-//   PORT           listen port, default 19400
+//   PORT           listen port, default 19400 (0 = OS-assigned, logged on start)
 //   BASE_PATH      mount path, default "" (e.g. /w/ws_123)
-//   RUNTIME_TOKEN  bearer required for /api/* ; empty disables the check (local dev)
+//   RUNTIME_TOKEN  bearer required by the proxy; empty disables the check (local dev)
 //   DSH_DATA_DIR   data dir holding bot/inflight.json, default $HOME/.dsh/alpha-desk
 import http from 'node:http'
 import { readFileSync, statSync } from 'node:fs'
@@ -63,6 +63,7 @@ function activity() {
     source.push('bot/inflight.json')
   } catch { /* ds-bot not installed, or idle with no file */ }
   try {
+    // state.json mtime is the cheapest "last activity" signal available today.
     const stats = statSync(join(DATA, 'bot', 'state.json'))
     lastActivity = new Date(stats.mtimeMs).toISOString()
     source.push('bot/state.json:mtime')
@@ -74,20 +75,28 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://sidecar')
   const path = url.pathname
 
-  if (BASE !== '' && !path.startsWith(BASE)) {
+  // Boundary-aware: /w/ws_1 must not match /w/ws_10.
+  if (BASE !== '' && path !== BASE && !path.startsWith(`${BASE}/`)) {
     send(res, 404, { ok: false, error: 'outside-base-path', base: BASE })
     return
   }
   const inner = BASE === '' ? path : (path.slice(BASE.length) || '/')
 
   if (inner === '/healthz') {
+    // A timeout destroys the probe, which also emits 'error'; answer only once.
+    let settled = false
+    const reply = (body) => {
+      if (settled) return
+      settled = true
+      send(res, 200, body)
+    }
     const probe = http.request({ host: upstream.hostname, port: upstream.port, path: '/', method: 'GET', timeout: 2000 }, (up) => {
       up.resume()
       // Any HTTP answer means the process is up; 401 from DSH's own auth counts as alive.
-      send(res, 200, { ok: up.statusCode !== undefined && up.statusCode < 500, upstream: up.statusCode, at: new Date().toISOString() })
+      reply({ ok: up.statusCode !== undefined && up.statusCode < 500, upstream: up.statusCode, at: new Date().toISOString() })
     })
-    probe.on('timeout', () => { probe.destroy(); send(res, 200, { ok: false, upstream: 'timeout' }) })
-    probe.on('error', (error) => send(res, 200, { ok: false, upstream: 'unreachable', error: String(error?.code ?? error) }))
+    probe.on('timeout', () => { probe.destroy(); reply({ ok: false, upstream: 'timeout' }) })
+    probe.on('error', (error) => reply({ ok: false, upstream: 'unreachable', error: String(error?.code ?? error) }))
     probe.end()
     return
   }
@@ -104,6 +113,9 @@ const server = http.createServer((req, res) => {
 
   const headers = { ...req.headers, host: upstream.host }
   delete headers.connection
+  // The runtime token authenticates the caller to the sidecar, not to DSH.
+  // Never forward it: DSH has its own auth and must not see (or log) the token.
+  if (TOKEN !== '' && headers.authorization === `Bearer ${TOKEN}`) delete headers.authorization
   const proxied = http.request({
     host: upstream.hostname,
     port: upstream.port,
@@ -114,10 +126,43 @@ const server = http.createServer((req, res) => {
     res.writeHead(up.statusCode ?? 502, up.headers)
     up.pipe(res)
   })
-  proxied.on('error', (error) => send(res, 502, { ok: false, error: 'upstream-error', detail: String(error?.message ?? error) }))
+  proxied.on('error', (error) => {
+    // If headers already went out, the only honest move is to cut the response.
+    if (res.headersSent) {
+      res.destroy()
+      return
+    }
+    send(res, 502, { ok: false, error: 'upstream-error', detail: String(error?.message ?? error) })
+  })
   req.pipe(proxied)
 })
 
 server.listen(PORT, '127.0.0.1', () => {
-  process.stdout.write(`roostbot sidecar on http://127.0.0.1:${PORT}${BASE} -> ${UPSTREAM}\n`)
+  // PORT=0 lets the OS pick a free port (tests, parallel workspaces); report the
+  // real one so the caller does not have to guess.
+  const address = server.address()
+  const boundPort = address !== null && typeof address === 'object' ? address.port : PORT
+  process.stdout.write(`roostbot sidecar on http://127.0.0.1:${boundPort}${BASE} -> ${UPSTREAM}\n`)
 })
+
+// Graceful shutdown: stop accepting, let in-flight requests finish, then exit.
+// SIGKILL is the container runtime's last resort, never this process's first move.
+let shuttingDown = false
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  process.stderr.write(`roostbot sidecar: ${signal} received, draining\n`)
+  const force = setTimeout(() => {
+    process.stderr.write('roostbot sidecar: drain timed out, closing remaining connections\n')
+    server.closeAllConnections?.()
+    process.exit(1)
+  }, 5000)
+  force.unref()
+  server.close((error) => {
+    clearTimeout(force)
+    process.exit(error ? 1 : 0)
+  })
+  server.closeIdleConnections?.()
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

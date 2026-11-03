@@ -15,7 +15,10 @@ node apps/runtime/sidecar/proxy.mjs
 |---|---|---|
 | `GET <base>/healthz` | 探活（上游返回 <500 即算活） | 无（liveness 必须可匿名） |
 | `GET <base>/activity` | `busy` / `turns` / `lastActivity` | 无（控制面内部使用） |
-| `* <base>/**` | 剥掉 base 转发给 DSH | `/api/*` 需要 `Authorization: Bearer <RUNTIME_TOKEN>`；页面导航可凭 DSH cookie |
+| `* <base>/**` | 剥掉 base 转发给 DSH | runtime token 或 DSH cookie；`/api/*` 用 `Authorization: Bearer <RUNTIME_TOKEN>`，页面导航可凭 cookie |
+
+sidecar 只把 runtime token 当作**自己的**入站凭据，转发前会删掉该 header，DSH 看不到它。
+`PORT=0` 时由系统分配端口，启动日志会打印真实端口。
 
 实测结果与已知缺口见 `docs/spikes/0001-runtime-contract.md`。
 

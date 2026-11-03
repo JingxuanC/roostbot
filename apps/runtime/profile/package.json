@@ -1,0 +1,7 @@
+{
+  "name": "roostbot-runtime-profile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Baseline DSH profile shipped in the runtime image. The control plane replaces this with the per-workspace profile.",
+  "dependencies": {}
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@roost/store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Append-only event log plus workspace/auth tables on SQLite; zero dependencies, node:sqlite only.",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "check": "node --check src/index.ts"
+  }
+}

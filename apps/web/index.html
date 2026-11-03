@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Roost 网页端第一版 UI 切片：配对页与房间页。" />
+    <title>Roost · 配对</title>
+    <!-- 图标内联成 data URI：不额外加文件，也不让浏览器为 /favicon.ico 404 一次 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2096%2096'%3E%3Crect%20width='96'%20height='96'%20rx='24'%20fill='%23141619'/%3E%3Cpath%20d='M48%2020C62%2020%2072%2034%2072%2050C72%2066%2061%2076%2048%2076C35%2076%2024%2066%2024%2050C24%2034%2034%2020%2048%2020Z'%20fill='none'%20stroke='%23D8AB52'%20stroke-width='6'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="boot-warning" class="boot-warning" role="alert" hidden>
+      <p>
+        界面脚本没有跑起来：本页用 ES module，直接用 <code>file://</code> 打开时浏览器会拦截。
+        请用静态服务器打开（见 <code>apps/web/README.md</code>）。
+      </p>
+    </div>
+
+    <!-- ------------------------------------------------------------ 页面一：配对（ui.md §3.1） -->
+    <main id="pair-view" class="pair">
+      <form id="pair-form" class="pair-card" novalidate>
+        <h1 class="wordmark">Roost</h1>
+        <p class="pair-hint">输入另一台设备上显示的配对码</p>
+
+        <fieldset class="code-fieldset">
+          <legend class="field-label">配对码</legend>
+          <div class="code" id="code-boxes">
+            <input
+              class="code-digit"
+              id="code-0"
+              type="text"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength="1"
+              aria-label="第 1 位"
+              autofocus
+            />
+            <input
+              class="code-digit"
+              id="code-1"
+              type="text"
+              inputmode="numeric"
+              maxlength="1"
+              aria-label="第 2 位"
+            />
+            <input
+              class="code-digit"
+              id="code-2"
+              type="text"
+              inputmode="numeric"
+              maxlength="1"
+              aria-label="第 3 位"
+            />
+            <input
+              class="code-digit"
+              id="code-3"
+              type="text"
+              inputmode="numeric"
+              maxlength="1"
+              aria-label="第 4 位"
+            />
+            <input
+              class="code-digit"
+              id="code-4"
+              type="text"
+              inputmode="numeric"
+              maxlength="1"
+              aria-label="第 5 位"
+            />
+            <input
+              class="code-digit"
+              id="code-5"
+              type="text"
+              inputmode="numeric"
+              maxlength="1"
+              aria-label="第 6 位"
+            />
+          </div>
+        </fieldset>
+
+        <p id="pair-error" class="pair-error" role="alert" hidden></p>
+
+        <button id="pair-submit" class="btn btn-primary btn-block pair-submit" type="submit">
+          配对
+        </button>
+
+        <p class="pair-foot muted">没有配对码？登录账号（v1 再实现，这一版没有账号体系）</p>
+        <p class="pair-foot">
+          <button id="preview-btn" class="btn btn-quiet" type="button">
+            预览房间（假数据，不配对）
+          </button>
+        </p>
+        <p id="api-note" class="api-note muted"></p>
+      </form>
+    </main>
+
+    <!-- ------------------------------------------------------------ 页面二：房间（ui.md §3.2） -->
+    <div id="room-view" class="room" hidden>
+      <aside class="sidebar" aria-label="导航">
+        <div class="brand">
+          <span class="brand-name">Roost</span>
+          <span class="brand-tag">v0</span>
+        </div>
+
+        <button
+          id="needs-btn"
+          class="needs-link"
+          type="button"
+          aria-expanded="false"
+          aria-controls="needs"
+        >
+          <span>需要你</span>
+          <span class="needs-count" id="needs-count">(2)</span>
+        </button>
+
+        <h2 class="nav-title" id="rooms-title">房间</h2>
+        <ul class="room-list" id="room-list" aria-labelledby="rooms-title">
+          <li class="room-row" aria-current="true">
+            <span class="room-mark" aria-hidden="true"></span>量化研究组
+          </li>
+          <li class="room-row">
+            <span class="room-mark" aria-hidden="true"></span>复盘组
+          </li>
+        </ul>
+
+        <h2 class="nav-title" id="bots-title">Bot</h2>
+        <ul class="bot-list" id="bot-list" aria-labelledby="bots-title"></ul>
+
+        <p class="sidebar-foot muted">UI 切片 · 未接 API</p>
+      </aside>
+
+      <main class="main">
+        <header class="room-head">
+          <h1 class="room-name" id="room-name">量化研究组</h1>
+          <div class="head-right">
+            <p class="working">
+              <span class="dot" aria-hidden="true"></span>
+              <span id="working-text">选股师 正在工作</span>
+            </p>
+            <button
+              id="needs-btn-sm"
+              class="btn btn-ghost btn-sm needs-btn-sm"
+              type="button"
+              aria-expanded="false"
+              aria-controls="needs"
+            >
+              需要你 (2)
+            </button>
+          </div>
+        </header>
+
+        <p class="demo-strip" role="note" id="demo-strip-text">
+          假数据预览：房间内容为固定样例，发送不会请求服务端。
+        </p>
+
+        <div id="messages" class="messages" role="log" aria-label="消息"></div>
+
+        <form id="composer-form" class="composer">
+          <label class="sr-only" for="composer">消息</label>
+          <textarea
+            id="composer"
+            name="message"
+            rows="1"
+            placeholder="说点什么…"
+            autocomplete="off"
+          ></textarea>
+          <div class="composer-row">
+            <span class="composer-hint muted">Enter 换行</span>
+            <button
+              id="send"
+              class="btn btn-primary"
+              type="submit"
+              title="⌘↵ / Ctrl+↵ 发送"
+              aria-keyshortcuts="Meta+Enter Control+Enter"
+            >
+              <kbd aria-hidden="true">⌘↵</kbd> 发送
+            </button>
+          </div>
+        </form>
+      </main>
+
+      <aside id="needs" class="needs" aria-labelledby="needs-title" tabindex="-1" hidden>
+        <div class="needs-head">
+          <h2 class="needs-title" id="needs-title">需要你 · 2</h2>
+          <button id="needs-close" class="btn btn-ghost btn-sm" type="button">关闭</button>
+        </div>
+        <div class="needs-body" id="needs-body"></div>
+      </aside>
+    </div>
+
+    <!--
+      这段是普通脚本（非 module）：它只做一件事——如果 module 被浏览器拦掉，
+      就显示上面的提示。ES module 在 file:// 下会被 CORS 拦截，这是浏览器的行为，不是本页的 bug。
+    -->
+    <script>
+      window.__roostBooted = false;
+      setTimeout(function () {
+        if (!window.__roostBooted) {
+          var warning = document.getElementById('boot-warning');
+          if (warning) warning.hidden = false;
+        }
+      }, 1200);
+    </script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

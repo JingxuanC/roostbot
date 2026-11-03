@@ -1,0 +1,17 @@
+{
+  "name": "@roost/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Control-plane minimal HTTP API (pairing, device sessions, workspaces). Zero dependencies: node:http only.",
+  "main": "./src/server.ts",
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "start": "node --experimental-strip-types src/main.ts",
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
+    "check": "node --experimental-strip-types --check src/main.ts && node --experimental-strip-types --check src/server.ts && node --experimental-strip-types --test \"test/*.test.ts\""
+  }
+}

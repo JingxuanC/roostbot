@@ -8,8 +8,9 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "check": "pnpm -r --if-present check",
-    "test": "pnpm -r --if-present test"
+    "check": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
+    "test": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
+    "dev:api": "node --experimental-strip-types apps/api/src/main.ts"
   },
   "license": "Apache-2.0"
 }
