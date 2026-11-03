@@ -16,6 +16,7 @@
 | 10 | [sandboxing.md](sandboxing.md) | 执行怎么隔离：决策在外、执行在内、凭据不入箱 |
 | 11 | [connectors.md](connectors.md) | 第三方能力怎么进：网关在中间，OpenConnector 默认 |
 | 12 | [storage.md](storage.md) | 内容存哪：接口化，默认本地卷 |
+| 13 | [ui.md](ui.md) | 界面：安静优先、诚实优先、一个模型多个窗口 |
 
 ## 读法建议
 

@@ -1,0 +1,11 @@
+{
+  "name": "@roost/tokens",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Design tokens for Roost Bot: cool base, warm accent, one scale for spacing, type and motion.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}
