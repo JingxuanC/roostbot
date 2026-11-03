@@ -97,16 +97,24 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
     return ['sh', '-lc', `${env}; ${mock}dsh --profile headless --json ${quoted}${cleanup}`]
   }
 
-  let suspended = false
-  const supportsSuspend = backend.suspend !== undefined && backend.resume !== undefined
+  // docker 驱动不支持 suspend（OpenShell 0.1.6 实测：compute driver does not support
+  // sandbox suspend），所以回退到 stop/start：工作区保留、内存不保留，语义上就是「睡」。
+  let sleepMode: 'suspend' | 'stop' | null = null
 
   async function ensureAwake(): Promise<void> {
-    if (!suspended) return
-    if (handle !== null && backend.resume !== undefined) {
+    if (sleepMode === null) return
+    if (handle === null) {
+      sleepMode = null
+      return
+    }
+    if (sleepMode === 'suspend' && backend.resume !== undefined) {
       await backend.resume(handle)
       log(`sandbox ${handle.name} resumed`)
+    } else if (backend.start !== undefined) {
+      await backend.start(handle)
+      log(`sandbox ${handle.name} started`)
     }
-    suspended = false
+    sleepMode = null
   }
 
   return {
@@ -131,19 +139,29 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
       return parsed.text ?? ''
     },
     async suspend() {
-      if (!supportsSuspend || handle === null || suspended) return false
-      await backend.suspend!(handle)
-      suspended = true
-      log(`sandbox ${handle.name} suspended`)
+      if (handle === null || sleepMode !== null) return false
+      if (backend.suspend !== undefined) {
+        try {
+          await backend.suspend(handle)
+          sleepMode = 'suspend'
+          log(`sandbox ${handle.name} suspended`)
+          return true
+        } catch (error) {
+          log(`suspend unsupported, falling back to stop: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      await backend.stop(handle)
+      sleepMode = 'stop'
+      log(`sandbox ${handle.name} stopped (workspace kept)`)
       return true
     },
     async resume() {
-      if (!suspended) return false
+      if (sleepMode === null) return false
       await ensureAwake()
       return true
     },
     isSuspended() {
-      return suspended
+      return sleepMode !== null
     },
     async stop() {
       if (handle !== null) {

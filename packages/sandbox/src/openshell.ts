@@ -170,6 +170,13 @@ export class OpenShellBackend implements SandboxBackend {
     }
   }
 
+  async start(handle: SandboxHandle): Promise<void> {
+    const result = await runCommand(this.binary, [...this.commonArgs, 'sandbox', 'start', handle.id], { timeoutMs: 180_000 })
+    if (result.code !== 0) {
+      throw new SandboxError('exec_failed', `openshell sandbox start failed (${result.code}): ${result.stderr.trim()}`)
+    }
+  }
+
   async stop(handle: SandboxHandle): Promise<void> {
     // stop 保留工作区；delete 才是销毁（见 sandbox 子命令列表）。
     const result = await runCommand(this.binary, [...this.commonArgs, 'sandbox', 'stop', handle.id], { timeoutMs: 60_000 })

@@ -46,7 +46,7 @@ esac
 case "$2" in
   create) echo "sb_created_123"; exit 0 ;;
   exec) shift 3; echo "ran: $*"; exit 7 ;;
-  stop|suspend|resume) exit 0 ;;
+  stop|start|suspend|resume) exit 0 ;;
 esac
 exit 1
 `,
@@ -128,9 +128,11 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
 
     await backend.suspend!(handle)
     await backend.resume!(handle)
+    await backend.start!(handle)
     const calls2 = readFileSync(fake.log, 'utf8')
     assert.ok(calls2.includes(`sandbox suspend ${handle.id}`))
     assert.ok(calls2.includes(`sandbox resume ${handle.id}`))
+    assert.ok(calls2.includes(`sandbox start ${handle.id}`))
 
     await backend.stop(handle)
     assert.ok(readFileSync(fake.log, 'utf8').includes(`sandbox stop ${handle.id}`))

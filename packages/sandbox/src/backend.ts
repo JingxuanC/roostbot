@@ -59,4 +59,6 @@ export interface SandboxBackend {
   suspend?(handle: SandboxHandle): Promise<void>
   /** 从挂起恢复（OpenShell `sandbox resume`）。可选能力。 */
   resume?(handle: SandboxHandle): Promise<void>
+  /** 从停止状态启动（OpenShell `sandbox start`），工作区保留。可选能力。 */
+  start?(handle: SandboxHandle): Promise<void>
 }
