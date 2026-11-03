@@ -11,6 +11,7 @@ export interface ExecResult {
 
 export type SandboxErrorCode =
   | 'backend_unavailable'
+  | 'invalid_name'
   | 'create_failed'
   | 'exec_failed'
   | 'timeout'

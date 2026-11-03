@@ -45,7 +45,8 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
     throw new Error(`${options.backend} backend is not available (openshell CLI missing?)`)
   }
 
-  const name = options.name ?? `roost-worker-${Date.now().toString(36)}`
+  // 19 字符上限：`roost-` + 10 位随机 = 16 字符。
+  const name = options.name ?? `roost-${Math.random().toString(36).slice(2, 12).padEnd(10, '0')}`
   let handle: SandboxHandle | null = null
   if (options.backend === 'openshell') {
     handle = await backend.create({

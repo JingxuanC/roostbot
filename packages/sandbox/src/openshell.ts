@@ -94,6 +94,13 @@ export class OpenShellBackend implements SandboxBackend {
   }
 
   async create(input: CreateSandboxInput): Promise<SandboxHandle> {
+    // OpenShell 的 sandbox 名上限 19 字符（实测 0.1.6：21 > 19 被拒）。
+    if (!/^[a-z0-9][a-z0-9-]{0,18}$/.test(input.name)) {
+      throw new SandboxError(
+        'invalid_name',
+        `openshell sandbox name must match [a-z0-9][a-z0-9-]{0,18} (got "${input.name}", ${input.name.length} chars)`
+      )
+    }
     const dir = this.policyDir ?? (await mkdtemp(join(tmpdir(), 'roost-policy-')))
     const policyPath = join(dir, `${input.name}.policy.yaml`)
     await writeFile(policyPath, input.policyYaml, { mode: 0o600 })

@@ -92,27 +92,27 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
     assert.equal(await backend.available(), true)
 
     const handle = await backend.create({
-      name: 'ws_test',
+      name: 'ws-test',
       policyYaml: renderPolicyYaml(policy),
       image: 'roost/engine:dev',
       env: { ROOST_RUN: 'run_1' }
     })
     assert.equal(handle.id, 'sb_created_123')
-    assert.equal(handle.name, 'ws_test')
+    assert.equal(handle.name, 'ws-test')
     assert.equal(handle.backend, 'openshell')
 
     const calls = readFileSync(fake.log, 'utf8').trim().split('\n')
     assert.equal(calls[0], '--version')
     const createCall = calls.find((line) => line.includes('sandbox create'))
     assert.ok(createCall)
-    assert.match(createCall!, /--name ws_test/)
-    assert.match(createCall!, /--policy .*ws_test\.policy\.yaml/)
+    assert.match(createCall!, /--name ws-test/)
+    assert.match(createCall!, /--policy .*ws-test\.policy\.yaml/)
     assert.match(createCall!, /--detach/)
     assert.match(createCall!, /--from roost\/engine:dev/)
     assert.match(createCall!, /--env ROOST_RUN=run_1/)
 
     // 策略文件真的写了，且内容就是 renderPolicyYaml 的输出。
-    const written = readFileSync(join(fake.dir, 'ws_test.policy.yaml'), 'utf8')
+    const written = readFileSync(join(fake.dir, 'ws-test.policy.yaml'), 'utf8')
     assert.equal(written, renderPolicyYaml(policy))
 
     const result = await backend.exec(handle, ['sh', '-lc', 'echo hi'])
@@ -130,6 +130,14 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
   }
 })
 
+test('sandbox 名超过 19 字符：就地拒绝，不发请求', async () => {
+  const backend = new OpenShellBackend({ binary: '/nonexistent/openshell', policyDir: '/tmp' })
+  await assert.rejects(
+    () => backend.create({ name: 'roost-worker-too-long-name', policyYaml: 'version: 1\n' }),
+    (error: unknown) => error instanceof SandboxError && error.code === 'invalid_name'
+  )
+})
+
 test('mounts 在 0.1.6 的 create 里没有对应参数：明确报 unsupported', async () => {
   const fake = fakeOpenshell()
   try {
@@ -137,7 +145,7 @@ test('mounts 在 0.1.6 的 create 里没有对应参数：明确报 unsupported'
     await assert.rejects(
       () =>
         backend.create({
-          name: 'ws_mount',
+          name: 'ws-mount',
           policyYaml: renderPolicyYaml(policy),
           mounts: [{ hostPath: '/tmp/data', sandboxPath: '/data', readOnly: true }]
         }),
