@@ -16,6 +16,7 @@
 | [docs/vision.md](docs/vision.md) | 做什么、不做什么、为谁做 |
 | [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户模型 |
 | [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时必须提供的七条契约 |
+| [docs/spikes/](docs/spikes/) | 可复现的实验与结论（含环境限制） |
 | [docs/decisions/](docs/decisions/) | 命名、记忆、许可等决策记录 |
 
 ## 许可

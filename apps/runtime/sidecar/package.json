@@ -1,0 +1,14 @@
+{
+  "name": "@roost/runtime-sidecar",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "roostbot-sidecar": "./proxy.mjs"
+  },
+  "scripts": {
+    "start": "node proxy.mjs",
+    "check": "node --check proxy.mjs"
+  },
+  "license": "Apache-2.0"
+}
