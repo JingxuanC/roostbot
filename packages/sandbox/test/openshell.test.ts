@@ -46,7 +46,7 @@ esac
 case "$2" in
   create) echo "sb_created_123"; exit 0 ;;
   exec) shift 3; echo "ran: $*"; exit 7 ;;
-  stop) exit 0 ;;
+  stop|suspend|resume) exit 0 ;;
 esac
 exit 1
 `,
@@ -125,6 +125,12 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
     // exec 带 --timeout（秒）与分隔符。
     const execCall = readFileSync(fake.log, 'utf8').split('\n').find((line) => line.includes('sandbox exec'))
     assert.match(execCall!, /--timeout \d+ -- sh -lc echo hi/)
+
+    await backend.suspend!(handle)
+    await backend.resume!(handle)
+    const calls2 = readFileSync(fake.log, 'utf8')
+    assert.ok(calls2.includes(`sandbox suspend ${handle.id}`))
+    assert.ok(calls2.includes(`sandbox resume ${handle.id}`))
 
     await backend.stop(handle)
     assert.ok(readFileSync(fake.log, 'utf8').includes(`sandbox stop ${handle.id}`))

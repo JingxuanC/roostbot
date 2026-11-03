@@ -97,15 +97,29 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
     return ['sh', '-lc', `${env}; ${mock}dsh --profile headless --json ${quoted}${cleanup}`]
   }
 
+  let suspended = false
+  const supportsSuspend = backend.suspend !== undefined && backend.resume !== undefined
+
+  async function ensureAwake(): Promise<void> {
+    if (!suspended) return
+    if (handle !== null && backend.resume !== undefined) {
+      await backend.resume(handle)
+      log(`sandbox ${handle.name} resumed`)
+    }
+    suspended = false
+  }
+
   return {
     backend: options.backend,
     async run(command) {
+      await ensureAwake()
       const target: SandboxHandle = handle ?? { id: `local_${name}`, name, backend: backend.id }
       const result = await backend.exec(target, command, { timeoutMs: 30_000 })
       return { code: result.code, stdout: result.stdout, stderr: result.stderr }
     },
     /** 在沙箱里跑一个真正的 DSH headless 回合，返回 final 文本。 */
     async runDshTurn(text) {
+      await ensureAwake()
       const target: SandboxHandle = handle ?? { id: `local_${name}`, name, backend: backend.id }
       const result = await backend.exec(target, turnCommand(text), { timeoutMs: 180_000 })
       const lines = result.stdout.split('\n').filter((line) => line.trim().startsWith('{'))
@@ -115,6 +129,21 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
       }
       const parsed = JSON.parse(final) as { text?: string }
       return parsed.text ?? ''
+    },
+    async suspend() {
+      if (!supportsSuspend || handle === null || suspended) return false
+      await backend.suspend!(handle)
+      suspended = true
+      log(`sandbox ${handle.name} suspended`)
+      return true
+    },
+    async resume() {
+      if (!suspended) return false
+      await ensureAwake()
+      return true
+    },
+    isSuspended() {
+      return suspended
     },
     async stop() {
       if (handle !== null) {

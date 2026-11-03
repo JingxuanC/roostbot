@@ -55,4 +55,8 @@ export interface SandboxBackend {
   create(input: CreateSandboxInput): Promise<SandboxHandle>
   exec(handle: SandboxHandle, argv: string[], options?: ExecOptions): Promise<ExecResult>
   stop(handle: SandboxHandle): Promise<void>
+  /** 挂起：保留内存/工作区（OpenShell `sandbox suspend`）。可选能力。 */
+  suspend?(handle: SandboxHandle): Promise<void>
+  /** 从挂起恢复（OpenShell `sandbox resume`）。可选能力。 */
+  resume?(handle: SandboxHandle): Promise<void>
 }

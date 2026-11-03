@@ -178,6 +178,20 @@ async function main(): Promise<void> {
       ...(process.env.ROOST_DSH_MODEL === undefined ? {} : { model: process.env.ROOST_DSH_MODEL }),
       ...(process.env.ROOST_DSH_PROVIDER === undefined ? {} : { provider: process.env.ROOST_DSH_PROVIDER })
     })
+    // 空闲即挂起：接 scheduling.md 的「睡/醒握手」——没有回合时释放内存，
+    // 下一条消息到达时由 runner 自动 resume。
+    const idleMs = Number.parseInt(process.env.ROOST_SANDBOX_IDLE_MS ?? '0', 10)
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+    const scheduleIdleSuspend = () => {
+      if (!Number.isFinite(idleMs) || idleMs <= 0) return
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        void runner.suspend().then((did) => {
+          if (did) console.log('[worker] sandbox suspended while idle')
+        }).catch((error: unknown) => console.error('[worker] suspend failed:', error))
+      }, idleMs)
+    }
+
     const modelLabel =
       process.env.ROOST_DSH_PROVIDER !== undefined
         ? `真实模型（凭据由 OpenShell provider「${process.env.ROOST_DSH_PROVIDER}」注入）`
@@ -191,14 +205,17 @@ async function main(): Promise<void> {
         const clipped = text.length > 120 ? `${text.slice(0, 120)}…` : text
         if (dshTurn) {
           const answer = await runner.runDshTurn(`房间里有人说：${text}`)
+          scheduleIdleSuspend()
           return `「${answer}」（沙箱内 DSH 回合 · ${modelLabel} · ${runner.backend}）`
         }
         const probe = await runner.run(SANDBOX_PROBE)
+        scheduleIdleSuspend()
         const evidence = probe.stdout.trim().split('\n').slice(0, 2).join(' · ')
         return `收到：「${clipped}」。这条回复由 ${runner.backend} 沙箱内的同名进程生成（${evidence}）；DSH 回合还没接进来。`
       }
     })
     const shutdown = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
       handle.stop()
       void runner.stop().finally(() => process.exit(0))
     }
