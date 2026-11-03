@@ -10,8 +10,13 @@
 | 装 OpenShell CLI / gateway / prover | ✅ 0.1.6（`rpm -i --nodeps`，见坑 1） |
 | gateway 用 **Docker** 驱动启动 | ✅ 日志 `Using compute driver driver=docker` |
 | CLI ↔ gateway 鉴权（mTLS） | ✅ `Authentication: Authenticated (mTLS transport)` |
-| 创建 sandbox | ❌ `BoundaryConfigWriteFailed: ... getent unable to find entry "1000:1000" in passwd database` |
-| 因此真沙箱隔离 | ❌ 仍未验证 |
+| 创建 sandbox（Docker 26） | ❌ `BoundaryConfigWriteFailed: getent unable to find entry "1000:1000" in passwd database` |
+| **创建 sandbox（Docker 28）** | ✅ 起来了，非 root uid=1000 |
+| **默认拒绝出网** | ✅ `wget` 被拒（Permission denied） |
+| **策略允许白名单** | ✅ `example.com` 放行，`blocked.example.org` 仍被拒 |
+| 我们的 `renderPolicyYaml()` | ✅ 被网关接受（第一版字段名错了，已按 schema 改对） |
+
+**根因已定位**（见下文「根因」）：OpenShell 0.1.6 的 docker 驱动要求 **Docker ≥ 28**。
 
 ## 环境事实
 
@@ -103,30 +108,90 @@ openshell status
 `packages/sandbox/src/openshell.ts` 已按此修正：去掉 `--mount`（改为明确报 `unsupported`）、
 exec 传 `--timeout` 秒、stop 用 `sandbox stop`。
 
-## 仍未解决：创建 sandbox 失败
+## 根因：Docker ≤ 27 不解析 `uid:gid`，OpenShell 需要 ≥ 28
+
+**OpenShell 侧**（`crates/openshell-driver-docker/src/lib.rs:5092`）：staging 容器显式设置
+`user: Some(format!("{SUPERVISOR_UID}:{SUPERVISOR_GID}"))`，即 `"1000:1000"`，注释写明这是为了让
+`copyUIDGID` 上传按这个身份落盘。
+
+**Docker 侧**：
+
+| 版本 | `daemon/archive_tarcopyoptions_unix.go` 的行为 | 结果 |
+|---|---|---|
+| v26.1.3 / v27.5.1 | `idtools.LookupUser(container.Config.User)` —— 把**整个** `"1000:1000"` 当用户名查 | ❌ getent 找不到 |
+| v28.0.0+ | `getUIDGID()` 先按 `:` 切开，数字部分直接用 | ✅ 正常 |
+
+所以这是**版本不兼容**，不是发行版问题，也不是宿主缺 UID 1000。
+
+### 验证方式（不动系统 Docker）
+
+在远端跑了一个**独立 dockerd 28.5.1**（独立 socket 与 data-root，系统 Docker 未受影响）：
+
+```sh
+curl -LsSf -o /tmp/docker28.tgz https://download.docker.com/linux/static/stable/x86_64/docker-28.5.1.tgz
+tar xzf /tmp/docker28.tgz -C /opt && mv /opt/docker /opt/docker28
+/opt/docker28/dockerd --host unix:///var/run/docker28/docker.sock \
+  --data-root /var/lib/docker28 --exec-root /var/run/docker28/exec \
+  --iptables=false --bridge=none
+```
+
+gateway 配置指向这个 socket：
+
+```toml
+[openshell.gateway]
+compute_driver = "docker"
+
+[openshell.drivers.docker]
+socket_path = "unix:///var/run/docker28/docker.sock"
+```
+
+### 实测输出（sandbox 内）
 
 ```
-Error: sandbox entered error phase while provisioning:
-  BoundaryConfigWriteFailed stage Docker sandbox bundle:
-  Docker responded with status code 500: getent unable to find entry "1000:1000" in passwd database
+$ openshell sandbox create --name probe28 --from node:22-alpine --no-keep \
+    -- sh -lc 'id; wget -q -T 5 -O /dev/null https://example.com && echo NET_OK || echo NET_BLOCKED'
+
+uid=1000(node) gid=1000(node) groups=1000(node)
+NET_BLOCKED
+wget: can't connect to remote host (198.18.0.2): Permission denied
 ```
 
-试过：`alpine:3.20`、`node:22-alpine`、`ubuntu:24.04`、`nvcr.io/nvidia/base/ubuntu:24.04`；宿主已有 `admin:1000:1000`；`docker run --user 1000:1000` 正常。
+### 策略白名单实测
 
-判断：这是 docker 驱动在 “stage bundle” 阶段对 `uid:gid` 做 passwd 查找的行为（可能是该版本在 alinux/非 userns 环境下的缺陷）。下一步：
+用我们渲染的 policy（`renderPolicyYaml()` 第一版字段名全错，网关直接拒绝：
+`unknown field 'filesystem_policy.read'`；按 `docs/how-it-works/policies/schema.mdx` 改成
+`read_only` / `read_write` / `run_as_user` / `network_policies.<name>.endpoints|binaries` 后通过）：
 
-1. 在 Ubuntu/Debian 机器上复现（排除发行版因素）；
-2. 或换 **Podman 驱动**（需要能装 podman 的发行版）；
-3. 或向 OpenShell 提 issue，附上面的日志与 `docker info`。
+```
+$ openshell sandbox create --name pol2 --from node:22-alpine --policy /tmp/roost-policy.yaml \
+    -- sh -lc 'wget -q -T 8 -O /dev/null https://example.com && echo NET_ALLOWED || echo NET_DENIED;
+               wget -q -T 8 -O /dev/null https://blocked.example.org && echo OTHER_ALLOWED || echo OTHER_DENIED'
+
+NET_ALLOWED
+OTHER_DENIED
+wget: can't connect to remote host (198.18.0.3): Permission denied
+```
+
+一次验证了四件事：**策略被接受、白名单放行、默认拒绝、非 root 身份**。
+
+## 生产落地建议
+
+| 选项 | 说明 |
+|---|---|
+| **升级 Docker 到 ≥ 28** | 最干净；需要维护窗口（这台机器还跑着别的业务容器） |
+| 独立 dockerd 28 + `socket_path` | 不动系统 Docker，已验证可行；多一个守护进程要管 |
+| 换 Podman 驱动 | 需要能装 podman 的发行版（alinux 4 源里没有） |
 
 ## 对项目的意义
 
-- 选型不需要改：gateway + 驱动 + 策略模型的形状与我们的 `SandboxBackend` 一致；
-- **但“已接入”仍不成立**：创建 sandbox 都没成功，谈不上隔离验证；
-- 远端现在留着一个可用的 gateway（mTLS 已认证、docker 驱动），下一次调试不用从零开始：
+- 选型成立：gateway + docker 驱动 + 策略模型的形状与我们的 `SandboxBackend` 一致；
+- **沙箱隔离在远端已真实验证**（默认拒绝 + 白名单 + 非 root），不再是纸面；
+- 唯一硬约束：**docker 驱动要求 Docker ≥ 28**，写进 `sandboxing.md` 与部署文档；
+- 远端留着可用的 gateway（mTLS + docker28 socket）与独立 dockerd，下一次调试不用从零开始：
 
 ```sh
 ssh root@47.90.253.85
-openshell status          # Authenticated
-openshell sandbox list    # 当前为空
+openshell status                     # Authenticated
+openshell sandbox list               # 当前为空
+docker -H unix:///var/run/docker28/docker.sock ps   # 独立 dockerd 28
 ```

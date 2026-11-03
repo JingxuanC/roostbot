@@ -75,5 +75,6 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 | **Bot 真的在房间里说话**（worker + 占位回复 + 幂等 + 不自激） | 回复是**模板**不是模型（DSH 回合还没接） |
 | 网页：配对页 + 真实房间（SSE）+ Bot 回复 + 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
 | sidecar 测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
-| 沙箱策略模型 + OpenShell 后端（假 CLI 测过） | **真沙箱未接入**（本机无 Docker，CLI 二进制不在 PyPI） |
+| 沙箱策略模型 + OpenShell 后端 | 真沙箱已在远端验证（需 Docker ≥ 28，见 spike 0002） |
+| 沙箱接进 runtime / DSH 容器 | **未接入**（策略与后端就绪，还没接到 worker 上） |
 

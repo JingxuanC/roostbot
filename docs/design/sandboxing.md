@@ -199,9 +199,16 @@ CREATE TABLE sandbox_denials (
 | `PassthroughBackend`（本机，明确 `isolated=false`） | ✅ 有测试 |
 | 真 CLI 参数对齐 | ✅ 已实测并修正后端（无 `--mount`、exec `--timeout` 秒、stop 保留工作区） |
 | 远端 gateway（Docker 驱动 + mTLS 认证） | ✅ 可用 |
-| 真沙箱执行（容器里跑 DSH、Landlock/seccomp 生效） | ❌ **未接入**：创建 sandbox 报 `BoundaryConfigWriteFailed`（见 spike 0002） |
+| 真沙箱执行（远端验证） | ✅ 默认拒绝出网 + 白名单放行 + 非 root，见 spike 0002 |
+| 部署硬约束 | **docker 驱动要求 Docker ≥ 28**（26/27 会把 `1000:1000` 当用户名查 getent） |
 
-为什么没真跑：
+更新的实测（2026-11-03，远端）：
+
+- Docker 26.1.3 → `BoundaryConfigWriteFailed: getent unable to find entry "1000:1000"`
+- Docker 28.5.1（独立 dockerd）→ sandbox 起来；不写策略时 `wget` 被拒；写策略后 `example.com` 放行、`blocked.example.org` 仍拒
+- 我们的 `renderPolicyYaml()` 第一版字段名不合 schema（网关报 `unknown field 'filesystem_policy.read'`），已按官方 schema 改为 `read_only` / `read_write` / `run_as_user` / `network_policies.<name>.endpoints|binaries`
+
+为什么最初没真跑：
 
 1. 这台机器**没有 Docker / Podman / Colima**（spike 早已记录），建不了 sandbox；
 2. `pip install openshell` 装到的是 **SDK**（`SandboxClient` / `SandboxSession` / `WorkspaceClient`），

@@ -56,20 +56,31 @@ exit 1
   return { dir, log, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
-test('策略渲染成 OpenShell YAML：默认拒绝、按二进制、方法大写、凭据只写引用名', () => {
+test('策略渲染成 OpenShell YAML：与官方 schema 字段一致', () => {
   const yaml = renderPolicyYaml(policy)
+  // 顶层与段落名（schema.mdx 的 4 个可选项里我们用 3 个）
   assert.match(yaml, /^version: 1$/m)
-  assert.match(yaml, /filesystem_policy:/)
-  assert.match(yaml, /process:/)
-  assert.match(yaml, /network_policies:/)
-  assert.match(yaml, /default: deny/)
-  assert.match(yaml, /binary: \/opt\/app\/engine\/report_engine/)
-  assert.match(yaml, /host: api\.qnaigc\.com/)
-  assert.match(yaml, /- GET\n\s+- POST/)
-  assert.match(yaml, /credentials: model-gateway/)
-  // 不能出现真实凭据字样，只能出现 provider 名。
+  assert.match(yaml, /^filesystem_policy:$/m)
+  assert.match(yaml, /^  read_only:$/m)
+  assert.match(yaml, /^  read_write:$/m)
+  assert.match(yaml, /^process:$/m)
+  assert.match(yaml, /^  run_as_user: "1000"$/m)
+  assert.match(yaml, /^  run_as_group: "1000"$/m)
+  // 网络：映射式，endpoints + binaries
+  assert.match(yaml, /^network_policies:$/m)
+  assert.match(yaml, /^    endpoints:$/m)
+  assert.match(yaml, /^      - host: api\.qnaigc\.com$/m)
+  assert.match(yaml, /^        port: 443$/m)
+  // GET+POST 属于 read-write 预设
+  assert.match(yaml, /^        protocol: rest$/m)
+  assert.match(yaml, /^        access: read-write$/m)
+  assert.match(yaml, /^    binaries:$/m)
+  assert.match(yaml, /^      - path: \/opt\/app\/engine\/report_engine$/m)
+  // 凭据只写 provider 名，不写凭据值
+  assert.match(yaml, /^        credential_binding:$/m)
+  assert.match(yaml, /^          provider: model-gateway$/m)
   assert.doesNotMatch(yaml, /sk-|api[_-]?key/i)
-  // 渲染结果与我们的判定一致：git 只读、report_engine 可写。
+  // 渲染结果与判定一致
   assert.equal(isEgressAllowed(policy, { binary: '/usr/bin/git', host: 'github.com', method: 'POST' }), false)
   assert.equal(isEgressAllowed(policy, { binary: '/opt/app/engine/report_engine', host: 'api.qnaigc.com', method: 'POST' }), true)
 })
