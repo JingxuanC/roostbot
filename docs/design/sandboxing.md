@@ -186,6 +186,10 @@ CREATE TABLE sandbox_denials (
 
 ## 14. 接入状态（诚实版）
 
+> 2026-11-03 更新：已在远端服务器上装好 CLI/gateway 并用 **Docker 驱动 + mTLS** 连上，
+> 但 sandbox 创建卡在驱动内部错误。细节与复现步骤见
+> [`docs/spikes/0002-openshell-on-remote.md`](../spikes/0002-openshell-on-remote.md)。
+
 | 部分 | 状态 |
 |---|---|
 | 策略模型（文件/进程/按二进制网络规则 + 默认拒绝） | ✅ `packages/sandbox`，有测试 |
@@ -193,7 +197,9 @@ CREATE TABLE sandbox_denials (
 | `SandboxBackend` 接口（create / exec / stop / available / isolated） | ✅ |
 | `OpenShellBackend`（调 CLI，零依赖） | ✅ 代码 + 用**假 CLI** 测过命令行形状；**没有真跑过** |
 | `PassthroughBackend`（本机，明确 `isolated=false`） | ✅ 有测试 |
-| 真沙箱执行（容器里跑 DSH、Landlock/seccomp 生效） | ❌ **未接入** |
+| 真 CLI 参数对齐 | ✅ 已实测并修正后端（无 `--mount`、exec `--timeout` 秒、stop 保留工作区） |
+| 远端 gateway（Docker 驱动 + mTLS 认证） | ✅ 可用 |
+| 真沙箱执行（容器里跑 DSH、Landlock/seccomp 生效） | ❌ **未接入**：创建 sandbox 报 `BoundaryConfigWriteFailed`（见 spike 0002） |
 
 为什么没真跑：
 

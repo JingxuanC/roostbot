@@ -84,7 +84,6 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
       name: 'ws_test',
       policyYaml: renderPolicyYaml(policy),
       image: 'roost/engine:dev',
-      mounts: [{ hostPath: '/tmp/data', sandboxPath: '/data', readOnly: true }],
       env: { ROOST_RUN: 'run_1' }
     })
     assert.equal(handle.id, 'sb_created_123')
@@ -99,7 +98,6 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
     assert.match(createCall!, /--policy .*ws_test\.policy\.yaml/)
     assert.match(createCall!, /--detach/)
     assert.match(createCall!, /--from roost\/engine:dev/)
-    assert.match(createCall!, /--mount \/tmp\/data:\/data:ro/)
     assert.match(createCall!, /--env ROOST_RUN=run_1/)
 
     // 策略文件真的写了，且内容就是 renderPolicyYaml 的输出。
@@ -110,8 +108,30 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
     assert.equal(result.code, 7)
     assert.match(result.stdout, /ran: .*sh -lc echo hi/)
 
+    // exec 带 --timeout（秒）与分隔符。
+    const execCall = readFileSync(fake.log, 'utf8').split('\n').find((line) => line.includes('sandbox exec'))
+    assert.match(execCall!, /--timeout \d+ -- sh -lc echo hi/)
+
     await backend.stop(handle)
     assert.ok(readFileSync(fake.log, 'utf8').includes(`sandbox stop ${handle.id}`))
+  } finally {
+    fake.cleanup()
+  }
+})
+
+test('mounts 在 0.1.6 的 create 里没有对应参数：明确报 unsupported', async () => {
+  const fake = fakeOpenshell()
+  try {
+    const backend = new OpenShellBackend({ binary: join(fake.dir, 'openshell'), policyDir: fake.dir })
+    await assert.rejects(
+      () =>
+        backend.create({
+          name: 'ws_mount',
+          policyYaml: renderPolicyYaml(policy),
+          mounts: [{ hostPath: '/tmp/data', sandboxPath: '/data', readOnly: true }]
+        }),
+      (error: unknown) => error instanceof SandboxError && error.code === 'unsupported'
+    )
   } finally {
     fake.cleanup()
   }

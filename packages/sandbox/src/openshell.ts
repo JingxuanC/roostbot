@@ -98,11 +98,17 @@ export class OpenShellBackend implements SandboxBackend {
     const policyPath = join(dir, `${input.name}.policy.yaml`)
     await writeFile(policyPath, input.policyYaml, { mode: 0o600 })
 
+    // 真实 CLI（0.1.6 实测）：create 接受 --name/--from/--policy/--detach/--env/--workspace，
+    // **不接受 --mount**；挂载由 gateway 的 [openshell.drivers.docker].enable_bind_mounts 与
+    // 卷管理负责（见 docs/spikes/0002-openshell-on-remote.md）。
+    if ((input.mounts ?? []).length > 0) {
+      throw new SandboxError(
+        'unsupported',
+        'openshell sandbox create has no --mount flag in 0.1.6; use a workspace or gateway-side bind mounts'
+      )
+    }
     const args = [...this.commonArgs, 'sandbox', 'create', '--name', input.name, '--policy', policyPath, '--detach']
     if (input.image !== undefined) args.push('--from', input.image)
-    for (const mount of input.mounts ?? []) {
-      args.push('--mount', `${mount.hostPath}:${mount.sandboxPath}${mount.readOnly === true ? ':ro' : ''}`)
-    }
     for (const [key, value] of Object.entries(input.env ?? {})) {
       args.push('--env', `${key}=${value}`)
     }
@@ -118,11 +124,13 @@ export class OpenShellBackend implements SandboxBackend {
 
   async exec(handle: SandboxHandle, argv: string[], options: ExecOptions = {}): Promise<ExecResult> {
     if (argv.length === 0) throw new SandboxError('invalid_exec', 'exec needs at least one argument')
-    const result = await runCommand(
-      this.binary,
-      [...this.commonArgs, 'sandbox', 'exec', handle.id, '--', ...argv],
-      { timeoutMs: options.timeoutMs ?? this.defaultTimeoutMs, ...(options.stdin === undefined ? {} : { stdin: options.stdin }) }
-    )
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs
+    // 真实 CLI 的 --timeout 单位是秒；0 = 不超时。
+    const args = [...this.commonArgs, 'sandbox', 'exec', handle.id, '--timeout', String(Math.ceil(timeoutMs / 1000)), '--', ...argv]
+    const result = await runCommand(this.binary, args, {
+      timeoutMs,
+      ...(options.stdin === undefined ? {} : { stdin: options.stdin })
+    })
     if (result.timedOut) {
       throw new SandboxError('timeout', `openshell exec timed out after ${options.timeoutMs ?? this.defaultTimeoutMs}ms`)
     }
@@ -136,6 +144,7 @@ export class OpenShellBackend implements SandboxBackend {
   }
 
   async stop(handle: SandboxHandle): Promise<void> {
+    // stop 保留工作区；delete 才是销毁（见 sandbox 子命令列表）。
     const result = await runCommand(this.binary, [...this.commonArgs, 'sandbox', 'stop', handle.id], { timeoutMs: 60_000 })
     if (result.code !== 0) {
       throw new SandboxError('exec_failed', `openshell sandbox stop failed (${result.code}): ${result.stderr.trim()}`)
