@@ -260,3 +260,9 @@ CREATE TABLE run_events (
 | 睡眠唤醒 | ❌ | ✅ 云端握手 | ❌ | ✅ |
 | 人工停止尊重 | 部分 | ✅ | ✅ `--respect-stop` | ✅ |
 | 失败退避 | ❌ | ✅ | ✅ | ✅ |
+
+## 15. 实测备注（2026-11-03）
+
+沙箱空闲时的「睡」在 docker 驱动上是 **stop/start**（工作区保留、内存不保留），因为
+OpenShell 0.1.6 的 docker 驱动不支持 `sandbox suspend`。接口保留 `suspend/resume`，
+换 vm/podman 驱动时自动升级为带内存快照的挂起。验证见 `docs/spikes/0002-openshell-on-remote.md`。

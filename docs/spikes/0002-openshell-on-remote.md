@@ -291,6 +291,38 @@ Authentication Fails, Your api key: ****aged is invalid
 
 模型是真实的（有 usage 计数），沙箱里没有 key 的任何副本——这正是 `sandboxing.md` §4 的设计。
 
+## 网页端 + 多端同步 + 睡/醒（2026-11-03）
+
+**网页端**：SSH 隧道 `-L 18790:127.0.0.1:8790` 把远端控制面映到本机，浏览器打开
+`http://127.0.0.1:18790/`（控制面自己伺服网页，同源），配对后看到的就是真实房间：
+
+![房间](../../docs/assets/m5-live-room.png)
+
+图里两条回答都来自远端沙箱里的真实 DeepSeek 回合，页脚写明来源。
+
+**多端同步**（协议层）：两个 SSE 消费者同时订阅同一房间，发一条消息后：
+
+```
+A 收到 event 行: 2 / B: 2
+A 的 seq: id: 1 id: 2
+B 的 seq: id: 1 id: 2
+重复检测（同一 seq 出现次数）: 0 个重复
+```
+
+**睡/醒**（`ROOST_SANDBOX_IDLE_MS=8000`）：
+
+```
+[sandbox] suspended unsupported, falling back to stop: … compute driver does not support sandbox suspend
+[sandbox] sandbox roost-j4tntgli0v stopped (workspace kept)
+[worker] sandbox suspended while idle
+[sandbox] sandbox roost-j4tntgli0v started
+[room-worker] replied … to seq 3
+```
+
+OpenShell 0.1.6 的 **docker 驱动不支持 `sandbox suspend`**（`compute driver does not support
+sandbox suspend`），所以 runner 回退到 `stop`/`start`：工作区保留、内存不保留。语义上就是
+`scheduling.md` 的「睡」，只差快照能力；换 vm/podman 驱动时自动用真正的 suspend。
+
 ## 对项目的意义
 
 - 选型成立：gateway + docker 驱动 + 策略模型的形状与我们的 `SandboxBackend` 一致；

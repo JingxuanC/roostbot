@@ -76,5 +76,6 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 | 网页：配对页 + 真实房间（SSE）+ Bot 回复 + 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
 | sidecar 测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
 | 沙箱策略模型 + OpenShell 后端 | 真沙箱已在远端验证（需 Docker ≥ 28，见 spike 0002） |
-| **worker 的回复 = 沙箱里的真实 DSH 回合**（DeepSeek，凭据由 OpenShell 注入） | 没有 UI 截图；沙箱尚未挂到网页多端 |
+| **worker 的回复 = 沙箱里的真实 DSH 回合**（DeepSeek，凭据由 OpenShell 注入） | 单机部署；没有多租户/账号体系 |
+| 网页端真实房间 + SSE 多端 + Markdown 渲染（截图 `docs/assets/m5-live-room.png`） | 沙箱空闲只能 stop/start（docker 驱动不支持 suspend） |
 
