@@ -110,6 +110,7 @@ test('create / exec / stop 的命令行形状（假 CLI）', async () => {
     assert.match(createCall!, /--detach/)
     assert.match(createCall!, /--from roost\/engine:dev/)
     assert.match(createCall!, /--env ROOST_RUN=run_1/)
+    assert.match(createCall!, /-- sh -lc exec sleep infinity/)
 
     // 策略文件真的写了，且内容就是 renderPolicyYaml 的输出。
     const written = readFileSync(join(fake.dir, 'ws-test.policy.yaml'), 'utf8')

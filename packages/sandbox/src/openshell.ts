@@ -119,6 +119,9 @@ export class OpenShellBackend implements SandboxBackend {
     for (const [key, value] of Object.entries(input.env ?? {})) {
       args.push('--env', `${key}=${value}`)
     }
+    // --detach 需要一个长期存活的 canonical process，否则沙箱很快进入非 Ready，
+    // 后续 exec 会报 "sandbox is not ready"。
+    args.push('--', ...(input.command ?? ['sh', '-lc', 'exec sleep infinity']))
 
     const result = await runCommand(this.binary, args, { timeoutMs: this.defaultTimeoutMs })
     if (result.code !== 0) {

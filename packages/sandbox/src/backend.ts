@@ -15,6 +15,12 @@ export interface CreateSandboxInput {
   mounts?: Array<{ hostPath: string; sandboxPath: string; readOnly?: boolean }>
   /** 额外环境变量；**不允许放凭据**（凭据只在网关侧注入）。 */
   env?: Record<string, string>
+  /**
+   * canonical main process。`--detach` 时必须给一个不立刻退出的命令，
+   * 否则沙箱会在 exec 之前就进入非 Ready 状态（实测）。
+   * 默认 `sh -lc 'exec sleep infinity'`。
+   */
+  command?: string[]
 }
 
 export interface SandboxHandle {
