@@ -1,0 +1,11 @@
+{
+  "name": "@roost/connectors",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Connector gateway interface: OpenConnector by default, Composio and native MCP as alternatives; grants per bot, credentials stay in the gateway.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}

@@ -14,6 +14,8 @@
 | 8 | [scheduling.md](scheduling.md) | 什么时候开始干活：Activation、cron、checks、睡/醒握手 |
 | 9 | [workspace.md](workspace.md) | 状态住在哪：一个家、多个窗口、能力节点 |
 | 10 | [sandboxing.md](sandboxing.md) | 执行怎么隔离：决策在外、执行在内、凭据不入箱 |
+| 11 | [connectors.md](connectors.md) | 第三方能力怎么进：网关在中间，OpenConnector 默认 |
+| 12 | [storage.md](storage.md) | 内容存哪：接口化，默认本地卷 |
 
 ## 读法建议
 
