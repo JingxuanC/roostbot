@@ -168,16 +168,25 @@ async function main(): Promise<void> {
   const sandboxMode = process.env.ROOST_SANDBOX
   if (sandboxMode === 'openshell' || sandboxMode === 'passthrough') {
     const { startSandboxRunner, SANDBOX_PROBE } = await import('./sandbox-runner.ts')
+    const dshTurn = process.env.ROOST_SANDBOX_TURN === 'dsh'
     const runner = await startSandboxRunner({
       backend: sandboxMode,
       ...(process.env.ROOST_SANDBOX_IMAGE === undefined ? {} : { image: process.env.ROOST_SANDBOX_IMAGE }),
-      ...(process.env.ROOST_SANDBOX_NAME === undefined ? {} : { name: process.env.ROOST_SANDBOX_NAME })
+      ...(process.env.ROOST_SANDBOX_NAME === undefined ? {} : { name: process.env.ROOST_SANDBOX_NAME }),
+      ...(dshTurn ? { mockModel: process.env.ROOST_DSH_MOCK === '1' } : {}),
+      ...(process.env.ROOST_DSH_BASE_URL === undefined ? {} : { modelBaseUrl: process.env.ROOST_DSH_BASE_URL }),
+      ...(process.env.ROOST_DSH_MODEL === undefined ? {} : { model: process.env.ROOST_DSH_MODEL })
     })
+    const modelLabel = process.env.ROOST_DSH_MOCK === '1' ? 'mock 模型' : 'DSH provider'
     const handle = await startRoomWorker({
       apiBase,
       runtimeToken,
       reply: async ({ text }) => {
         const clipped = text.length > 120 ? `${text.slice(0, 120)}…` : text
+        if (dshTurn) {
+          const answer = await runner.runDshTurn(`房间里有人说：${text}`)
+          return `「${answer}」（沙箱内 DSH 回合 · ${modelLabel} · ${runner.backend}）`
+        }
         const probe = await runner.run(SANDBOX_PROBE)
         const evidence = probe.stdout.trim().split('\n').slice(0, 2).join(' · ')
         return `收到：「${clipped}」。这条回复由 ${runner.backend} 沙箱内的同名进程生成（${evidence}）；DSH 回合还没接进来。`

@@ -14,11 +14,21 @@ export interface SandboxRunnerOptions {
   name?: string
   /** openshell 可执行文件（默认 PATH）。 */
   binary?: string
+  /** 传给沙箱的环境变量（**不能放密钥**；真实密钥走 provider）。 */
+  env?: Record<string, string>
+  /** 是否在沙箱里先起 mock 模型（没有真 key 的演示环境用）。 */
+  mockModel?: boolean
+  /** DSH 的模型 base URL；mock 时指向沙箱内 loopback。 */
+  modelBaseUrl?: string
+  /** 模型名。 */
+  model?: string
   log?: (line: string) => void
 }
 
 export interface SandboxRunner {
   readonly backend: string
+  /** 跑一个 DSH headless 回合，返回模型回复文本（沙箱内执行）。 */
+  runDshTurn(text: string): Promise<string>
   /** 在沙箱里跑一条命令，返回 stdout（失败抛错）。 */
   run(command: string[]): Promise<{ code: number; stdout: string; stderr: string }>
   stop(): Promise<void>
@@ -31,8 +41,10 @@ export function sandboxPolicy() {
     // 没有网络规则时，schema 的 baseline 路径不会自动加上，所以动态链接器与 /lib
     // 必须自己列：漏了 /lib 会导致 /bin/sh 启动即 Permission denied（实测 os error 13）。
     filesystem: {
-      read: ['/usr', '/etc', '/bin', '/sbin', '/lib', '/lib64', '/opt', '/dev/null'],
-      write: ['/tmp', '/workspace']
+      // 没有网络规则时 schema 不会自动加 baseline 路径，必须自己列全：
+      // /lib 是动态链接器（漏了 /bin/sh 直接 EACCES），/opt 放 mock，/proc 是 node 要读的。
+      read: ['/usr', '/etc', '/bin', '/sbin', '/lib', '/lib64', '/opt', '/proc', '/dev/null'],
+      write: ['/tmp', '/workspace', '/var/lib/dsh']
     },
     process: { user: 1000, caps: [] },
     network: { default: 'deny', allow: [] }
@@ -57,9 +69,25 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
     handle = await backend.create({
       name,
       policyYaml: sandboxPolicy(),
-      image: options.image ?? 'docker.io/library/node:22-alpine'
+      image: options.image ?? 'docker.io/library/node:22-alpine',
+      ...(options.env === undefined ? {} : { env: options.env })
     })
     log(`sandbox ${handle.name} created (${handle.id})`)
+  }
+
+  const turnCommand = (text: string): string[] => {
+    const quoted = `'${text.replace(/'/g, `'\\''`)}'`
+    const mock = options.mockModel === true
+      ? 'node /opt/mock-openai.mjs > /tmp/mock.log 2>&1 & MOCK=$!; sleep 1; '
+      : ''
+    const cleanup = options.mockModel === true ? '; RC=$?; kill $MOCK 2>/dev/null; exit $RC' : ''
+    const env = [
+      'export HOME=/workspace',
+      ...(options.modelBaseUrl === undefined ? [] : [`DEEPSEEK_BASE_URL=${options.modelBaseUrl}`]),
+      'DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-mock-key}',
+      ...(options.model === undefined ? [] : [`DEEPSEEK_DEFAULT_MODEL=${options.model}`])
+    ].join(' ')
+    return ['sh', '-lc', `${env}; ${mock}dsh --profile headless --json ${quoted}${cleanup}`]
   }
 
   return {
@@ -68,6 +96,18 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
       const target: SandboxHandle = handle ?? { id: `local_${name}`, name, backend: backend.id }
       const result = await backend.exec(target, command, { timeoutMs: 30_000 })
       return { code: result.code, stdout: result.stdout, stderr: result.stderr }
+    },
+    /** 在沙箱里跑一个真正的 DSH headless 回合，返回 final 文本。 */
+    async runDshTurn(text) {
+      const target: SandboxHandle = handle ?? { id: `local_${name}`, name, backend: backend.id }
+      const result = await backend.exec(target, turnCommand(text), { timeoutMs: 180_000 })
+      const lines = result.stdout.split('\n').filter((line) => line.trim().startsWith('{'))
+      const final = [...lines].reverse().find((line) => line.includes('"type":"final"'))
+      if (final === undefined) {
+        throw new Error(`dsh turn produced no final event (code=${result.code}): ${result.stderr.slice(-400)}`)
+      }
+      const parsed = JSON.parse(final) as { text?: string }
+      return parsed.text ?? ''
     },
     async stop() {
       if (handle !== null) {
