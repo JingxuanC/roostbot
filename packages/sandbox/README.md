@@ -27,14 +27,30 @@
 
 本机（macOS/Windows）**不承诺沙箱隔离**——没有 Landlock/seccomp。本机执行 = 用户自己的信任域，调用带 grant 与审计，但不是安全边界。
 
+## 后端
+
+| 后端 | 状态 | 说明 |
+|---|---|---|
+| `OpenShellBackend` | 代码完成，**假 CLI 测过** | 调 `openshell sandbox create/exec/stop`，零依赖 |
+| `PassthroughBackend` | 可用 | 本机执行；`isolated=false`，不是沙箱 |
+| 真沙箱 | ❌ 未验证 | 本机没有 Docker，也没有 CLI 二进制（PyPI 只发 SDK） |
+
+```ts
+const backend = new OpenShellBackend({ binary: 'openshell' })
+if (!(await backend.available())) throw new Error('openshell not installed')
+const sandbox = await backend.create({ name: 'ws_1', policyYaml: renderPolicyYaml(policy) })
+const result = await backend.exec(sandbox, ['sh', '-lc', 'echo hi'])
+await backend.stop(sandbox)
+```
+
 ## 不在这个包里
 
-- 沙箱执行（OpenShell / gVisor 的运行时）
 - 凭据存储（控制面密钥服务）
-- 快照与恢复（`scheduling.md`）
+- 快照与恢复（`scheduling.md`；SDK 用 `SandboxSession.suspend/resume`）
 
 ## 待办
 
-- [ ] 策略 → OpenShell YAML 的转换器
+- [ ] 对真 CLI 校验参数顺序（`sandboxing.md` §14 的三件事）
+- [ ] 对 OpenShell schema 校验 `renderPolicyYaml()` 的字段名
 - [ ] 策略版本与证明结果的持久化
 - [ ] 拒绝原因 → 上下文注入的文案（让模型能换路径而不是死循环）

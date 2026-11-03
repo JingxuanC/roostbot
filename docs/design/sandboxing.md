@@ -183,3 +183,38 @@ CREATE TABLE sandbox_denials (
 2. **沙箱粒度**：每回合一个（最干净）还是每会话一个（省创建成本）？
 3. **GPU/本地模型**：需要在沙箱里暴露 GPU 时，策略怎么写？
 4. **策略证明的覆盖**：只证明网络，还是连文件系统一起证明？
+
+## 14. 接入状态（诚实版）
+
+| 部分 | 状态 |
+|---|---|
+| 策略模型（文件/进程/按二进制网络规则 + 默认拒绝） | ✅ `packages/sandbox`，有测试 |
+| 策略 → OpenShell YAML 渲染 | ✅ `renderPolicyYaml()`；**字段名未对真 schema 校验** |
+| `SandboxBackend` 接口（create / exec / stop / available / isolated） | ✅ |
+| `OpenShellBackend`（调 CLI，零依赖） | ✅ 代码 + 用**假 CLI** 测过命令行形状；**没有真跑过** |
+| `PassthroughBackend`（本机，明确 `isolated=false`） | ✅ 有测试 |
+| 真沙箱执行（容器里跑 DSH、Landlock/seccomp 生效） | ❌ **未接入** |
+
+为什么没真跑：
+
+1. 这台机器**没有 Docker / Podman / Colima**（spike 早已记录），建不了 sandbox；
+2. `pip install openshell` 装到的是 **SDK**（`SandboxClient` / `SandboxSession` / `WorkspaceClient`），
+   入口点列表为空——**CLI 二进制不在 PyPI 包里**，要靠 install 脚本或发布产物；
+3. 没有 gateway 可连，`SandboxClient.create()` 无从验证。
+
+**下一步（有容器运行时的机器上，约 30 分钟）**：
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+openshell gateway start
+openshell sandbox create --name probe --policy /tmp/probe.policy.yaml --detach
+openshell sandbox exec probe -- sh -lc 'curl -sS https://example.com || true'   # 期望被拒
+```
+
+三件要对齐的事（按顺序）：
+
+1. `sandbox create` / `exec` / `stop` 的真实参数顺序，与 `packages/sandbox/src/openshell.ts` 对照；
+2. `renderPolicyYaml()` 的字段名对 schema（不一致就改渲染器，不改上游模型）；
+3. SDK 的 `SandboxSession.suspend/resume` 与 `Scheduling` 的暂停-恢复握手对齐（密度靠快照恢复）。
+
+在真跑通过之前，产品文案只能说「沙箱层已选定 OpenShell、策略与后端接口已就绪」，不能说「已隔离」。
