@@ -279,6 +279,124 @@ const ROOM = {
   ],
 }
 
+
+// ---------------------------------------------------------------------------
+// Markdown（最小子集，全部用 DOM 构建，绝不 innerHTML）
+// ---------------------------------------------------------------------------
+// 模型回复天然带 markdown：加粗、列表、表格、代码块。渲染成纯文本会让长回答
+// 变成一坨（用户实测第一眼就是这个问题）。这里只做安全子集：
+// 标题/列表/表格/引用/代码块/加粗/斜体/行内代码/链接，其余按文本。
+
+const MD_INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|\[[^\]]+\]\((?:https?:\/\/)[^)]+\))/g
+
+function inlineFragment(text) {
+  const frag = document.createDocumentFragment()
+  let last = 0
+  for (const match of text.matchAll(MD_INLINE)) {
+    if (match.index > last) frag.append(document.createTextNode(text.slice(last, match.index)))
+    const token = match[0]
+    if (token.startsWith('**')) {
+      frag.append(el('strong', { text: token.slice(2, -2) }))
+    } else if (token.startsWith('`')) {
+      frag.append(el('code', { class: 'md-code', text: token.slice(1, -1) }))
+    } else if (token.startsWith('[')) {
+      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token)
+      const href = link ? link[2] : ''
+      if (/^https?:\/\//.test(href)) {
+        frag.append(el('a', { href, rel: 'noopener noreferrer', target: '_blank', text: link[1] }))
+      } else {
+        frag.append(document.createTextNode(token))
+      }
+    } else {
+      frag.append(el('em', { text: token.slice(1, -1) }))
+    }
+    last = match.index + token.length
+  }
+  if (last < text.length) frag.append(document.createTextNode(text.slice(last)))
+  return frag
+}
+
+function markdownFragment(text) {
+  const frag = document.createDocumentFragment()
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n')
+  let i = 0
+  const paragraph = (buffer) => {
+    const p = el('p', { class: 'md-p' })
+    buffer.forEach((line, index) => {
+      if (index > 0) p.append(el('br'))
+      p.append(inlineFragment(line))
+    })
+    frag.append(p)
+  }
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line.startsWith('```')) {
+      const code = []
+      i += 1
+      while (i < lines.length && !lines[i].startsWith('```')) { code.push(lines[i]); i += 1 }
+      i += 1
+      const pre = el('pre', { class: 'md-pre' })
+      pre.append(el('code', { text: code.join('\n') }))
+      frag.append(pre)
+      continue
+    }
+    if (/^\s*$/.test(line)) { i += 1; continue }
+    const heading = /^(#{1,3})\s+(.*)$/.exec(line)
+    if (heading) {
+      frag.append(el(`h${heading[1].length + 2}`, { class: 'md-h' }, [inlineFragment(heading[2])]))
+      i += 1
+      continue
+    }
+    if (line.startsWith('|') && lines[i + 1] !== undefined && /^\|[\s:-]+\|/.test(lines[i + 1])) {
+      const rows = []
+      while (lines[i] !== undefined && lines[i].startsWith('|')) { rows.push(lines[i]); i += 1 }
+      const table = el('table', { class: 'md-table' })
+      rows.forEach((row, index) => {
+        if (index === 1) return // 分隔行
+        const cells = row.split('|').slice(1, -1).map((cell) => cell.trim())
+        const tr = el('tr')
+        for (const cell of cells) tr.append(index === 0 ? el('th', {}, [inlineFragment(cell)]) : el('td', {}, [inlineFragment(cell)]))
+        table.append(tr)
+      })
+      frag.append(table)
+      continue
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const list = el('ul', { class: 'md-list' })
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        list.append(el('li', {}, [inlineFragment(lines[i].replace(/^\s*[-*+]\s+/, ''))]))
+        i += 1
+      }
+      frag.append(list)
+      continue
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const list = el('ol', { class: 'md-list' })
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+        list.append(el('li', {}, [inlineFragment(lines[i].replace(/^\s*\d+[.)]\s+/, ''))]))
+        i += 1
+      }
+      frag.append(list)
+      continue
+    }
+    if (line.startsWith('>')) {
+      const quote = el('blockquote', { class: 'md-quote' })
+      const buffer = []
+      while (i < lines.length && lines[i].startsWith('>')) { buffer.push(lines[i].replace(/^>\s?/, '')); i += 1 }
+      quote.append(markdownFragment(buffer.join('\n')))
+      frag.append(quote)
+      continue
+    }
+    const buffer = [line]
+    i += 1
+    while (i < lines.length && lines[i] !== '' && !/^\s*(```|#{1,3}\s|[-*+]\s|\d+[.)]\s|\||>)/.test(lines[i])) {
+      buffer.push(lines[i]); i += 1
+    }
+    paragraph(buffer)
+  }
+  return frag
+}
+
 // ---------------------------------------------------------------------------
 // 三、DOM 小工具
 // ---------------------------------------------------------------------------
@@ -339,7 +457,9 @@ function renderSidebarBots() {
 function renderUserMessage(text) {
   const row = el('div', { class: 'msg msg-user' })
   row.append(el('span', { class: 'sr-only', text: '你：' }))
-  row.append(el('div', { class: 'bubble bubble-user', text }))
+  const bubble = el('div', { class: 'bubble bubble-user' })
+  bubble.append(markdownFragment(text))
+  row.append(bubble)
   return row
 }
 
@@ -352,7 +472,9 @@ function renderRoomMessage(event) {
   head.append(el('span', { class: 'msg-name', text: bot.name }))
   head.append(el('span', { class: 'msg-role', text: bot.role }))
   article.append(head)
-  article.append(el('div', { class: 'bubble bubble-bot', text: event.payload.text }))
+  const bubble = el('div', { class: 'bubble bubble-bot' })
+  bubble.append(markdownFragment(event.payload.text))
+  article.append(bubble)
   return article
 }
 
@@ -387,7 +509,9 @@ function renderPeerMessage(event, delivery) {
   toggle.append(el('span', { class: 'peer-count', text: `${text.length} 字` }))
 
   const body = el('div', { class: 'peer-body', id: bodyId, hidden: true })
-  body.append(el('p', { class: 'peer-text', text }))
+  const peerText = el('div', { class: 'peer-text' })
+  peerText.append(markdownFragment(text))
+  body.append(peerText)
   const meta = []
   if (event.peer.source) meta.push(`来源：${event.peer.source}`)
   if (event.peer.doneWhen) meta.push(`完成条件：${event.peer.doneWhen}`)
@@ -840,6 +964,8 @@ function enterRoom(mode) {
   const stripText = $('#demo-strip-text')
   if (mode === 'live') {
     if (stripText) stripText.hidden = true
+    const foot = document.querySelector('.side-foot')
+    if (foot) foot.textContent = '已连接控制面 · 实时'
   } else if (stripText) {
     stripText.hidden = false
     stripText.textContent =
