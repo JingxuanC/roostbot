@@ -37,3 +37,19 @@ reply  = resume | poll | none
 - [ ] 幂等仓储：`idem` → 原 messageId
 - [ ] 大小检查与附件降级（超过 `INLINE_HEAD_CHARS` 转附件）
 - [ ] 框的本地化（中文界面下的框文案）
+
+## 折叠
+
+两种折叠，作用范围不同：
+
+| 开关 | 管什么 | 作用范围 |
+|---|---|---|
+| 折叠 Bot 之间的对话 | 房间里 Bot ⇄ Bot 的传话（`handoff`） | **房间默认**，存在房间记录里，跨端一致 |
+| 总是展开 Bot 私聊 | A → B 的私聊标签行 | 设备偏好 |
+
+规则：**结论永不折叠**（一条链的最后一句必须可见）；连续折叠行合并成一行计数；折叠只影响渲染，不影响模型上下文。
+
+```ts
+shouldCollapseRoomLine(line, { collapseBotToBot: true })
+classifyRoomLine(line)   // human | answer | handoff | final
+```

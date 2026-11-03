@@ -60,3 +60,42 @@ export function collapsedByDefault(delivery: PeerDelivery): boolean {
 
 /** 折叠时标签行里那句话的截断长度。 */
 export const PEER_SUMMARY_CHARS = 40
+
+/** 房间的展示设置：折叠开关属于房间，不是设备偏好（design §14.2）。 */
+export interface RoomDisplaySettings {
+  /** 打开后：只留人的话与每条链的结论。 */
+  collapseBotToBot: boolean
+}
+
+/** 一条房间里的话，按渲染需要分类。 */
+export type RoomLineKind = 'human' | 'answer' | 'handoff' | 'final'
+
+export interface RoomLineInput {
+  authorKind: 'user' | 'bot'
+  repliedToKind?: 'user' | 'bot'
+  mentionsBots: boolean
+  /** 由列表构建器判定：这条之后没有人说话、也没有 @ 别人。 */
+  terminal?: boolean
+}
+
+export function classifyRoomLine(line: RoomLineInput): RoomLineKind {
+  if (line.authorKind === 'user') return 'human'
+  if (line.terminal === true) return 'final'
+  if (line.mentionsBots || line.repliedToKind === 'bot') return 'handoff'
+  return 'answer'
+}
+
+/**
+ * 是否折叠这一行。结论永不折叠，否则开了开关就等于看不到结果。
+ * 折叠只影响渲染，不影响模型上下文。
+ */
+export function shouldCollapseRoomLine(line: RoomLineInput, settings: RoomDisplaySettings): boolean {
+  if (!settings.collapseBotToBot) return false
+  const kind = classifyRoomLine(line)
+  return kind === 'handoff'
+}
+
+/** 连续被折叠的行合并成一个计数行，而不是每行一个折叠条。 */
+export function collapseRunLabel(count: number): string {
+  return `${count} 条协作`
+}
