@@ -49,3 +49,14 @@ export function needsReason(delivery: PeerDelivery): boolean {
 export function isPubliclyVisible(delivery: PeerDelivery): boolean {
   return delivery === 'room' || delivery === 'notice'
 }
+
+/**
+ * 私聊默认折叠，房间消息不折叠（design messaging.md §14.1）。
+ * 折叠不等于隐藏：标签行仍给谁、什么动作、一句话摘要。
+ */
+export function collapsedByDefault(delivery: PeerDelivery): boolean {
+  return delivery !== 'room' && delivery !== 'notice'
+}
+
+/** 折叠时标签行里那句话的截断长度。 */
+export const PEER_SUMMARY_CHARS = 40
