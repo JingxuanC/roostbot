@@ -17,6 +17,7 @@
 | 11 | [connectors.md](connectors.md) | 第三方能力怎么进：网关在中间，OpenConnector 默认 |
 | 12 | [storage.md](storage.md) | 内容存哪：接口化，默认本地卷 |
 | 13 | [ui.md](ui.md) | 界面：安静优先、诚实优先、一个模型多个窗口 |
+| 14 | [plugins.md](plugins.md) | 插件怎么装：同一套 DSH 模型 + 预检/无人值守/信任 |
 
 ## 读法建议
 

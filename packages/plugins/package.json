@@ -1,0 +1,11 @@
+{
+  "name": "@roost/plugins",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Plugin manifest, preflight checks and install state: same DSH plugin model, plus version gating, unattended sync and trust.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}
