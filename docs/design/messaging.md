@@ -1,0 +1,164 @@
+# 消息：Bot 之间怎么互相说话
+
+> 状态：方案（2026-11-03）。配套：`loop-and-context.md`（注入什么）、`agent-collaboration.md`（状态机，待写）。
+
+## 1. 一句话
+
+**"发消息"不是消息总线，而是往对方上下文注入一条 user 角色的消息，并附一个发送者框。**
+真正的协作状态（谁委托了谁、做到哪一步）不能只靠消息，要靠 assignment。
+
+三家实现的共同点：都把消息做成 **`createUserMessage` + source 标记**；
+差别：DSH 只有投递，OMB 有状态机，ds-bot 有轻量 work 跟踪 + 防环。
+
+## 2. 消息的物理形态
+
+```
+[发送者框]            ← 第一块内容，固定格式，模型据此区分"人"和"队友"
+<body>               ← 正文；长文本转附件，内联只留头部
+source: agent-message / relay / senderSessionId   ← 元数据，模型不可见
+```
+
+**为什么发送者框必须进内容而不是元数据**：模型看到的是 user 角色消息，如果没有框，它会把队友指令当用户意图执行。
+
+### 框的词汇表（合并三家的做法）
+
+| 场景 | 框 |
+|---|---|
+| 队友请求 | `[Message from <name>]` |
+| 队友回复 | `[Reply from <name> · for the work <asker> asked you for]` |
+| 群聊消息 | `[Group chat "<room>" · <note>]` |
+| 群聊里对某条帖的回复 | `[Group chat "<room>" · replies to your post]` |
+| 重启恢复 | `[… · DeepSeek Harness restarted while you were working]` |
+| 被停止 | `[Stopped by <name>]` |
+| 任务单（托管形态） | `[OpenMausBot assignment <id> from <requester>]`（+ 转义正文） |
+| 通知类（不期望回复） | `[Notice from <name>]` |
+
+## 3. 三种投递形态
+
+| 形态 | 语义 | 谁在用 |
+|---|---|---|
+| **点对点** | 一个 from → 一个 to；带 assignment 时可追踪 | 三家都有 |
+| **房间多播** | 一条消息 → 房间成员各自投影；**不能变成 N 条点对点**（会重复计费、会互相触发） | ds-bot 群聊、OMB room |
+| **广播** | 明确声明 `@all`；必须限权（DSH 只有 Lead、ds-bot 只 admin、OMB 无限制是缺陷） | 谨慎使用 |
+
+**多播的实现原则**：事件日志里记一条 `room.message`，每个成员在装配上下文时投影出"自己版本的框"；不要复制成多条点对点消息（否则去重、审计、计费全部错乱）。
+
+## 4. 投递保证（必须写清楚，否则会误用）
+
+| 保证 | DSH | OMB | ds-bot | **我们** |
+|---|---|---|---|---|
+| 返回成功 = 已入 inbox | ✅ | ✅ | ✅ | ✅ |
+| 返回成功 = 已被处理 | ❌ | ❌ | ❌ | ❌ |
+| 顺序保证 | ❌ | 按 assignment | inbox 顺序 | **同一 sender→target 保序** |
+| 重试 | ❌ | effect 队列 | 有限 | ✅ effect 队列 |
+| 去重 | ❌ | rework 标记 | 未读合并 | ✅ `idem` 键 |
+| 跨重启 | ❌ | ✅ | ✅ resume | ✅ 事件日志 |
+| 跨进程/跨机 | ❌ | ❌ | ❌ | ✅ 控制面转发 |
+
+**定这条**：`send` 返回 `{ messageId }` 只表示**已接受**；要"确认执行"必须用 assignment 的 `report`。
+
+## 5. 投递模式：now 还是 queue
+
+| 模式 | 目标正在跑回合 | 目标空闲 |
+|---|---|---|
+| `now`（steer） | 在**最近步进边界**注入，不打断当前工具 | 启动一个回合 |
+| `queue` | 等当前回合结束，作为**下一个任务** | 加入队首 |
+
+选择规则：
+- 纠错、补充信息、警告 → `now`
+- 全新任务、与当前工作无关 → `queue`
+- `reply_to: user`（让对方直接回答用户）→ **强制 queue 且不回执给发送者**
+
+## 6. 回执与提问
+
+```
+A ──request──► B
+A ◄──reply──── B                 （reply: resume，唤醒 A）
+A ◄──question─ B                 （needs_input，A 或人回答后 B 继续）
+A ◄──report─── B                 （带 evidence 的完成报告）
+```
+
+| reply 策略 | 语义 |
+|---|---|
+| `resume` | 结果回来时唤醒发起者（默认） |
+| `poll` | 结果放发起者 inbox，由它自己 `status()` 取 |
+| `none` | 通知类，不回执（`post_to_room` / 广播） |
+
+**提问必须停车（park）而不是挂起进程**：停车后状态是 `needs_input`，人答复前不回退、不超时重试。
+
+## 7. 防环：三道闸
+
+| 闸 | 做法 | 出处 |
+|---|---|---|
+| **上游检查** | 不能发给"正在等我结果"的 Bot（否则绕圈） | ds-bot `upstreamOf` |
+| **单通道** | 同一回合里不能既在群里 @ 又私信同一 Bot | ds-bot 拒绝逻辑 |
+| **去重** | 相同 brief 到相同 target 只有 `rework=true` 才重开 | OMB `sameRequest` |
+| **闭环检测** | 120s 内 A→B→C→A 三人环 → 房间禁发 5 分钟 | OMB `room-post-budget` |
+| **预算** | 每 root 64 请求 / 96 执行 | OMB |
+
+## 8. 大小与附件
+
+| 项 | 值 | 理由 |
+|---|---|---|
+| 单条消息上限 | **64 KB**（对齐 DSH） | 超过就别用消息，用文件 + 引用 |
+| 内联正文 | 超过阈值转附件，只留 **1000** 字头部 | ds-bot `LONG_HEAD` |
+| brief（任务单） | **12,000** 字符 | OMB |
+| 引用片段 | 400 / 详情 200 | OMB |
+
+**原则**：消息是"指针"，不是"搬运工"。大内容写文件，消息里给路径 + 摘要 + 怎么读。
+
+## 9. 消息引用的状态（不能只靠消息）
+
+```jsonc
+{
+  "id": "msg_01H...",
+  "idem": "assign_7f:msg:1",
+  "from": { "kind": "bot", "id": "selector" },
+  "to":   { "kind": "bot", "id": "risk", "thread": "r_quant/risk" },
+  "role": "request",              // request|reply|report|room|question|resume|stopped|notice
+  "assignment": "assign_7f",      // 有它才有状态机；没有它就是纯消息
+  "mode": "work",                 // work|consult|notify
+  "reply": "resume",              // resume|poll|none
+  "when": "now",                  // now|queue
+  "audience": "room",             // team|room|member
+  "framing": "message",           // 对应 §2 的框
+  "body": "…",
+  "attachments": [],
+  "deadline": "2026-11-03T12:05:00Z"
+}
+```
+
+**规则**：`assignment` 为空的消息**永远不产生回执义务**；有 assignment 的消息由状态机负责 `delivered/read/settled`。
+
+## 10. 与上下文的关系（回指第一性原理）
+
+- 每条消息最终都变成**目标窗口里的一段文本**：框 + 正文 + 附件引用
+- 因此消息设计 = 上下文预算设计：64KB 不是性能参数，是"这条消息最多占多少个 token"
+- 群聊多播尤其危险：一条消息进 N 个窗口；N 个 Bot 各自读一遍 → 成本 ×N
+- 结论：**能进房间的不私信，能引用的不内联，能摘要的不全文**
+
+## 11. 失败与恢复
+
+| 场景 | 处理 |
+|---|---|
+| 目标不存在/已删 | 立即报错，并把等待中的发起者标记 `interrupted` |
+| 目标崩溃/容器重启 | 消息留在事件日志；恢复后标记 `resume`，标题说明"重启了" |
+| 发送方崩溃 | assignment 保持 `running`，超时后按 stalled 处理 |
+| 投递失败 | 进 effect 队列重试（5s→300s，3 次），耗尽后标 `delivery_failed` |
+| 重复发送 | `idem` 命中返回原 messageId，不产生第二条 |
+| 消息过大 | 拒绝并提示改用附件 |
+
+## 12. 我们不做的事
+
+1. **不做独立的消息总线**（不引入 Kafka/Redis 流）——事件日志就是总线
+2. **不做"发送成功=执行成功"**——那需要 assignment
+3. **不允许跨房间广播**（`@all` 只在房间内）
+4. **不把协调记录写进对话**（DSH 的 log-only 做法；需要模型知道的才摘要注入）
+5. **不做无上限的 Bot 互发**——预算是硬约束
+
+## 13. 待决问题
+
+1. **单 sender→target 保序**要不要做？DSH 明确不保序，我们如果要保序得在控制面加序列号。
+2. **群聊多播的投影**：每个成员看到同一份 `room.message` 事件，还是给每人一条带各自框的 `inbox.item`？（影响去重与审计）
+3. **消息过期的默认值**：`deadline` 不给时，多久算过期（OMB 是 5 分钟到 12 小时不等）？
+4. **`reply_to: user` 的语义**要不要保留（Bot 直接把结果说给用户，不给发起 Bot）？
