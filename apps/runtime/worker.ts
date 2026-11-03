@@ -1,6 +1,8 @@
 // 房间 worker：把「有人在房间里说话」变成「Bot 也在房间里说话」。
 //
-// v0 是一个**占位回复者**：它订阅控制面的内部接口，看到人的消息就回一句固定模板。
+// v0 是一个**占位回复者**：它订阅控制面的内部接口，看到人的消息就回一句。
+// 配了 ROOST_SANDBOX=openshell 时，「想」这一步会在真实沙箱里执行（见 sandbox-runner.ts），
+// 回复里带上沙箱内的 uid/hostname 作为证据；没配时退回固定模板。
 // 它存在的意义是先把事件流、SSE、渲染三段打通；之后把 reply() 换成 DSH 回合即可，
 // 接口不变：读消息 → 想 → 以 Bot 身份说话。
 //
@@ -155,13 +157,41 @@ export async function startRoomWorker(options: RoomWorkerOptions): Promise<RoomW
 }
 
 // CLI：`ROOST_API=http://127.0.0.1:8787 ROOST_RUNTIME_TOKEN=… node worker.ts`
-if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
+async function main(): Promise<void> {
   const apiBase = process.env.ROOST_API ?? 'http://127.0.0.1:8787'
   const runtimeToken = process.env.ROOST_RUNTIME_TOKEN
   if (runtimeToken === undefined || runtimeToken === '') {
     console.error('[room-worker] ROOST_RUNTIME_TOKEN is required')
     process.exit(2)
   }
+
+  const sandboxMode = process.env.ROOST_SANDBOX
+  if (sandboxMode === 'openshell' || sandboxMode === 'passthrough') {
+    const { startSandboxRunner, SANDBOX_PROBE } = await import('./sandbox-runner.ts')
+    const runner = await startSandboxRunner({
+      backend: sandboxMode,
+      ...(process.env.ROOST_SANDBOX_IMAGE === undefined ? {} : { image: process.env.ROOST_SANDBOX_IMAGE }),
+      ...(process.env.ROOST_SANDBOX_NAME === undefined ? {} : { name: process.env.ROOST_SANDBOX_NAME })
+    })
+    const handle = await startRoomWorker({
+      apiBase,
+      runtimeToken,
+      reply: async ({ text }) => {
+        const clipped = text.length > 120 ? `${text.slice(0, 120)}…` : text
+        const probe = await runner.run(SANDBOX_PROBE)
+        const evidence = probe.stdout.trim().split('\n').slice(0, 2).join(' · ')
+        return `收到：「${clipped}」。这条回复由 ${runner.backend} 沙箱内的同名进程生成（${evidence}）；DSH 回合还没接进来。`
+      }
+    })
+    const shutdown = () => {
+      handle.stop()
+      void runner.stop().finally(() => process.exit(0))
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
+    return
+  }
+
   const handle = await startRoomWorker({ apiBase, runtimeToken })
   const shutdown = () => {
     handle.stop()
@@ -169,4 +199,8 @@ if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].sp
   }
   process.once('SIGINT', shutdown)
   process.once('SIGTERM', shutdown)
+}
+
+if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
+  await main()
 }

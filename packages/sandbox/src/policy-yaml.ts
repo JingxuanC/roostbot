@@ -39,12 +39,11 @@ export function renderPolicyYaml(policy: SandboxPolicy): string {
   lines.push('', 'process:')
   lines.push(`  run_as_user: "${policy.process.user}"`)
   lines.push(`  run_as_group: "${policy.process.user}"`)
-  lines.push('', 'network_policies:')
-
+  // 没有规则时整个段落省略：schema 里它是可选的，空映射虽然合法但没必要冒险。
   if (policy.network.allow.length === 0) {
-    lines.push('  {}')
     return lines.join('\n') + '\n'
   }
+  lines.push('', 'network_policies:')
 
   policy.network.allow.forEach((rule, index) => {
     const { host, port } = splitHost(rule.host)
