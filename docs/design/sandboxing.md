@@ -1,0 +1,185 @@
+# 沙箱：决策在外，执行在内
+
+> 状态：方案（2026-11-03）。配套：`workspace.md`（租户边界）、`scheduling.md`（睡/醒）、`loop-and-context.md`（上下文）。
+
+## 1. 一句话
+
+**DSH 决定做什么，沙箱只负责执行；凭据永远不进沙箱，只在出站时由可信侧注入。**
+
+这句话是 Google Agent Compute Engine 与 NVIDIA OpenShell 的公共结论，也是它们与我们的现有设计唯一必须对齐的地方。
+
+## 2. 两层边界（不要合成一层）
+
+```
+┌───────────────────────────────────────────────┐
+│ workspace 容器（租户边界，一个 workspace 一个）  │
+│                                               │
+│   DSH 进程（决策：模型、工具选择、回合）          │
+│        │ 工具执行请求                          │
+│        ▼                                      │
+│   ┌───────────────────────────────────────┐   │
+│   │ 回合沙箱（执行边界，一个回合一个）        │   │
+│   │  · 非 root、无 capabilities            │   │
+│   │  · 文件系统：只读镜像 + 可写工作目录     │   │
+│   │  · 网络：默认拒绝，唯一出站=监督者       │   │
+│   │  · 凭据：不可见                         │   │
+│   └───────────────────────────────────────┘   │
+│        │ 唯一出站通道（互认证）                 │
+│        ▼                                      │
+│   监督者（可信侧）：查策略、注入凭据、开连接、审计  │
+└───────────────────────────────────────────────┘
+```
+
+| 层 | 回答什么问题 | 谁实现 |
+|---|---|---|
+| workspace 容器 | 这是哪个租户？能碰哪些卷？ | 控制面 + 容器运行时 |
+| 回合沙箱 | 这条命令能读什么、连哪里？ | 沙箱层（OpenShell / gVisor / microVM） |
+| 监督者 | 这次出站允许吗？要加哪个凭据？ | 沙箱层的可信侧 |
+
+**为什么不能合并**：ACE 的 microVM 与 OpenShell 的 supervisor 都证明，把“判断”和“执行”放在同一侧，凭据就必然暴露给 agent。
+
+## 3. 选型：用 OpenShell，不自己写 bubblewrap
+
+| 方案 | 隔离强度 | 自托管 | 现状 | 结论 |
+|---|---|---|---|---|
+| **NVIDIA OpenShell** | 内核 LSM（Landlock）+ seccomp 网络中介 + 策略证明 | ✅ Apache-2.0，Docker/K8s/microVM | 0.1.x 稳定发布节奏 | **采用** |
+| gVisor | 用户态内核 | ✅ | 成熟 | 备选（GKE Agent Substrate 也在用） |
+| Cloud Hypervisor microVM | 硬件 | ✅ | 需要宿主支持 | v2 用于高密度 |
+| bubblewrap | 命名空间 | ✅ | 我们原先的想法 | **不够**：无网络中介、无凭据注入、无策略证明 |
+
+OpenShell 已经解决了最难的四件事：
+
+1. **按二进制限网**（不是按 IP）：`network_policies` 允许某二进制访问某目的地、且只允许某类请求（读 API 不允许写）
+2. **凭据注入**：provider 存 key，supervisor 只在策略允许的端点加进请求
+3. **失败关闭**：supervisor 连接断 → 冻结 agent，给短重连窗口，否则停
+4. **策略证明**：Prover 在变更生效前用形式化验证算“会多放行什么”，有风险就阻塞自动批准
+
+## 4. 凭据流（三类，路径不同）
+
+| 凭据 | 存哪 | 谁注入 | 沙箱可见吗 |
+|---|---|---|---|
+| **模型 provider token**（BYO） | 控制面密钥服务 | 模型代理（DSH 侧 127.0.0.1 代理） | ❌ 只看到 `base_url` |
+| **数据源 token**（Tushare/Wind/astock） | 控制面密钥服务 | 沙箱 supervisor 按策略注入到指定端点 | ❌ |
+| **连接器 OAuth token**（Gmail/GitHub） | 连接器网关 | 网关按 `allowedConnections` 注入 | ❌ |
+
+规则：**任何凭据都不写进 workspace 卷、不进 `$DSH_HOME`、不进提示词、不进日志。**
+
+## 5. 策略模型（四段）
+
+```yaml
+version: 1
+filesystem:
+  read:  ["/usr", "/etc", "/opt/app"]          # 只读镜像
+  write: ["/workspace", "/tmp"]                # 本回合可写
+process:
+  user: 1000
+  caps: []                                     # 无 capabilities
+network:
+  default: deny
+  allow:
+    - binary: /opt/app/engine/report_engine
+      host: api.qnaigc.com
+      methods: [GET, POST]
+      credentials: model-gateway               # 由 supervisor 注入
+    - binary: /usr/bin/git
+      host: github.com
+      methods: [GET]
+    - binary: /opt/app/dsh
+      host: 127.0.0.1:4100                     # 仅本机模型代理
+```
+
+**三条硬规则**
+
+1. **默认拒绝**：没有列出的文件、目的、程序一律拒绝
+2. **按程序授权**：不是“这个沙箱能连 github”，而是“`git` 能连 github 的只读接口”
+3. **变更需证明**：新增“带凭据的新主机”“新 HTTP 方法”“云元数据端点（169.254.169.254）”必须人工批准
+
+## 6. 失败语义
+
+| 场景 | 行为 |
+|---|---|
+| 策略不允许 | 拒绝执行，把原因交回模型（不是静默失败） |
+| supervisor 断连 | **冻结** agent，短窗口重连；超时则停回合 |
+| 沙箱崩溃 | 回合标 `failed(sandbox_crashed)`；工作目录保留 |
+| 快照恢复失败 | 回退到冷启动；连续失败 3 次告警 |
+| 网络被拒后重试 | 同一回合内不允许“换条路绕过”，除非策略显式允许 |
+
+## 7. 本地/桌面端的诚实边界
+
+| 环境 | 能承诺什么 |
+|---|---|
+| 云上 workspace 容器 | 完整：OpenShell 沙箱、凭据注入、默认拒绝 |
+| 本机（macOS/Windows 桌面） | **只能承诺“用户自己的信任域”**：没有 Landlock/seccomp，不宣称沙箱隔离 |
+| 本地能力节点 | 同上；所有调用带 grant 与审计，但**不是安全边界** |
+
+这条必须写进产品文案：**不要把“本地执行”说成“安全沙箱”**。
+
+## 8. 与调度/工作区的接口
+
+| 接口 | 用途 |
+|---|---|
+| `POST /internal/sandbox/prepare` | 为一个回合创建/恢复沙箱（带 policy id、volume 挂载） |
+| `POST /internal/sandbox/exec` | 执行命令/工具（stdin/stdout 流式、超时、信号） |
+| `GET /internal/sandbox/policy` | 当前生效策略（供面板展示与审计） |
+| `POST /internal/sandbox/policy/propose` | 提议策略变更 → 走证明与人工批准 |
+| `POST /internal/sandbox/snapshot` | 打快照（供 `scheduling.md` 的暂停-恢复） |
+
+## 9. 数据模型
+
+```sql
+CREATE TABLE sandbox_policies (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  version      INTEGER NOT NULL,
+  yaml         TEXT NOT NULL,
+  proof        TEXT,                -- 形式化验证结果（若跑过）
+  approved_by  TEXT,
+  approved_at  INTEGER,
+  created_at   INTEGER NOT NULL,
+  UNIQUE (workspace_id, version)
+);
+
+CREATE TABLE sandbox_runs (
+  id           TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL,       -- 对应 scheduling.md 的 Run
+  policy_id    TEXT NOT NULL,
+  state        TEXT NOT NULL,       -- creating|ready|frozen|stopped|failed
+  snapshot_id  TEXT,
+  started_at   INTEGER,
+  finished_at  INTEGER,
+  exit_code    INTEGER
+);
+
+CREATE TABLE sandbox_denials (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id    TEXT NOT NULL,
+  at        INTEGER NOT NULL,
+  kind      TEXT NOT NULL,          -- file|network|process|credential
+  detail    TEXT
+);
+```
+
+## 10. 分期
+
+### v0（本机，不上沙箱）
+- 本地执行就是本地执行；**如实标注**，不承诺隔离
+- 记录所有工具调用的“文件/网络”意图，为将来策略提供数据
+
+### v1（云上，回合沙箱）
+- 每个回合一个 OpenShell 沙箱；文件/网络四段策略；凭据经 supervisor 注入
+- **验收**：
+  1. 沙箱内 `curl` 任意外网 → 被拒，且拒绝原因进上下文
+  2. 只有 `report_engine` 二进制能访问模型网关，`git` 只能只读 GitHub
+  3. 沙箱内找不到任何真实 token（`env`、文件、`/proc/*/environ` 都没有）
+
+### v2（密度与证明）
+- 快照恢复（对齐 ACE 的 <500ms 目标）、microVM 备选
+- 策略变更的 Prover 与人工批准流
+- **验收**：新增“带凭据的新主机”必须经证明 + 人批；未批的变更不生效
+
+## 11. 待决问题
+
+1. **OpenShell 是每 workspace 一个 gateway，还是全平台共享一个？**（共享省资源，但凭据隔离要靠 token 作用域）
+2. **沙箱粒度**：每回合一个（最干净）还是每会话一个（省创建成本）？
+3. **GPU/本地模型**：需要在沙箱里暴露 GPU 时，策略怎么写？
+4. **策略证明的覆盖**：只证明网络，还是连文件系统一起证明？
