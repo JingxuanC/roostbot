@@ -1,0 +1,22 @@
+# 设计文档索引
+
+按依赖顺序读；每份都能独立看，但合起来才是完整机制。
+
+| # | 文档 | 回答什么 |
+|---|---|---|
+| 1 | [loop-and-context.md](loop-and-context.md) | **第一性原理**：Bot 是一个 loop，模型无状态，所有能力都是上下文工程 |
+| 2 | [events.md](events.md) | 事实源：一份追加式日志 + 多投影（统一之前三套事件定义） |
+| 3 | [auth.md](auth.md) | 谁能进来：配对码、设备会话、runtime/节点 token、角色 |
+| 4 | [memory.md](memory.md) | 判断怎么留下来：claim + evidence + falsifier，按作用域注入 |
+| 5 | [budget.md](budget.md) | 钱怎么扣：预留-结算、五个计量单位、超限行为 |
+| 6 | [messaging.md](messaging.md) | Bot 之间怎么说话：注入 + 发送者框，不是消息总线 |
+| 7 | [agent-collaboration.md](agent-collaboration.md) | 协作怎么追踪：Assignment 状态机与证据 |
+| 8 | [scheduling.md](scheduling.md) | 什么时候开始干活：Activation、cron、checks、睡/醒握手 |
+| 9 | [workspace.md](workspace.md) | 状态住在哪：一个家、多个窗口、能力节点 |
+| 10 | [sandboxing.md](sandboxing.md) | 执行怎么隔离：决策在外、执行在内、凭据不入箱 |
+
+## 读法建议
+
+- **想知道"一句话从来到走"**：1 → 2 → 6 → 7
+- **想部署**：9 → 8 → 10 → 3
+- **想控成本**：1 → 4 → 5

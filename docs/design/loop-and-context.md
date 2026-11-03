@@ -114,3 +114,27 @@
 1. **上下文装配放在哪一层**：home runtime 内（DSH 插件）还是控制面？——倾向 runtime 内，控制面不碰 token。
 2. **manifest 是否随回合持久化**：存卷（可回溯）还是只上报指标（省空间）？
 3. **技能正文按需加载的触发**：模型主动读取（多一次往返），还是装配时按名字猜（零往返但可能多注入）？
+
+## 11. manifest → 上下文：字段到分段的映射
+
+`bot-manifest`（`request`）是声明，`ContextManifest`（`packages/context`）是每轮实际发生了什么。两者必须能对上，否则"声明了但没注入"这类问题无法发现。
+
+| manifest 字段 | 变成哪个分段 | 何时 | 说明 |
+|---|---|---|---|
+| `instructions`（人设） | `persona` | 每轮常驻 | 稳定段，进缓存 |
+| `description` / `role` | `system`（摘要一行） | 每轮常驻 | 让模型知道自己在团队里的位置 |
+| `skills[]` | `skills-index`（常驻）+ `skill-body`（按需） | 索引常驻；正文按触发 | 索引只放名字 + 一句话 |
+| `tools.allow` / `tools.deny` | `tool-schema` | 每轮 | **未列出 = 不进窗口**（deny-invisible） |
+| `tools` 的执行结果 | `tool-result` | 调用后 | 超过阈值写附件，只留摘要 + 引用 |
+| `memory.enabled/scopes` | `memory` | 回合开始 | 受 `budget.md` 的注入上限约束 |
+| `model.tier` / `providerRef` | 不影响分段，影响**模型与成本** | — | 记录在 `turn.started` |
+| `approvals[]` | 不进窗口 | 触发时 | 是门，不是上下文 |
+| `schedule.checks` | 不进窗口 | 决定是否起 run | 纯代码，成本 0 |
+
+**三条校验规则**（可写成测试）：
+
+1. `tools.allow` 里每个工具，如果本轮没进 `tool-schema`，`ContextManifest` 必须记一条 `dropped(reason='cap'|'budget')`
+2. `skills[]` 的名字必须在 `skills-index` 里出现一次（哪怕正文没注入）
+3. `instructions` 为空时，`persona` 段必须存在且标注 `fallback`（防止"以为有人设"）
+
+**为什么写这一节**：`loop-and-context.md` 说"技能是打包的上下文、工具是 schema + 结果"，`bot-manifest` 是这些打包的声明；两者之间缺一张映射表，就会在实现时各自解释。
