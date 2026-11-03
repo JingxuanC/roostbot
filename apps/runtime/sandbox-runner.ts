@@ -28,7 +28,12 @@ export interface SandboxRunner {
 export function sandboxPolicy() {
   return renderPolicyYaml({
     version: 1,
-    filesystem: { read: ['/usr', '/etc', '/bin', '/opt'], write: ['/tmp', '/workspace'] },
+    // 没有网络规则时，schema 的 baseline 路径不会自动加上，所以动态链接器与 /lib
+    // 必须自己列：漏了 /lib 会导致 /bin/sh 启动即 Permission denied（实测 os error 13）。
+    filesystem: {
+      read: ['/usr', '/etc', '/bin', '/sbin', '/lib', '/lib64', '/opt', '/dev/null'],
+      write: ['/tmp', '/workspace']
+    },
     process: { user: 1000, caps: [] },
     network: { default: 'deny', allow: [] }
   })
