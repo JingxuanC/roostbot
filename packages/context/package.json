@@ -1,0 +1,11 @@
+{
+  "name": "@roost/context",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Per-turn context manifest: what entered the model's window, how much it cost, and what was dropped.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}
