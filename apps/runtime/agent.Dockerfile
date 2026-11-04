@@ -19,6 +19,9 @@ COPY apps/runtime/dsh-web.mjs /opt/roost/dsh-web.mjs
 # 审批桥：启动 dsh 前由 room-agent 装进 $DSH_HOME/profiles/<profile>（TODO 5.4.3）。
 COPY apps/runtime/profile-plugins.mjs /opt/roost/profile-plugins.mjs
 COPY packages/approvals-bridge /opt/roost/packages/approvals-bridge
+# 沙箱以 uid 1000 运行：COPY 会保留宿主机源文件权限（本地可能是 600），
+# 不放开读权限时 room-agent 连 dsh-web.mjs 都 import 不了。
+RUN chmod -R a+rX /opt/roost
 
 # 会话日志跟工作区走（停止/启动沙箱不丢），见 docs/spikes/0002。
 ENV DSH_HOME=/workspace/.dsh

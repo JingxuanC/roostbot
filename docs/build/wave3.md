@@ -41,8 +41,15 @@ sh scripts/verify.sh
 
 | 块 | 状态 | 证据 |
 |---|---|---|
-| A 审批桥 | 🟡 包完成 | 55 测试；`approval/request` waterfall 可用（16 条源码事实）；还差沙箱 profile 插件分发与端到端 |
+| A 审批桥 | ✅ 端到端 | plugin + profile-plugins（25 测试）；远端真实 pending→批准→`approval-e2e` 命令输出 |
 | B 短 runtime token | ✅ 接线 | 迁移 0021、store verifier、`runtime-auth.ts` 覆盖 14 个内部入口 + workspace 过滤；沙箱启动签发/吊销 |
 | C 缩略图/EXIF | ✅ 接线 | `attachments-thumbnails.ts` + 两个上传端点，14 测试；真实 sips 640x480→320x240、EXIF −78B |
 | D tokens/组件 | ✅ | 56 tokens / 47 CSS 变量、3 组件，241 web/tokens 测试 |
 | 全量 | ✅ | 1208 tests + verify.sh |
+
+## 最终验收（2026-11-04）
+
+- 4.5.3 远端真实模型：2 Bot 同房间回复；stop/start 后追问仍答 4271（PASS）。
+- 4.5.4 浏览器：`scripts/browser-e2e.mjs`（CDP headless）配对 → UI 建 2 Bot → UI 建群 → 两轮 2 Bot 回复；截图 `docs/assets/m5-browser-e2e.png`（PASS）。
+- 5.4.3 审批：沙箱 profile 插件 → 控制面 `tool.call` pending → 批准 → 同轮 `approval-e2e`（PASS）。
+- TODO 152/152；全量 1234 tests。

@@ -133,7 +133,8 @@ function ensureProfile(profileDir, profile) {
 function buildRuntimeEntry(target) {
   const entry = join(target, 'src', 'plugin.ts')
   if (!existsSync(entry)) throw new Error(`plugin package ${target} has no src/plugin.ts entry`)
-  stripTsTree(target)
+  // 只擦 src：测试/工具里的 TS 不参与宿主加载，没必要也不该在安装时被求值。
+  stripTsTree(join(target, 'src'))
 
   const manifestPath = join(target, 'package.json')
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
@@ -228,7 +229,7 @@ export function upsertPatch(source, entry) {
  */
 function findUnmanagedEntry(lines, entry) {
   for (let index = 0; index < lines.length; index += 1) {
-    const match = /^(\s*)-\s+id:\s*["']?([^"'\s#]+)["']?\s*(?:#.*)?$/.exec(lines[index])
+    const match = new RegExp(`^(\\s*)-\\s+id:\\s*["']?(${escapeRegExp(entry.patchId)})["']?\\s*(?:#.*)?$`).exec(lines[index])
     if (match === null || match[2] !== entry.patchId) continue
     const keyIndent = match[1].length + 2
     let end = index + 1
@@ -291,6 +292,10 @@ function updateConfigLine(lines, entry, config) {
   }
   const insertAt = entry.end
   return [...lines.slice(0, insertAt), `${' '.repeat(entry.keyIndent)}config: ${json}`, ...lines.slice(insertAt)]
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function indentOf(line) {

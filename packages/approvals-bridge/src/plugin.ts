@@ -97,6 +97,7 @@ export function apply(
     ...(deps.now === undefined ? {} : { now: deps.now }),
     request: async (request) => {
       const callId = callIds.get(request.id)
+      callIds.delete(request.id)
       const response = await doFetch(`${settings.apiBase}/api/internal/approvals`, {
         method: 'POST',
         headers: {
@@ -140,6 +141,7 @@ export function apply(
         pollIntervalMs,
         maxPollIntervalMs,
         granted,
+        now: deps.now ?? (() => Date.now()),
       }),
   })
 
@@ -169,7 +171,8 @@ interface WaitOptions {
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>
   pollIntervalMs: number
   maxPollIntervalMs: number
-  granted: ReadonlySet<string>
+  granted: Set<string>
+  now: () => number
 }
 
 /**
@@ -182,7 +185,10 @@ interface WaitOptions {
  */
 async function waitForDecision(input: WaitInput, options: WaitOptions): Promise<BridgeDecision | null> {
   const { request, approvalId, signal, deadlineAt } = input
-  if (options.granted.has(request.id)) return 'approved'
+  if (options.granted.has(request.id)) {
+    options.granted.delete(request.id)
+    return 'approved'
+  }
   if (approvalId === null) return null
 
   let delay = options.pollIntervalMs
@@ -207,7 +213,7 @@ async function waitForDecision(input: WaitInput, options: WaitOptions): Promise<
     // pending 之外只可能是控制面加了新词：宁可继续等/超时，也不放行。
     if (status !== 'pending') return null
 
-    if (deadlineAt !== null && Date.now() >= deadlineAt) return null
+    if (deadlineAt !== null && options.now() >= deadlineAt) return null
     try {
       await options.sleep(delay, signal)
     } catch {

@@ -7,7 +7,7 @@
 - **记忆**：由 [causal-memory](../causal-memory) 提供，不是聊天记录，是可检索、可追溯的判断
 - **模型**：用户自带 token（BYO），平台不转售推理
 
-状态：**功能面基本完成（149/152）**：账号/插件市场/面板、预算代理与计量、连接器、观测、调度睡醒、短 runtime token、缩略图、设计 tokens 都已接线。剩 DSH 工具审批插件分发、远端真实模型与浏览器最终验收；进度见 [TODO.md](TODO.md)。
+状态：**TODO 152/152 完成**：M4 产品闭环、M5 平台能力、M6 商业化与工程债全部落地，含远端真实模型 + 沙箱重启记忆（4.5.3）、浏览器全流程（4.5.4）与 DSH 工具审批端到端（5.4.3）。验收证据见 [docs/build/wave3.md](docs/build/wave3.md)、[docs/assets/m5-browser-e2e.png](docs/assets/m5-browser-e2e.png)。
 
 ## 文档
 

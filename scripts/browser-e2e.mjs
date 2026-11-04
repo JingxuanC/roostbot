@@ -637,9 +637,19 @@ async function run() {
 
     // ---- 启动 Chrome -----------------------------------------------------
     const chromeInfo = await step('a0. 启动 Chrome + CDP', 'headless / CDP', async () => {
-      const launched = await launchChrome(options)
-      log(`  Chrome ${launched.version.Browser || ''} · DevTools ${launched.endpoint}`)
-      return launched
+      let lastError = null
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const launched = await launchChrome(options)
+          log(`  Chrome ${launched.version.Browser || ''} · DevTools ${launched.endpoint}`)
+          return launched
+        } catch (error) {
+          lastError = error
+          log(`  启动失败（第 ${attempt + 1} 次）：${short(error instanceof Error ? error.message : String(error), 200)}`)
+          await sleep(300)
+        }
+      }
+      throw lastError || new Error('Chrome 启动失败')
     })
     chrome = chromeInfo
     cdp = new CDP(chromeInfo.wsUrl)
