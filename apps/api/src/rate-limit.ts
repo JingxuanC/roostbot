@@ -5,7 +5,9 @@
 
 export const RATE_LIMITS = {
   messages: { capacity: 30, windowMs: 60_000 },
-  pluginInstall: { capacity: 10, windowMs: 3_600_000 }
+  pluginInstall: { capacity: 10, windowMs: 3_600_000 },
+  /** 模型代理：每分钟 60 次/workspace。 */
+  modelProxy: { capacity: 60, windowMs: 60_000 }
 } as const
 
 export type RateLimitKind = keyof typeof RATE_LIMITS
