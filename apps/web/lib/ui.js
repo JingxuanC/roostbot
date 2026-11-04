@@ -244,12 +244,15 @@ function errorText(error) {
 
 export function errorState(options = {}) {
   const error = options.error
-  const missing = Boolean(error && error.status === 404)
-  const title = options.title || (missing ? '接口还没有上线' : '载入失败')
+  const code = error && typeof error.code === 'string' ? error.code : ''
+  const missingRoute =
+    Boolean(error && error.status === 404) && (code === 'not_found' || code === 'http_404')
+  const missingResource = Boolean(error && error.status === 404) && !missingRoute
+  const title = options.title || (missingRoute ? '接口还没有上线' : missingResource ? '找不到这个对象' : '载入失败')
   const wrap = el('div', { class: 'state state-error', role: 'alert' })
   wrap.append(el('h2', { class: 'state-title', text: title }))
   wrap.append(el('p', { class: 'state-body', text: options.message || errorText(error) }))
-  if (missing) {
+  if (missingRoute) {
     wrap.append(
       el('p', {
         class: 'state-detail muted',

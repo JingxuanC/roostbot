@@ -1269,10 +1269,16 @@ function renderWorking() {
     working.hidden = true
     return
   }
+  const liveSpeaking = LIVE.room && typeof LIVE.room.speaking === 'string' ? LIVE.room.speaking : ''
   const slot = speakingSlot(round)
   if (slot) {
     working.hidden = false
     text.textContent = `${botLabel(slot.botId)} 正在说`
+    return
+  }
+  if (liveSpeaking !== '') {
+    working.hidden = false
+    text.textContent = `${botLabel(liveSpeaking)} 正在说`
     return
   }
   if (round.state === 'running') {
@@ -1293,6 +1299,8 @@ function appendLiveEvent(message) {
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
   const event = toEvent(message, LIVE.roomId)
   ROOM.events.push(event)
+  const placeholder = list.querySelector('.messages-empty')
+  if (placeholder) placeholder.remove()
   list.append(renderEvent(event))
   if (nearBottom) list.scrollTop = list.scrollHeight
 }
@@ -1687,6 +1695,8 @@ function appendUserMessage(text) {
   const list = $('#messages')
   if (!list) return
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
+  const placeholder = list.querySelector('.messages-empty')
+  if (placeholder) placeholder.remove()
   list.append(renderUserMessage(text))
   if (nearBottom) list.scrollTop = list.scrollHeight
 }
