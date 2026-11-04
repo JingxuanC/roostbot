@@ -61,6 +61,8 @@ export interface SandboxBackend {
   resume?(handle: SandboxHandle): Promise<void>
   /** 从停止状态启动（OpenShell `sandbox start`），工作区保留。可选能力。 */
   start?(handle: SandboxHandle): Promise<void>
+  /** 删除沙箱（OpenShell `sandbox delete`）；Error 状态下重建前必须删。可选能力。 */
+  destroy?(handle: SandboxHandle): Promise<void>
   /** 列出当前沙箱（名字与阶段），供复用判断。可选能力。 */
   list?(): Promise<Array<{ name: string; phase: string }>>
 }

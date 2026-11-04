@@ -41,13 +41,23 @@ export async function ensureUserSandbox(options) {
   const handle = { id: name, name, backend: backend.id }
 
   const listed = await backend.list?.()
-  const exists = Array.isArray(listed) ? listed.some((entry) => entry.name === name) : false
+  const entry = Array.isArray(listed) ? listed.find((item) => item.name === name) : undefined
 
-  if (exists) {
-    // stopped → start；ready → 忽略错误（已启动）。
-    await backend.start?.(handle).catch(() => undefined)
-    options.log?.(`sandbox ${name} reused (started)`)
-    return { handle, created: false }
+  if (entry !== undefined) {
+    if (entry.phase === 'Error') {
+      // 坏状态不能复用：删掉重建，否则一直停在 Error。
+      await backend.destroy?.(handle).catch(() => undefined)
+      options.log?.(`sandbox ${name} was Error, recreated`)
+    } else if (entry.phase === 'Stopped') {
+      await backend.start?.(handle).catch(() => undefined)
+      options.log?.(`sandbox ${name} reused (started)`)
+      return { handle, created: false }
+    } else {
+      // Ready / Suspending / Stopping 等：按已存在处理，start 失败就忽略。
+      await backend.start?.(handle).catch(() => undefined)
+      options.log?.(`sandbox ${name} reused (${entry.phase})`)
+      return { handle, created: false }
+    }
   }
 
   const created = await backend.create({
