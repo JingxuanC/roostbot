@@ -37,6 +37,7 @@ import { mountPanelsPage } from './views/panels.js'
 import { mountPluginDetailPage } from './views/plugin-detail.js'
 import { mountPluginsPage } from './views/plugins.js'
 import { mountSettingsPage } from './views/settings.js'
+import { mountUsagePage } from './views/usage.js'
 
 // ---------------------------------------------------------------------------
 // 一、固定样例
@@ -1189,6 +1190,10 @@ async function renderRoute() {
     case 'settings':
       setTitle('设置')
       await mountSettingsPage(main, ctx)
+      break
+    case 'usage':
+      setTitle('用量')
+      await mountUsagePage(main, ctx)
       break
     case 'roomNew':
       setTitle('新建房间')

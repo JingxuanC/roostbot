@@ -12,6 +12,7 @@
 //   #/plugins/:slug     插件详情
 //   #/panels            插件面板（DSH Web iframe 容器）
 //   #/settings          设置（长期授权）
+//   #/usage             用量（token / 工具调用 / 成本 / 配额）
 //   兼容旧地址 #room    房间预览（假数据）
 
 const ROUTES = new Set([
@@ -27,6 +28,7 @@ const ROUTES = new Set([
   'panels',
   'approvals',
   'settings',
+  'usage',
   'notFound',
 ])
 
@@ -61,6 +63,8 @@ export function routeMatch(hash) {
   if (path === '/approvals') return route('approvals')
   // 设置（长期授权）：固定一层，不带参数。
   if (path === '/settings') return route('settings')
+  // 用量：固定一层，不带参数。
+  if (path === '/usage') return route('usage')
   // 插件面板（ADR 0004）：固定一层，不带参数；面板路径由页面内清单决定。
   if (path === '/panels') return route('panels')
 

@@ -3090,3 +3090,144 @@ button {
 .panel-failure .state {
   margin: 0;
 }
+
+/* ==================================================================
+ * 用量页：时间范围、汇总卡片、配额进度与明细表
+ * 沿用现有 token；不引入新视觉语言。
+ * ================================================================== */
+
+.usage-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.usage-card {
+  padding: var(--space-md) var(--space-lg);
+  background: var(--roost-surface);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+}
+
+.usage-card-label,
+.usage-card-detail {
+  margin: 0;
+  font-size: 12px;
+}
+
+.usage-card-value {
+  margin: var(--space-xs) 0;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.usage-table th,
+.usage-table td {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--roost-border);
+  text-align: left;
+}
+
+.usage-table th {
+  color: var(--roost-muted);
+  font-weight: 600;
+}
+
+.usage-table th.num,
+.usage-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.quota-card {
+  padding: var(--space-md) var(--space-lg);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+}
+
+.quota-card.is-warn {
+  border-color: color-mix(in srgb, var(--roost-warn) 45%, var(--roost-border));
+}
+
+.quota-card.is-danger {
+  border-color: color-mix(in srgb, var(--roost-danger) 45%, var(--roost-border));
+}
+
+.quota-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.quota-metric {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.quota-used {
+  margin: var(--space-sm) 0 var(--space-xs);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-meta {
+  margin: var(--space-xs) 0 0;
+  font-size: 12px;
+}
+
+.usage-bar {
+  height: 6px;
+  margin-top: var(--space-xs);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--roost-ink) 10%, transparent);
+  border-radius: 999px;
+}
+
+.usage-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--roost-accent);
+  border-radius: inherit;
+  transition: width var(--motion-base) var(--easing);
+}
+
+.usage-bar.is-warn .usage-bar-fill {
+  background: var(--roost-warn);
+}
+
+.usage-bar.is-danger .usage-bar-fill {
+  background: var(--roost-danger);
+}
+
+@media (max-width: 640px) {
+  .usage-cards {
+    grid-template-columns: 1fr;
+  }
+}
