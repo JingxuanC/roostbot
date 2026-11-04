@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Bot 小鸟头像（2026-11-05）
+
+- 新增程序化小鸟头像 `apps/web/lib/bird.js`：6 物种 × 8 配色 × 倾斜/眉形/标记，同一个 bot id 永远同一只鸟；20px 可辨。
+- Bot 列表、房间消息、详情页、头像编辑器预览全部换用小鸟；人类账号仍用 glyph。
+- 状态：working 呼吸环、paused 去饱和闭眼、alert 眉眼上扬；尊重 `prefers-reduced-motion`。
+- 设计说明 `docs/design/bot-avatar.md`；预览图 `docs/assets/bot-birds.png`、应用内 `docs/assets/bot-birds-app.png`；7 条测试。
+
 ## [0.1.0] - 2026-11-04
 
 首个可运行版本：**M4 产品闭环 + M5 平台能力主体**。零依赖，Node ≥ 22.18 直接跑

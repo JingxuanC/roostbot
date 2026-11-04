@@ -534,6 +534,21 @@ button {
   display: block;
 }
 
+/* Bot 小鸟：只有「正在工作」才允许一道很慢的呼吸环（bot-identity.md §7）。 */
+.avatar .bird-ring {
+  transform-origin: 48px 48px;
+  animation: bird-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes bird-breathe {
+  0%, 100% { opacity: 0.18; transform: scale(0.97); }
+  50% { opacity: 0.42; transform: scale(1.02); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar .bird-ring { animation: none; opacity: 0.3; }
+}
+
 .dot {
   width: 6px;
   height: 6px;

@@ -2489,3 +2489,4 @@ if (typeof document !== 'undefined') {
 
 // 供离线自检用；lib/glyph.js 是唯一实现，这里保持旧导出名不变。
 export { hashId, specFor, glyphSvg, GLYPH_FAMILIES, PALETTES }
+export { birdSvg, birdSpecFor, BIRD_SPECIES, BIRD_PALETTES, BIRD_STATES } from './lib/bird.js'
