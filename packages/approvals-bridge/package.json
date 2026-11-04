@@ -1,0 +1,11 @@
+{
+  "name": "@roost/approvals-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bridge between a DSH tool-approval ask and the control-plane approvals API: pure pending/approved/rejected/timeout state machine, fail-closed, zero dependencies.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}
