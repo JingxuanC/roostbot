@@ -86,7 +86,14 @@ export function createApiClient(options = {}) {
       }
     }
 
-    const declaredFailure = payload !== null && typeof payload === 'object' && payload.ok === false
+    // 只有带 error 信封的 {ok:false} 才是失败；预检这类接口会用 HTTP 200 +
+    // {ok:false,problems,...} 表示「检查没通过」，那是业务结果，不是请求失败。
+    const declaredFailure =
+      payload !== null &&
+      typeof payload === 'object' &&
+      payload.ok === false &&
+      payload.error !== undefined &&
+      payload.error !== null
     if (!response.ok || declaredFailure) {
       const bodyError = payload && typeof payload === 'object' ? payload.error : null
       const code =

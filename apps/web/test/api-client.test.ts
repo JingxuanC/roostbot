@@ -75,6 +75,18 @@ test('{ok:false,error} 抛 ApiError，中文 message 原样保留', async () => 
   })
 })
 
+test('HTTP 200 + {ok:false, problems} 是业务结果，不抛错（插件预检）', async () => {
+  const payload = {
+    ok: false,
+    tier: 'D',
+    problems: [{ code: 'tier-unsupported', detail: '仅桌面' }],
+  }
+  const api = createApiClient({
+    fetchImpl: recordingFetch(fakeResponse(200, JSON.stringify(payload)), []),
+  })
+  assert.deepEqual(await api.post('/api/marketplace/plugins/desktop-tool/preflight', {}), payload)
+})
+
 test('HTTP 500 + 非 JSON 也能给出可读错误', async () => {
   const api = createApiClient({ fetchImpl: recordingFetch(fakeResponse(500, 'boom', 'Internal Server Error'), []) })
   await assert.rejects(api.get('/api/bots'), (error) => {

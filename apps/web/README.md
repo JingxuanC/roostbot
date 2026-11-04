@@ -14,6 +14,8 @@ M4 在原来的配对页 / 房间页之上加了 Bot 与建群/房间设置，�
 | `#/bots/new` | 新建 Bot |
 | `#/bots/:id` | Bot 设置（身份 / 人设 / 技能 / 工具 / 审批 / 记忆 / 模型 / 状态 / 删除） |
 | `#/approvals` | 需要你：待审批的 Bot 建群请求（批准 / 拒绝） |
+| `#/plugins` | 插件：市场 / 已安装（页内切换） |
+| `#/plugins/:slug` | 插件详情：权限、README、预检、安装 |
 | `#/rooms/new` | 建群（名称可空、公告、成员多选、host、谁回答三选一） |
 | `#/rooms/:id` | 房间 |
 | `#/rooms/:id/settings` | 房间设置（名称 / 公告 / 成员增删 / 谁回答 / 删除） |
@@ -52,6 +54,7 @@ API 地址：默认同源；`?api=http://127.0.0.1:8787` 可指定（受 CORS �
 | 房间来源 | **真**：`room.createdByKind === 'bot'` 时在房间列表/房间头显示「由 Bot 创建」，title 带 `createdBy` |
 | Bot 头像上传 | **真**：读成 dataURL、预览/移除，随 `PATCH /api/bots/:id` 发 `avatar.image`；前端卡 256KB，服务端 `avatar.image` 上限 512k 字符、JSON body 上限 1MiB |
 | 需要你 / 审批 | **真**：`#/approvals` 读 `GET /api/approvals`，批准/拒绝走 `POST /api/approvals/:id`；接口 404/405/501/503 时显示「审批接口未就绪」 |
+| 插件市场 / 已安装 | **真（目录层）**：`#/plugins` 读 `GET /api/marketplace/plugins`，详情/预检/安装与启停/升级/卸载走对应 API；接口 404/405/501/503 时显示「插件接口未就绪」。**本批没有沙箱 sync**：安装/升级后 state 停在 `installing`，界面只写「等待沙箱同步」，不写「已安装成功」 |
 | 房间删除 | 按钮会真的发 `DELETE /api/rooms/:id`；契约与当前控制面都没有这个接口，所以会如实显示 404 错误 |
 | 「需要你」抽屉（房间页） | **样例**。预览房间时显示；连上控制面后隐藏；真实审批在 `#/approvals` |
 | 预览房间（`#room`）的消息、工具调用、审批卡 | **固定样例**，发送只追加本地气泡 |
@@ -79,10 +82,15 @@ lib/api-client.js   createApiClient / ApiError；错误读 {ok:false,error:{code
 lib/routing.js      routeMatch(hash)
 lib/rooms.js        whoAnswersLabel(room)、roomOriginLabel、slot 状态、轮次条目
 lib/mentions.js     parseMentionQuery / insertMention / memberNameConflict
+lib/plugins.js      tier 文案、权限摘要、install state、更新可用、安全资源 URL
 lib/ui.js           表单与加载/空/错误态组件
 views/bots.js       Bot 列表、新建、设置（含头像上传）
 views/rooms.js      建群、房间设置
 views/approvals.js  需要你：待审批列表 + 批准/拒绝
+views/plugins.js    插件页：市场 tab（搜索/分类/级别）+ 已安装 tab 切换
+views/plugin-detail.js  插件详情：权限、README、预检、二次确认安装
+views/plugin-installed.js 已安装列表：启停/升级/卸载
+views/plugin-kit.js 插件图标/截图/权限清单与降级态
 test/*.test.ts      node:test（DOM 无关）
 ```
 
@@ -105,7 +113,9 @@ node --check apps/web/app.js
 - `memberNameConflict`：完全同名（去空白/忽略大小写）才算冲突，前缀不算。
 - `readAvatarFile` / `isAvatarDataUrl`：类型白名单、256KB 边界、假 File/真 File、坏值不改 state。
 - `approvalSummary` / `approvalActions` / `canDecide`：建群摘要、成员去重、终态不可操作、decision 值与 API 对齐。
-- `createApiClient`：Bearer、JSON 正文、`{ok:false}` 中文 message、HTTP 500、网络失败、204。
+- `pluginTierBadgeText` / `pluginPermissionItems` / `pluginInstallStateLabel` / `pluginUpdateAvailable`：
+  插件 tier、权限摘要、install state 与更新判断；`safeAssetUrl` 只放行 http(s) 与同源路径。
+- `createApiClient`：Bearer、JSON 正文、`{ok:false,error}` 中文 message、HTTP 500、网络失败、204。
 
 ## 与契约/设计的偏差（有意的）
 
@@ -142,7 +152,8 @@ node --check apps/web/app.js
 
 - 审批里的提问（question）交互与房间内联审批；真实审批目前只覆盖 Bot 建群。
 - 轮次引擎完整接入后的历史轮次、停止当前成员、重发去重提示。
-- Bot 头像生成 / 裁剪；上传已做（大小与类型在 `lib/avatar.js` 校验）；定时 routine；插件/用量/连接器页。
+- Bot 头像生成 / 裁剪；上传已做（大小与类型在 `lib/avatar.js` 校验）；定时 routine；用量/连接器页。
+- 插件沙箱 sync / 重启 / 冒烟 / 回滚（M5-5.1 第二批）；本批只写安装记录，state 停在 `installing`。
 - Bot 软删恢复（需要迁移与服务端接口）；当前删除是硬删。
 - 客户端状态持久化（刷新只保留 hash，不保留 token 与草稿）。
 - 移动端底部 Tab（当前用页面顶部导航 + 房间头入口）。

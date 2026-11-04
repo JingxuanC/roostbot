@@ -33,6 +33,8 @@ import * as ui from './lib/ui.js'
 import { mountApprovalsPage } from './views/approvals.js'
 import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
 import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
+import { mountPluginDetailPage } from './views/plugin-detail.js'
+import { mountPluginsPage } from './views/plugins.js'
 import { mountSettingsPage } from './views/settings.js'
 
 // ---------------------------------------------------------------------------
@@ -1117,7 +1119,7 @@ function renderNotFound(main) {
     ui.pageHeader('找不到这个页面'),
     ui.emptyState({
       title: '地址不对',
-      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/rooms/new、#/rooms/:id/settings。`,
+      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/plugins、#/rooms/new、#/rooms/:id/settings。`,
       action: ui.linkButton('回首页', '#/', { variant: 'primary' }),
       secondary: ui.linkButton('Bot 列表', '#/bots', { variant: 'ghost' }),
     })
@@ -1168,6 +1170,14 @@ async function renderRoute() {
     case 'approvals':
       setTitle('需要你')
       await mountApprovalsPage(main, ctx)
+      break
+    case 'plugins':
+      setTitle('插件')
+      await mountPluginsPage(main, ctx)
+      break
+    case 'plugin':
+      setTitle('插件详情')
+      await mountPluginDetailPage(main, ctx, route.params.slug)
       break
     case 'settings':
       setTitle('设置')

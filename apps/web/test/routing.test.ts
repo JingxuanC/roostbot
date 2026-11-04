@@ -50,6 +50,22 @@ test('设置页有独立路由，且不带参数', () => {
   assert.equal(routeMatch('#/settings/x').name, 'notFound')
 })
 
+test('插件市场：列表与详情都带独立路由', () => {
+  const list = routeMatch('#/plugins')
+  assert.equal(list.name, 'plugins')
+  assert.deepEqual(list.params, {})
+  assert.equal(routeMatch('#/plugins/').name, 'plugins')
+  assert.equal(routeMatch('plugins').name, 'plugins')
+
+  const detail = routeMatch('#/plugins/market-center')
+  assert.equal(detail.name, 'plugin')
+  assert.equal(detail.params.slug, 'market-center')
+  assert.equal(routeMatch('#/plugins/%E8%A1%8C%E6%83%85').params.slug, '行情')
+
+  assert.equal(routeMatch('#/plugins/a/b').name, 'notFound')
+  assert.equal(routeMatch('#/plugins/%E4').name, 'notFound')
+})
+
 test('尾斜杠与不带 # 的写法都能解析', () => {
   assert.equal(routeMatch('#/bots/').name, 'bots')
   assert.equal(routeMatch('bots/bot_1').name, 'bot')
@@ -70,6 +86,8 @@ test('未知路径与坏编码都是 notFound，不抛异常', () => {
 test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('bots'), true)
   assert.equal(isKnownRoute('approvals'), true)
+  assert.equal(isKnownRoute('plugins'), true)
+  assert.equal(isKnownRoute('plugin'), true)
   assert.equal(isKnownRoute('settings'), true)
   assert.equal(isKnownRoute('nope'), false)
 })

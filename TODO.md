@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：72 / 152 · 进行中：2
+- 完成：73 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -92,7 +92,7 @@
 - [ ] 5.1.3 安装流程：预检 → 权限披露 → 批准 → 写锁 → 沙箱 sync → 冒烟 → 回滚
 - [x] 5.1.4 profile lock 生成与校验（manifest + pnpm-lock + patch 行 + integrity；`packages/plugins/profile-lock.ts`）
 - [ ] 5.1.5 已安装 API（更新/停用/卸载/回滚）
-- [ ] 5.1.6 市场页 + 详情页 + 已安装页
+- [x] 5.1.6 市场页 + 详情页 + 已安装页（安装后如实显示等待沙箱同步）
 - [ ] 5.1.7 Bot 工具列表标"来源插件"
 - [ ] 5.1.8 白名单 + 签名/来源校验
 - [ ] 5.1.9 运行时禁 postinstall（`--ignore-scripts`）
@@ -258,3 +258,4 @@
 - 2026-11-04 M6 产物前端（前端 agent）：消息附件按 kind 渲染（图片懒加载/灯箱、PDF 卡片、HTML/SVG 沙箱 iframe、CSV 表格预览、代码块折叠、未知类型下载），`getBlob` 带 Bearer 读取，blob URL 统一登记与回收；86 前端测试 + 无头 Chrome 六种附件实测通过。6.2.5 的 PDF 首页缩略图仍未做。
 - 2026-11-04 M5 成员与角色（后端 agent）：成员列表/改角色/移除 API，admin 不能授予 owner，最后一个 owner 不能降级/移除，`auth.role.changed` / `auth.member.removed` 事件；Bot 写操作、房间设置、viewer 发消息补齐 403 校验。482 测试全绿（后端 349）。邀请待账号体系。
 - 2026-11-04 M5 DSH Web 反代（后端 agent）：`/w/:ws/dsh/*` 前缀剥离反代、`POST /w/:ws/dsh/session` 换 15 分钟 HttpOnly cookie（iframe 不带 Authorization）、hop-by-hop/内部头/上游 Set-Cookie 过滤、CSP 去 frame-ancestors、HTML 站内绝对路径重写、`GET /api/workspaces/:id/panels` 从已启用插件 manifest 汇总面板。498 测试全绿（后端 355）。WebSocket 与面板注册冒烟留后续。
+- 2026-11-04 M5 插件市场前端（前端 agent）：市场/详情/已安装三屏，搜索与分类/tier 过滤、权限清单、预检、二次确认安装、启停/升级/卸载；安装后只显示「等待沙箱同步」；修复 HTTP 200 + `{ok:false,problems}` 被误判为请求失败。517 测试全绿（前端 97）。5.1.7 工具来源映射待后端。

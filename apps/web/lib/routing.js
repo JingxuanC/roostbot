@@ -8,6 +8,8 @@
 //   #/bots              Bot 列表（+ 新建入口）
 //   #/bots/new          新建 Bot
 //   #/bots/:id          Bot 设置
+//   #/plugins           插件页（默认「市场」，页内可切「已安装」）
+//   #/plugins/:slug     插件详情
 //   #/settings          设置（长期授权）
 //   兼容旧地址 #room    房间预览（假数据）
 
@@ -19,6 +21,8 @@ const ROUTES = new Set([
   'bots',
   'botNew',
   'bot',
+  'plugins',
+  'plugin',
   'approvals',
   'settings',
   'notFound',
@@ -71,6 +75,13 @@ export function routeMatch(hash) {
     if (decoded.length === 1) return route('bots')
     if (decoded.length === 2 && decoded[1] === 'new') return route('botNew')
     if (decoded.length === 2) return route('bot', { id: decoded[1] })
+    return route('notFound')
+  }
+
+  // 插件市场（plugin-marketplace.md §7）：列表固定一层，详情带 slug。
+  if (decoded[0] === 'plugins') {
+    if (decoded.length === 1) return route('plugins')
+    if (decoded.length === 2) return route('plugin', { slug: decoded[1] })
     return route('notFound')
   }
 
