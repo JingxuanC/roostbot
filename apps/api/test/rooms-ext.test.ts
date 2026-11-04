@@ -66,8 +66,13 @@ async function pairWithWorkspace(
   base: string,
   accountId = 'acc_rooms_ext',
   name = '量化研究组',
+  existingToken?: string,
 ): Promise<{ token: string; workspaceId: string }> {
-  const codeRes = await call(base, 'POST', '/api/pairing/code', { body: { accountId } })
+  // 同账号第二次签发时必须带已有会话，bootstrap 例外只对首配开放。
+  const codeRes = await call(base, 'POST', '/api/pairing/code', {
+    body: { accountId },
+    ...(existingToken === undefined ? {} : { token: existingToken }),
+  })
   const { code } = (await codeRes.json()) as { code: string }
   const claimRes = await call(base, 'POST', '/api/pairing/claim', { body: { code } })
   const token = ((await claimRes.json()) as { sessionToken: string }).sessionToken
@@ -155,7 +160,7 @@ test('建群：≥2 个 Bot、自动命名、host/responder/notice/purpose；GET
 test('建群：1 个 Bot / 空成员数组 / 跨 workspace 成员都被拒', async () => {
   await withApi(async ({ base }) => {
     const first = await pairWithWorkspace(base)
-    const second = await pairWithWorkspace(base, 'acc_rooms_ext', '另一个组')
+    const second = await pairWithWorkspace(base, 'acc_rooms_ext', '另一个组', first.token)
     const a = await createBot(base, first.token, first.workspaceId, 'A')
     const b = await createBot(base, first.token, first.workspaceId, 'B')
     const foreign = await createBot(base, second.token, second.workspaceId, '外组')

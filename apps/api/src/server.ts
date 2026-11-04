@@ -13,6 +13,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { handleListDevices, handleRevokeDevice } from './auth-devices-routes.ts'
 import { PairingCodeCollisionError } from './port.ts'
 import type {
   DevicePlatform,
@@ -51,6 +52,7 @@ import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime
 import type { RuntimeManager } from './workspace-runtime.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
+import { hasActiveSessionsForAccount, touchSession } from '../../../packages/store/src/sessions.ts'
 
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 8787
@@ -60,8 +62,12 @@ export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
 /** 同一个码错 5 次即锁 10 分钟（auth.md §3）。 */
 export const PAIRING_MAX_ATTEMPTS = 5
 export const PAIRING_LOCK_MS = 10 * 60 * 1000
-/** 设备会话 30 天（auth.md §2）。续期（<15 天 → 180 天）尚未实现，见报告。 */
+/** 设备会话 30 天（auth.md §2）。 */
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/** 剩余有效期不足 15 天时续期（auth.md §2/§4）。 */
+export const SESSION_RENEW_WINDOW_MS = 15 * 24 * 60 * 60 * 1000
+/** 会话自配对起的硬上限 180 天；到顶后必须重新配对。 */
+export const SESSION_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000
 /** 防御性上限：任何 JSON body 超过 1MiB 直接 413（头像 dataURL ≤256KB 图片，base64 后约 350k 字符）。 */
 export const MAX_BODY_BYTES = 1024 * 1024
 /** 全局失败窗口：60 秒内 20 次配对失败即 429（每个 server 实例独立计数）。 */
@@ -71,6 +77,8 @@ export const CLAIM_FAILURE_MAX = 20
 const CODE_GENERATION_ATTEMPTS = 8
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
+/** 配对码 bootstrap 例外只认这三个远端地址（IPv4-mapped 形式单独列出）。 */
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
 const SESSION_TOKEN_PATTERN = /^[0-9a-f]{64}$/
 const PLATFORMS: readonly DevicePlatform[] = ['web', 'desktop', 'ios', 'android', 'cli']
 
@@ -101,13 +109,19 @@ export interface StartedServer {
 export interface AuthContext {
   store: StorePort
   now: () => number
+  /** 原始 SQLite store；会话续期、设备列表/吊销与事件写入需要它，memory 模式下为 undefined。 */
+  rawStore?: Store
 }
 
 interface HandlerContext extends AuthContext {
   startedAt: number
   /** 全局失败时间戳，用于 429；放在闭包里，每个 server 一份。 */
   claimFailures: number[]
-  rawStore?: Store
+  /**
+   * 本进程签发过会话的账号（memory 模式下无法查 sessions 表，用它做 bootstrap 判定）。
+   * SQLite 模式以 hasActiveSessionsForAccount 为准，这个集合只是同进程的补充。
+   */
+  sessionAccounts: Set<string>
   runtimeManager?: RuntimeManager
 }
 
@@ -157,6 +171,9 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_json: '请求体不是合法的 JSON',
   payload_too_large: '请求体过大',
   forbidden_origin: '写操作只允许来自本机回环页面',
+  pairing_forbidden: '没有权限签发配对码',
+  devices_unavailable: '设备管理需要 SQLite 存储',
+  device_not_found: '找不到这个设备会话',
   pairing_code_invalid: '配对码不对',
   pairing_code_used: '这个配对码已经用过了',
   pairing_code_expired: '配对码已过期，请重新生成',
@@ -310,7 +327,27 @@ export async function authenticate(ctx: AuthContext, req: IncomingMessage): Prom
   if (session.revokedAt !== undefined) return authFailure('session revoked', 'session_revoked')
   if (session.expiresAt <= ctx.now()) return authFailure('session expired; pair this device again', 'session_expired')
 
-  return { ok: true, session }
+  return { ok: true, session: renewSession(ctx, session) }
+}
+
+/**
+ * 会话续期（auth.md §2/§4）：剩余有效期 <15 天时续到 createdAt+180 天。
+ * 不到续期窗口、已到 180 天封顶、或当前 expiresAt 已经更晚时都不动（touchSession 只增不减）。
+ * memory 模式没有 sessions 查询接口，保持固定 30 天。
+ */
+function renewSession(ctx: AuthContext, session: SessionRecord): SessionRecord {
+  const store = ctx.rawStore
+  if (store === undefined) return session
+  const now = ctx.now()
+  if (now < session.expiresAt - SESSION_RENEW_WINDOW_MS) return session
+  const cap = session.createdAt + SESSION_MAX_AGE_MS
+  if (now >= cap || cap <= session.expiresAt) return session
+  const touched = touchSession(store, session.id, { lastSeenAt: now, expiresAt: cap })
+  return {
+    ...session,
+    expiresAt: touched.expiresAt,
+    lastSeenAt: touched.lastSeenAt ?? session.lastSeenAt
+  }
 }
 
 function workspaceJson(workspace: WorkspaceRecord): Record<string, unknown> {
@@ -351,6 +388,75 @@ function recordFailure(ctx: HandlerContext, now: number): void {
   pruneFailures(ctx, now)
 }
 
+type PairingAuthorizeResult =
+  | { ok: true }
+  | { ok: false; status: number; code: string; message: string; wwwAuthenticate?: boolean }
+
+/**
+ * 配对码签发鉴权（auth.md §5）：
+ * - 带 Bearer：body.accountId 必须等于会话账号；workspaceId 必须是该账号 owner/admin 的 workspace；
+ * - 不带 Bearer：只允许回环地址 + bootstrap（该账号尚无任何有效会话）——首配例外。
+ * 带了但无效的 Bearer 直接 401，不回退到 bootstrap，避免“坏 token 也能签发”。
+ */
+async function authorizePairingCode(
+  ctx: HandlerContext,
+  req: IncomingMessage,
+  accountId: string,
+  workspaceId: string | undefined
+): Promise<PairingAuthorizeResult> {
+  const header = req.headers.authorization
+  if (typeof header === 'string') {
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      return { ok: false, status: auth.status, code: auth.code, message: auth.message, wwwAuthenticate: true }
+    }
+    if (auth.session.accountId !== accountId) {
+      return {
+        ok: false,
+        status: 403,
+        code: 'pairing_forbidden',
+        message: 'body.accountId must match the authenticated session account'
+      }
+    }
+    if (workspaceId !== undefined) {
+      const workspaces = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
+      const workspace = workspaces.find((entry) => entry.id === workspaceId)
+      if (workspace === undefined || (workspace.role !== 'owner' && workspace.role !== 'admin')) {
+        return {
+          ok: false,
+          status: 403,
+          code: 'pairing_forbidden',
+          message: `workspace ${workspaceId} requires owner/admin role`
+        }
+      }
+    }
+    return { ok: true }
+  }
+
+  if (!LOOPBACK_ADDRESSES.has(req.socket.remoteAddress ?? '')) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'pairing_forbidden',
+      message: 'bootstrap pairing codes are only issued to loopback requests'
+    }
+  }
+  // SQLite 以库里的有效会话为准；memory 没有查询接口，只能看本进程签发过哪些账号。
+  const hasSession =
+    ctx.rawStore === undefined
+      ? ctx.sessionAccounts.has(accountId)
+      : hasActiveSessionsForAccount(ctx.rawStore, accountId, ctx.now())
+  if (hasSession) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'pairing_forbidden',
+      message: 'account already has an active session; issue the code from an authenticated device'
+    }
+  }
+  return { ok: true }
+}
+
 async function handleCreatePairingCode(
   ctx: HandlerContext,
   req: IncomingMessage,
@@ -380,6 +486,18 @@ async function handleCreatePairingCode(
       return
     }
     workspaceId = parsed
+  }
+
+  const authorized = await authorizePairingCode(ctx, req, accountId, workspaceId)
+  if (!authorized.ok) {
+    sendError(
+      res,
+      authorized.status,
+      authorized.code,
+      authorized.message,
+      authorized.wwwAuthenticate === true ? { 'www-authenticate': 'Bearer' } : {}
+    )
+    return
   }
 
   const issuedAt = ctx.now()
@@ -503,6 +621,8 @@ async function appendDeviceSession(
       deviceLabel,
       platform
     })
+    // 记住这个账号已经有会话：memory 模式靠它区分 bootstrap 与后续签发。
+    ctx.sessionAccounts.add(pairing.accountId)
     sendJson(res, 200, {
       deviceId: session.deviceId,
       sessionToken,
@@ -1008,6 +1128,30 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (path === '/api/devices') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListDevices(ctx, req, res)
+    return
+  }
+
+  if (/^\/api\/devices\/[^/]+$/.test(path)) {
+    if (method !== 'DELETE') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/devices\/([^/]+)$/.exec(path)
+    const sessionId = match === null ? null : safeDecode(match[1]!)
+    if (sessionId === null || sessionId === '') {
+      sendError(res, 404, 'not_found', 'malformed device path')
+      return
+    }
+    await handleRevokeDevice(ctx, req, res, sessionId)
+    return
+  }
+
   if (path === '/api/workspaces') {
     if (method === 'GET') {
       await handleListWorkspaces(ctx, req, res)
@@ -1359,6 +1503,7 @@ export function createServer(options: ServerOptions): http.Server {
     now,
     startedAt: now(),
     claimFailures: [],
+    sessionAccounts: new Set<string>(),
     streamPollMs: options.streamPollMs ?? 700,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),

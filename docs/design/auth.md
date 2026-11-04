@@ -177,9 +177,12 @@ CREATE TABLE invites (
 | `POST /api/pairing/codes`（§10） | `POST /api/pairing/code` | 单数，与 claim 配对 |
 | token 放 HttpOnly cookie（§7） | `Authorization: Bearer` + 前端内存变量 | v0 还没有同源 HTTPS 部署；cookie 与 CSRF 一起留给 v1 |
 | `claim` 响应只写 `{deviceId, sessionToken}` | 多返回 `expiresAt` | 前端要显示"这设备何时需要重新配对" |
-| 签到配对码需要 owner/admin 会话（§5） | **v0 不鉴权**（只收 `accountId`） | 还没有账号登录；上公网前必须收紧 |
+| 签发配对码需要 owner/admin 会话（§5） | 已实现：带 Bearer 时 `body.accountId` 必须等于会话账号，`workspaceId` 必须是该账号 owner/admin 的 workspace；无会话时只走 bootstrap 例外 | 首配没有会话可带；v0 以账号维度判定「目标 workspace 无有效会话」（sessions 表没有 workspace_id） |
+| `GET /api/devices` / `DELETE /api/devices/:id`（§10） | 已实现，但需要 SQLite 存储；`:id` 是会话 id（不是 device id），吊销写 `auth.session.revoked` | memory port 没有会话查询与事件投影，两个接口返回 503 `devices_unavailable` |
 | 「5 次/分钟锁 10 分钟」 | 失败累计 5 次即锁；成功清零；已用码再试也计一次失败 | 表里没有时间窗列；码本身 5 分钟过期 |
-| 会话续期「<15 天续到 180 天」 | v0 固定 30 天，过期重配 | 续期需要 `touchSession` + 策略，留 v1 |
+| 会话续期「<15 天续到 180 天」 | 已实现（SQLite 模式）：有效请求在剩余 <15 天且未到 180 天封顶时续到 `createdAt+180d`，只增不减；memory 模式仍固定 30 天 | memory port 没有会话查询接口 |
 | 中文话术 | `{code, message}`：message 中文 + 括号里保留技术细节 | 前端可以按 `code` 分支，人能看懂 |
+
+**bootstrap 例外（配对码签发）**：仅当请求来自回环地址（`127.0.0.1` / `::1` / `::ffff:127.0.0.1`）且该账号尚无任何有效会话时，才允许不带 Bearer 签发配对码；账号一旦有会话，再签发必须带该账号的有效 Bearer。带了但无效的 Bearer 不会回退到 bootstrap。
 
 同源伺服：`apps/api` 同时伺服 `apps/web`（`GET /`），所以不需要 CORS；`?api=` 跨源在 v0 仍会被浏览器拦。

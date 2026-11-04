@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：13 / 149 · 进行中：36
+- 完成：53 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -112,10 +112,10 @@
 - [ ] 5.3.1 注册/登录（邮箱+密码 Argon2id）/邮箱验证码
 - [ ] 5.3.2 OIDC（Google/GitHub）
 - [ ] 5.3.3 邀请与角色（owner/admin/member/viewer）
-- [ ] 5.3.4 设备列表/吊销
-- [ ] 5.3.5 会话续期（<15 天续到 180 天封顶）
+- [x] 5.3.4 设备列表/吊销
+- [x] 5.3.5 会话续期（<15 天续到 180 天封顶）
 - [ ] 5.3.6 token 改 HttpOnly cookie + CSRF 双提交
-- [ ] 5.3.7 签发配对码需要 owner/admin（现在不鉴权）
+- [x] 5.3.7 签发配对码需要 owner/admin（bootstrap 例外见 auth.md）
 
 ### 5.4 审批（"需要你"）
 
@@ -249,3 +249,4 @@
 - 2026-11-04 第二批子 agent：kickoff（DM+群）、Bot 建群+审批+配额、头像上传/审批页、轮次 stop/宽限/late rounds 全部落地并接线；367 测试 + 4 个 HTTP 冒烟（kickoff/审批/stop）全过。
 - 2026-11-04 M4 主体完成：bots CRUD/建群/成员/responder/轮次引擎/内部接口/workspace start-local/前端四视图；本地 HTTP 冒烟 14/14、本地双 Bot E2E 通过。剩：kickoff、软删、Bot 建群、profile sync、远端真实模型双 Bot、浏览器全流程（见 4.1.5/4.1.6/4.2.14/4.2.15/4.3.4/4.5.1/4.5.3/4.5.4）。
 - 2026-11-04 M4 收尾第三批子 agent：Bot 软删 7 天 + 恢复（迁移 0010、`POST /api/bots/:id/restore`、删即退房 + `bot.removed_from_room`）、`bot.created/updated/deleted/restored` 事件、房间日志裁剪投影（保留 60 / 首看 12 / `before` 翻页 / 增量不受影响）、`DELETE /api/rooms/:id`、profile sync 拉锁（`POST /api/internal/plugins/sync`，ensure 前硬门 + `ROOST_PROFILE_LOCK_ID` 注入沙箱）。392 测试全绿 + 真实 HTTP 冒烟（锁拉取/软删/恢复/删房间）通过。M4 仅剩远端真实模型验收（4.5.3/4.5.4）。
+- 2026-11-04 M5 认证加固（后端 agent）：配对码签发鉴权（Bearer owner/admin + 回环 bootstrap 例外）、会话续期（<15 天续到 createdAt+180d）、`GET /api/devices` + `DELETE /api/devices/:id`（写 `auth.session.revoked`）；399 测试全绿。

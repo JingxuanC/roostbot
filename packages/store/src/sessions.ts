@@ -103,6 +103,83 @@ export function touchSession(
   return { ...current, lastSeenAt, expiresAt }
 }
 
+/**
+ * 设备列表投影（auth.md §10 GET /api/devices）：会话 + 设备上的展示字段。
+ * sessions 没有 account_id，账号经 devices 关联；label/platform 也来自 devices。
+ */
+export interface SessionWithDevice {
+  id: string
+  accountId: string
+  deviceId: string
+  label: string | null
+  platform: string | null
+  createdAt: number
+  lastSeenAt: number | null
+  expiresAt: number
+  revokedAt: number | null
+  /** 设备级吊销时间；会话吊销与设备吊销任一发生都算不可用。 */
+  deviceRevokedAt: number | null
+}
+
+interface SessionDeviceRow {
+  id: string
+  account_id: string
+  device_id: string
+  label: string | null
+  platform: string | null
+  created_at: number | bigint
+  last_seen_at: number | bigint | null
+  expires_at: number | bigint
+  revoked_at: number | bigint | null
+  device_revoked_at: number | bigint | null
+}
+
+/** 该账号的全部设备会话（含已吊销），按签发时间升序。 */
+export function listSessionsByAccount(store: Store, accountId: string): SessionWithDevice[] {
+  assertOpen(store)
+  const id = asNonEmptyString(accountId, 'accountId', 'INVALID_SESSION')
+  const rows = store.db
+    .prepare(
+      `SELECT s.id, d.account_id, s.device_id, d.label, d.platform, s.created_at,
+              s.last_seen_at, s.expires_at, s.revoked_at, d.revoked_at AS device_revoked_at
+         FROM sessions s JOIN devices d ON d.id = s.device_id
+        WHERE d.account_id = ?
+        ORDER BY s.created_at ASC, s.id ASC`,
+    )
+    .all(id) as SessionDeviceRow[]
+  return rows.map((row) => ({
+    id: row.id,
+    accountId: row.account_id,
+    deviceId: row.device_id,
+    label: row.label,
+    platform: row.platform,
+    createdAt: toNumber(row.created_at),
+    lastSeenAt: row.last_seen_at === null ? null : toNumber(row.last_seen_at),
+    expiresAt: toNumber(row.expires_at),
+    revokedAt: row.revoked_at === null ? null : toNumber(row.revoked_at),
+    deviceRevokedAt: row.device_revoked_at === null ? null : toNumber(row.device_revoked_at),
+  }))
+}
+
+/**
+ * 账号是否还有有效会话（未吊销、未过期、设备未吊销）。
+ * 用于配对码 bootstrap 判定：账号一旦有会话，就不能再无凭据签发新码。
+ */
+export function hasActiveSessionsForAccount(store: Store, accountId: string, now: number): boolean {
+  assertOpen(store)
+  const id = asNonEmptyString(accountId, 'accountId', 'INVALID_SESSION')
+  const at = asInteger(now, 'now', 0, 'INVALID_SESSION')
+  const row = store.db
+    .prepare(
+      `SELECT 1 AS ok
+         FROM sessions s JOIN devices d ON d.id = s.device_id
+        WHERE d.account_id = ? AND s.revoked_at IS NULL AND d.revoked_at IS NULL AND s.expires_at > ?
+        LIMIT 1`,
+    )
+    .get(id, at)
+  return row !== undefined && row !== null
+}
+
 export function revokeSession(store: Store, id: string, at: number): Session {
   assertOpen(store)
   const sessionId = asNonEmptyString(id, 'session.id', 'INVALID_SESSION')

@@ -146,7 +146,11 @@ test('claim 可带 deviceLabel / platform，非法 platform → 400', async (t) 
   })
   assert.equal(claimed.status, 200)
 
-  const other = await harness.call('POST', '/api/pairing/code', { body: { accountId: TEST_ACCOUNT } })
+  // 账号已有会话：同账号再签发必须带 Bearer。
+  const other = await harness.call('POST', '/api/pairing/code', {
+    body: { accountId: TEST_ACCOUNT },
+    token: claimed.json.sessionToken
+  })
   const bad = await harness.call('POST', '/api/pairing/claim', {
     body: { code: other.json.code, platform: 'toaster' }
   })
