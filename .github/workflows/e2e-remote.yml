@@ -1,0 +1,154 @@
+name: e2e-remote
+
+# 只在手动点击时运行，**不挂 push/PR**：它会占用一台真实云主机、拉起沙箱并消耗模型额度。
+# 需要的仓库 secrets（Settings → Secrets and variables → Actions）：
+#   ROOST_REMOTE_HOST      云主机地址
+#   ROOST_REMOTE_USER      ssh 用户（需要有 docker / openshell 权限）
+#   ROOST_REMOTE_PASSWORD  密码；用 sshpass -e 走环境变量，不出现在命令行/日志里
+# 可选 repo variables：
+#   ROOST_REMOTE_PORT      ssh 端口（默认 22）
+#   ROOST_REMOTE_DIR       远端临时目录（默认 /tmp/roostbot-e2e）
+#   ROOST_E2E_PORT         控制面端口（默认 8792）
+#
+# 本地不要跑这个 workflow；没有 OpenShell 的机器跑 scripts/e2e-cloud.sh 会以 77 跳过。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要测的 git ref（分支 / tag / commit）
+        required: false
+        default: main
+      timeout_minutes:
+        description: 作业总超时（分钟，5–60）
+        required: false
+        default: '25'
+
+permissions:
+  contents: read
+
+jobs:
+  remote-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Validate inputs and gate on required secrets
+        env:
+          ROOST_REMOTE_HOST: ${{ secrets.ROOST_REMOTE_HOST }}
+          ROOST_REMOTE_USER: ${{ secrets.ROOST_REMOTE_USER }}
+          ROOST_REMOTE_PASSWORD: ${{ secrets.ROOST_REMOTE_PASSWORD }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        run: |
+          set -euo pipefail
+          case "$TIMEOUT_MINUTES" in
+            ''|*[!0-9]*)
+              echo "::error::timeout_minutes 必须是整数（5–60）"
+              exit 1
+              ;;
+          esac
+          if [ "$TIMEOUT_MINUTES" -lt 5 ] || [ "$TIMEOUT_MINUTES" -gt 60 ]; then
+            echo "::error::timeout_minutes 必须在 5–60 之间"
+            exit 1
+          fi
+          missing=()
+          for name in ROOST_REMOTE_HOST ROOST_REMOTE_USER ROOST_REMOTE_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::缺少 secrets: ${missing[*]}。远端 e2e 不会在缺凭据时假装通过。"
+            exit 1
+          fi
+          echo "secrets ok; 目标 ${ROOST_REMOTE_USER}@${ROOST_REMOTE_HOST}，超时 ${TIMEOUT_MINUTES}m"
+
+      - name: Install sshpass
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+
+      - name: Stage repository on remote host
+        env:
+          ROOST_REMOTE_HOST: ${{ secrets.ROOST_REMOTE_HOST }}
+          ROOST_REMOTE_USER: ${{ secrets.ROOST_REMOTE_USER }}
+          ROOST_REMOTE_PASSWORD: ${{ secrets.ROOST_REMOTE_PASSWORD }}
+          ROOST_REMOTE_PORT: ${{ vars.ROOST_REMOTE_PORT || '22' }}
+          REMOTE_DIR: ${{ vars.ROOST_REMOTE_DIR || '/tmp/roostbot-e2e' }}
+        run: |
+          set -euo pipefail
+          case "$REMOTE_DIR" in
+            *[!A-Za-z0-9_./-]*)
+              echo "::error::ROOST_REMOTE_DIR 只允许字母、数字、_ . / -"
+              exit 1
+              ;;
+          esac
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p ${ROOST_REMOTE_PORT}"
+          tar -czf - --exclude=.git --exclude=data --exclude=node_modules . \
+            | SSHPASS="$ROOST_REMOTE_PASSWORD" sshpass -e ssh $SSH_OPTS \
+                "$ROOST_REMOTE_USER@$ROOST_REMOTE_HOST" \
+                "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR' && tar -xzf - -C '$REMOTE_DIR'"
+          echo "staged $(git rev-parse --short HEAD) → $REMOTE_DIR"
+
+      - name: Run remote e2e (scripts/e2e-cloud.sh, timeout enforced)
+        env:
+          ROOST_REMOTE_HOST: ${{ secrets.ROOST_REMOTE_HOST }}
+          ROOST_REMOTE_USER: ${{ secrets.ROOST_REMOTE_USER }}
+          ROOST_REMOTE_PASSWORD: ${{ secrets.ROOST_REMOTE_PASSWORD }}
+          ROOST_REMOTE_PORT: ${{ vars.ROOST_REMOTE_PORT || '22' }}
+          REMOTE_DIR: ${{ vars.ROOST_REMOTE_DIR || '/tmp/roostbot-e2e' }}
+          E2E_PORT: ${{ vars.ROOST_E2E_PORT || '8792' }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        run: |
+          set -uo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p ${ROOST_REMOTE_PORT}"
+          # 脚本内超时比 job 超时早 2 分钟，留出收日志的时间。
+          SCRIPT_TIMEOUT=$((TIMEOUT_MINUTES * 60 - 120))
+          if [ "$SCRIPT_TIMEOUT" -lt 300 ]; then SCRIPT_TIMEOUT=300; fi
+          rc=0
+          SSHPASS="$ROOST_REMOTE_PASSWORD" sshpass -e ssh $SSH_OPTS \
+            "$ROOST_REMOTE_USER@$ROOST_REMOTE_HOST" \
+            "cd '$REMOTE_DIR' && ROOST_E2E_TIMEOUT='$SCRIPT_TIMEOUT' ROOST_E2E_PORT='$E2E_PORT' bash scripts/e2e-cloud.sh" \
+            2>&1 | tee e2e.log || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "remote e2e: PASS"
+            exit 0
+          fi
+          if [ "$rc" -eq 77 ]; then
+            echo "::error::远端主机缺少 OpenShell / Docker / node，e2e 被跳过（77）；先修环境再重跑"
+          elif [ "$rc" -eq 124 ]; then
+            echo "::error::远端 e2e 超时（脚本 ${SCRIPT_TIMEOUT}s）"
+          else
+            echo "::error::远端 e2e 失败（rc=$rc）"
+          fi
+          exit 1
+
+      - name: Collect remote API log on failure
+        if: failure()
+        env:
+          ROOST_REMOTE_HOST: ${{ secrets.ROOST_REMOTE_HOST }}
+          ROOST_REMOTE_USER: ${{ secrets.ROOST_REMOTE_USER }}
+          ROOST_REMOTE_PASSWORD: ${{ secrets.ROOST_REMOTE_PASSWORD }}
+          ROOST_REMOTE_PORT: ${{ vars.ROOST_REMOTE_PORT || '22' }}
+        run: |
+          set -uo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p ${ROOST_REMOTE_PORT}"
+          SSHPASS="$ROOST_REMOTE_PASSWORD" sshpass -e ssh $SSH_OPTS \
+            "$ROOST_REMOTE_USER@$ROOST_REMOTE_HOST" \
+            "tail -n 120 /tmp/roost-cloud-api.log 2>/dev/null || echo '(no remote api log)'" \
+            > remote-api.log 2>&1 || true
+          tail -n 120 remote-api.log || true
+
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-remote-${{ github.run_id }}
+          path: |
+            e2e.log
+            remote-api.log
+          if-no-files-found: warn
+          retention-days: 7

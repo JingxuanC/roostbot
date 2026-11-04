@@ -76,6 +76,14 @@ import {
   type MarketplaceInstallRouteContext,
 } from './marketplace-install-routes.ts'
 import { getApproval } from '../../../packages/store/src/approvals.ts'
+import { handleDeepHealth } from './health-deep.ts'
+import { handleMemoryClaims, handleMemoryCleanup } from './memory-claims-routes.ts'
+import { createModelProxy } from '../../../packages/budget/src/index.ts'
+import type { ModelProxyHandler } from '../../../packages/budget/src/index.ts'
+import { handleModelProxy, type ModelProxyRouteContext } from './model-proxy-routes.ts'
+import { recordUsage } from '../../../packages/store/src/budget.ts'
+import { metricsFromEvent } from '../../../packages/observability/src/index.ts'
+import { setEventSink } from '../../../packages/store/src/events.ts'
 import {
   handleCreateApprovalGrant,
   handleInternalCreateApproval,
@@ -246,6 +254,8 @@ export interface ServerOptions {
   /** OIDC provider 注入（测试用）；不传时从 ROOST_OIDC_* 环境变量拼。 */
   oidc?: import('./auth-login-routes.ts').OidcConfig
   authSessionTtlMs?: number
+  /** 模型代理（测试注入）；不传时按 ROOST_MODEL_* / DEEPSEEK_* 构造。 */
+  modelProxy?: ModelProxyHandler
   /** 附件内容存储根目录；默认 ROOST_ATTACHMENTS_DIR 或 <cwd>/data/attachments。 */
   attachmentsDir?: string
   /** 附件签名密钥；默认 ROOST_SIGNING_SECRET，未配置时进程内随机。 */
@@ -1591,6 +1601,16 @@ function internalRoomIdFromPath(pathname: string): string | null {
   }
 }
 
+/** 模型代理的 workspace 归属：优先内部头，其次沙箱 env。 */
+function modelProxyWorkspaceId(req: IncomingMessage): string | null {
+  const raw = req.headers['x-roost-workspace-id']
+  const value = (Array.isArray(raw) ? raw[0] : raw) ?? ''
+  const trimmed = value.trim()
+  if (trimmed !== '') return trimmed
+  const fallback = (process.env['ROOST_WORKSPACE_ID'] ?? '').trim()
+  return fallback === '' ? null : fallback
+}
+
 function safeDecode(value: string): string | null {
   try {
     return decodeURIComponent(value)
@@ -1653,6 +1673,40 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
 
   if (isDshPath) {
     await handleDshRequest(ctx.dsh, req, res, url)
+    return
+  }
+
+  if (path === '/healthz/deep') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleDeepHealth({
+      now: ctx.now,
+      probes: {
+        api: () => ({ ok: true }),
+        store: () => {
+          if (ctx.rawStore === undefined) return { ok: true, detail: 'memory store' }
+          try {
+            ctx.rawStore.db.prepare('SELECT 1').get()
+            return { ok: true }
+          } catch {
+            return { ok: false, detail: 'store query failed' }
+          }
+        },
+        sandbox: async () => {
+          if (ctx.runtimeManager === undefined) return { ok: true, detail: 'not configured' }
+          try {
+            const { OpenShellBackend } = await import('../../../packages/sandbox/src/index.ts')
+            const ok = await new OpenShellBackend().available()
+            return { ok, detail: ok ? 'openshell available' : 'openshell unavailable' }
+          } catch {
+            return { ok: false, detail: 'sandbox probe failed' }
+          }
+        },
+        gateway: () => ({ ok: true, detail: 'not configured' })
+      }
+    }, req, res)
     return
   }
 
@@ -1957,6 +2011,41 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     } catch (error) {
       sendError(res, 500, 'internal_error', error instanceof Error ? error.message : String(error))
     }
+    return
+  }
+
+  if (path === '/api/internal/memory/claims') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.rawStore === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'memory requires the SQLite store')
+      return
+    }
+    await handleMemoryClaims({ store: ctx.rawStore, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
+    return
+  }
+
+  if (path === '/api/internal/memory/cleanup') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.rawStore === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'memory requires the SQLite store')
+      return
+    }
+    await handleMemoryCleanup({ store: ctx.rawStore, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
+    return
+  }
+
+  if (path === '/v1/chat/completions') {
+    if (ctx.modelProxy === undefined) {
+      sendError(res, 501, 'model_proxy_not_configured', 'model proxy is not configured')
+      return
+    }
+    await handleModelProxy(ctx.modelProxy, req, res)
     return
   }
 
@@ -2790,6 +2879,44 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
 
   // 插件安装复用控制面的限流桶（10/小时/账号，rate-limit.test.ts 覆盖）。
   installRoutes.rateLimiter = ctx.rateLimiter
+
+  // 事件 → 指标（6.6.1）：store 的 appendEvent 是唯一写入口，注册一个只读 sink。
+  setEventSink((event) => {
+    try {
+      ctx.metrics.ingest(metricsFromEvent(event as never))
+    } catch {
+      // 指标失败不影响事件写入。
+    }
+  })
+
+  // 模型代理（6.4.5）：/v1/chat/completions 转发并记账。
+  const modelKey = (process.env['ROOST_MODEL_API_KEY'] ?? process.env['DEEPSEEK_API_KEY'] ?? '').trim()
+  if (options.modelProxy !== undefined) {
+    ctx.modelProxy = { proxy: options.modelProxy, workspaceIdFrom: modelProxyWorkspaceId }
+  } else if (modelKey !== '') {
+    ctx.modelProxy = {
+      proxy: createModelProxy({
+        upstreamBase: process.env['ROOST_MODEL_UPSTREAM_BASE'] ?? process.env['DEEPSEEK_BASE_URL'] ?? 'https://api.deepseek.com',
+        key: modelKey,
+        limiter: ctx.rateLimiter,
+        recordUsage: (usage) => {
+          if (options.rawStore === undefined) return
+          try {
+            recordUsage(options.rawStore, {
+              workspaceId: usage.workspaceId,
+              source: usage.estimated ? 'estimated' : 'provider_report',
+              idem: usage.idem,
+              at: usage.at,
+              outputTokens: usage.tokens
+            })
+          } catch {
+            // 记账失败不影响代理响应。
+          }
+        }
+      }),
+      workspaceIdFrom: modelProxyWorkspaceId
+    }
+  }
 
   const server = http.createServer((req, res) => {
     const requestId = resolveRequestId(req.headers['x-request-id'])

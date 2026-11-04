@@ -194,11 +194,7 @@ export async function handleMarketplaceInstallStart(
 
   const at = ctx.now()
   const preflight = runPreflight(ctx, plugin, version)
-  if (!preflight.ok) {
-    // 契约的 409 plugin.preflight：错误体仍只有 {code,message}，阻断项摘要写进 message；
-    // 完整列表由 POST /api/marketplace/plugins/:slug/preflight 提供。
-    return sendError(res, 409, 'plugin.preflight', blockingSummary(preflight))
-  }
+  if (!preflight.ok) return sendPreflightFailure(res, preflight)
 
   const installId = newRoostId('pli', at)
   const lock = profileLockFor(ctx, store, {
@@ -474,9 +470,7 @@ export async function handlePluginInstallUpdate(
   }
 
   const preflight = runPreflight(ctx, plugin, version)
-  if (!preflight.ok) {
-    return sendError(res, 409, 'plugin.preflight', blockingSummary(preflight))
-  }
+  if (!preflight.ok) return sendPreflightFailure(res, preflight)
 
   const at = ctx.now()
   const lock = profileLockFor(ctx, store, {
@@ -1064,6 +1058,25 @@ function runPreflight(
     allowlist: allowlistOf(ctx),
     minReleaseAgeMs: minReleaseAgeOf(ctx),
     now: ctx.now(),
+  })
+}
+
+/**
+ * 409 plugin.preflight。契约的错误体是 `{ok:false,error:{code,message}}`；
+ * 这里只在 error 里**追加** problems/tier/permissions，让市场详情页直接列出阻断项
+ * （apps/web/lib/installs.js 的 preflightFromError 读 error.problems），
+ * 不想解析细节的客户端仍然只看 code/message。
+ */
+function sendPreflightFailure(res: ServerResponse, result: InstallPreflightResult): void {
+  sendJson(res, 409, {
+    ok: false,
+    error: {
+      code: 'plugin.preflight',
+      message: blockingSummary(result),
+      tier: result.tier,
+      problems: result.problems,
+      permissions: result.permissions,
+    },
   })
 }
 

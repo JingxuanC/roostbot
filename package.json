@@ -1,7 +1,7 @@
 {
   "name": "roostbot",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Roost Bot — a team of bots that lives on a cloud machine and can reach back into your local DSH.",
   "packageManager": "pnpm@11.28.5",
   "engines": {
@@ -11,7 +11,9 @@
     "check": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "test": "node --experimental-strip-types --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "dev:api": "node --experimental-strip-types apps/api/src/main.ts",
-    "dev:worker": "node --experimental-strip-types apps/runtime/worker.ts"
+    "errors": "node scripts/error-codes.mjs",
+    "release": "node scripts/release.mjs",
+    "e2e": "sh scripts/e2e-cloud.sh"
   },
   "license": "Apache-2.0",
   "type": "module"

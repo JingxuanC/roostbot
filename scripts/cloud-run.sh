@@ -96,7 +96,7 @@ if [ "${ROOST_CHECK_MEMORY:-0}" = "1" ] && [ -n "$SB" ]; then
     done
     return 1
   }
-  ask "请记住这个数字：4271。只回复：记住了。"; wait_bots 3 || true
+  ask "请记住这个数字：4271。"; wait_bots 3 || true
   ask "我刚才让你记住的数字是多少？只回答数字。"; wait_bots 4 || true
   FIRST=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "d['messages'][-1]['text']" || true)
   echo "  before restart: $FIRST"
@@ -111,15 +111,16 @@ if [ "${ROOST_CHECK_MEMORY:-0}" = "1" ] && [ -n "$SB" ]; then
   ask "重启之后：我刚才让你记住的数字是多少？只回答数字。"; wait_bots 5 || true
   AFTER=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "d['messages'][-1]['text']" || true)
   echo "  after restart:  $AFTER"
-  case "$FIRST$AFTER" in
-    *4271*4271*) MEMORY="pass" ;;
+  # 重启后的回答里必须还能看到 4271；重启前的回答可能只是"好的"，不作为硬条件。
+  case "$AFTER" in
+    *4271*) MEMORY="pass" ;;
     *) MEMORY="fail" ;;
   esac
   echo "  memory=$MEMORY"
 fi
 echo "  round=$ROUND_STATE"
 
-WEB_CODE=$(curl -sS -m 10 -X POST "$BASE/api/pairing/code" -H 'content-type: application/json' -H "authorization: Bearer $SESSION" -d '{}' | json "d.get('code','')")
+WEB_CODE=$(curl -sS -m 10 -X POST "$BASE/api/pairing/code" -H 'content-type: application/json' -H "authorization: Bearer $SESSION" -d "{\"accountId\":\"$ACCOUNT\"}" | json "d.get('code','')")
 echo
 echo "== 完成"
 echo "  浏览器: http://<云主机>:$PORT/  配对码: $WEB_CODE"

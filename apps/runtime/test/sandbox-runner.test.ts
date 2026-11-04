@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { SANDBOX_PROBE, buildDshShell, sandboxPolicy, startSandboxRunner } from '../sandbox-runner.ts'
-import { startRoomWorker } from '../worker.ts'
 
 test('策略：默认拒绝出网，非 root，只读系统路径', () => {
   const yaml = sandboxPolicy()
@@ -32,23 +31,6 @@ test('不存在的后端会明确报错，不静默降级', async () => {
     () => startSandboxRunner({ backend: 'openshell', binary: '/nonexistent/openshell', log: () => {} }),
     /backend is not available/
   )
-})
-
-test('worker 接受注入的 reply（沙箱回合替换点）', async () => {
-  const seen: string[] = []
-  const handle = await startRoomWorker({
-    apiBase: 'http://127.0.0.1:1',
-    runtimeToken: 'x',
-    pollMs: 10,
-    reply: async ({ text }) => {
-      seen.push(text)
-      return null
-    },
-    log: () => {}
-  })
-  handle.stop()
-  assert.deepEqual(seen, [])
-  assert.equal(handle.replies, 0)
 })
 
 test('第一轮不带 --session-id，第二轮带上（headless 的 adopt 契约）', () => {

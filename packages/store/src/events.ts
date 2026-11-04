@@ -38,6 +38,13 @@ interface EventRow {
 const COLUMNS =
   'seq, id, at, domain, kind, actor_json, subject_json, audience, parent, idem, trace_json, payload_json, v'
 
+let eventSink: ((event: Event) => void) | null = null
+
+/** 注册一个只读事件出口（指标/审计）；传 null 关闭。写库成功后才回调，异常被吞掉。 */
+export function setEventSink(sink: ((event: Event) => void) | null): void {
+  eventSink = sink
+}
+
 export function appendEvent(store: Store, event: NewEvent): Event {
   assertOpen(store)
   const input = asRecord(event, 'event', 'INVALID_EVENT')
@@ -128,7 +135,15 @@ export function appendEvent(store: Store, event: NewEvent): Event {
   if (row === undefined || row === null) {
     throw new StoreError('EVENT_WRITE_FAILED', `event ${id} was inserted but cannot be read back`)
   }
-  return rowToEvent(row)
+  const appended = rowToEvent(row)
+  if (eventSink !== null) {
+    try {
+      eventSink(appended)
+    } catch {
+      // 指标/审计出口失败不能影响事件写入。
+    }
+  }
+  return appended
 }
 
 /** 按 seq 升序读；afterSeq 用于断线续传（workspace.md §4「断线重连从事件 seq 续」）。 */

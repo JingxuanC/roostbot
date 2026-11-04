@@ -49,8 +49,10 @@ if [ -f apps/api/src/main.ts ]; then
   printf '  messages  : '; curl -sS -m 5 -o /tmp/mr.json -w '%{http_code} ' "$base/api/rooms/$ROOMID/messages" -H "authorization: Bearer $TOKEN"; head -c 140 /tmp/mr.json; echo
   printf '  internal  : '; curl -sS -m 5 -o /tmp/ir.json -w '%{http_code} ' "$base/api/internal/rooms" -H "x-runtime-token: $RUNTIME_TOKEN"; head -c 80 /tmp/ir.json; echo
 
-  # Bot 回合（v0 是占位 worker）：起 worker 后新消息应该收到 Bot 回复。
-  ROOST_API="$base" ROOST_RUNTIME_TOKEN="$RUNTIME_TOKEN" $NODE --experimental-strip-types apps/runtime/worker.ts >/tmp/roost-worker.log 2>&1 &
+  # Bot 回合：起 room-agent（没有成员时走单 Bot 回退），新消息应收到 Bot 回复。
+  ROOST_API="$base" ROOST_RUNTIME_TOKEN="$RUNTIME_TOKEN" ROOST_BOT_ID=selector \
+    ROOST_WORKSPACE_ID="$WSID" ROOST_DSH_BIN="$ROOT/apps/runtime/test/fake-dsh.mjs" \
+    $NODE --experimental-strip-types apps/runtime/room-agent.mjs >/tmp/roost-room-agent.log 2>&1 &
   WORKER_PID=$!
   curl -sS -m 5 -o /dev/null -X POST "$base/api/rooms/$ROOMID/messages" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d '{"text":"第二句：Bot 会回我吗"}'
   BOT_OK=""
@@ -60,6 +62,7 @@ if [ -f apps/api/src/main.ts ]; then
     sleep 0.4
   done
   printf '  bot reply : %s\n' "${BOT_OK:-no}"
+  [ "$BOT_OK" = "yes" ] || BOT_FAIL=1
   kill $WORKER_PID 2>/dev/null
   kill "$API_PID" 2>/dev/null
   wait "$API_PID" 2>/dev/null
@@ -70,4 +73,8 @@ fi
 echo
 echo "== 3) 总结"
 [ "$TEST_RC" = "0" ] && echo "  tests: ok" || echo "  tests: FAILED"
+if [ "${BOT_FAIL:-0}" = "1" ]; then
+  echo "  bot reply: FAILED（看 /tmp/roost-room-agent.log）"
+  exit 1
+fi
 exit "$TEST_RC"

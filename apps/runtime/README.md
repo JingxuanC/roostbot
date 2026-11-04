@@ -14,6 +14,32 @@ sidecar（127.0.0.1:19400）  ← runtime token、/healthz、/activity
 DSH Web（127.0.0.1:4100）   ← 只监听回环，不直接暴露
 ```
 
+## 进程模型：room-agent 是唯一 runtime 路径
+
+2026-11-04（TODO E1）删除了 `worker.ts`（轮询控制面 + 每条消息 fork 一次 headless DSH 的
+legacy 路径）与 `planA-boot.mjs`（E5，控制面 `POST /api/workspaces/:id/start` 已接管）。
+沙箱镜像（`agent.Dockerfile`）现在只有一条路：
+
+```
+控制面 POST /api/workspaces/:id/start
+  → OpenShellRuntimeManager.ensure()（apps/api/src/runtime-manager-openshell.ts）
+  → 固定名沙箱 roost-<workspace>
+  → 容器 CMD: node /opt/roost/room-agent.mjs
+       ├─ 长活 `dsh --profile sdk`（JSON-RPC over stdio，session 常驻）
+       ├─ 每 (room, bot) 一个 sessionId；断线退避、stop/start 后 resume
+       └─ `dsh web` 子进程（127.0.0.1:4099，插件面板容器，ADR 0004）
+```
+
+要点：
+
+- 房间回复**不是**每条消息起一个进程，也没有独立的 worker 守护进程要部署；沙箱主进程就是
+  room-agent，由控制面按 workspace 拉起/停止。
+- 想本地验证房间链路，不要手起 worker：用 API `POST /api/workspaces/:id/start`，再看
+  `GET /api/workspaces/:id/runtime` 的 `phase`。没有 OpenShell 的机器会得到
+  `runtime.not_configured`，这是预期。
+- `apps/runtime/sandbox-runner.ts` 是 worker 时代留下的沙箱执行封装，目前只剩测试在用；
+  生产路径走 room-agent 的 SDK 会话。删不删等下一轮清理，别把它当入口。
+
 ## 本机怎么跑 sidecar
 
 先有一个在跑的 DSH Web（本机通常是 `http://127.0.0.1:65471`），然后在仓库根目录：
@@ -125,6 +151,10 @@ docker run --rm --init \
 
 - `sidecar/proxy.mjs`：零依赖 sidecar；`PORT=0`、base 边界、SIGTERM 排空。
 - `test/sidecar.test.ts`：上面的集成测试。
+- `room-agent.mjs`：沙箱主进程（长活 SDK、每房间会话、轮次投递）。
+- `dsh-web.mjs`：room-agent 的 `dsh web` 子进程封装（面板容器）。
+- `sandbox-manager.mjs` / `sandbox-runner.ts`：OpenShell 沙箱创建与命令执行。
+- `agent.Dockerfile`：沙箱镜像（node:22-slim + DSH + room-agent）。
 - `Dockerfile`：node:22-alpine + DSH（`DSH_VERSION` 可覆盖）+ 基线 profile。
 - `entrypoint.sh`：env 校验、两进程编排、SIGTERM 有序停机。
 - `profile/`：空基线，不代表租户 profile。

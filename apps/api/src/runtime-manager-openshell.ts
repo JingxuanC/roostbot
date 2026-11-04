@@ -7,6 +7,7 @@
 // 就抛错，不假装沙箱起来了。锁经 sync 接口的 loopback 自调拉取（与沙箱将来走的
 // 是同一条路由、同一套 runtime token 鉴权）；不用 cpHost——那是给沙箱解析宿主机
 // 用的，控制面自己未必能解析。锁 id 注入沙箱 env，沙箱 sync 后必须落在同一把锁上。
+// 旧 planA-boot 已删除（E5）；本模块是控制面唯一的启动路径。
 
 import { fetchProfileLock } from './profile-lock.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'

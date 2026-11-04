@@ -81,9 +81,18 @@ const ROUTE_PATTERNS: Array<readonly [RegExp, string]> = [
   [/^\/api\/bots\/[^/]+$/, '/api/bots/:id']
 ]
 
+export interface MetricPoint {
+  name: string
+  kind: 'counter' | 'gauge' | 'histogram'
+  value: number
+  labels?: Record<string, string>
+}
+
 export interface MetricsRegistry {
   /** rawUrl 可带 query；内部只取 pathname 并归一成路由模板。 */
   record(method: string, rawUrl: string, status: number, durationMs: number): void
+  /** 业务事件 → 指标（observability/from-events.ts 的产物）。 */
+  ingest(points: readonly MetricPoint[]): void
   render(store?: Store): string
 }
 
@@ -151,6 +160,7 @@ function gauge(store: Store | undefined, sql: string): number {
 
 export function createMetrics(): MetricsRegistry {
   const counters = new Map<string, CounterSeries>()
+  const business = new Map<string, { kind: MetricPoint['kind']; labels: Record<string, string>; value: number }>()
   const histograms = new Map<string, HistogramSeries>()
 
   return {
@@ -186,6 +196,21 @@ export function createMetrics(): MetricsRegistry {
       if (bucketIndex >= 0) histogram.buckets[bucketIndex] = histogram.buckets[bucketIndex]! + 1
     },
 
+    ingest(points) {
+      for (const point of points) {
+        if (typeof point?.name !== 'string' || point.name === '') continue
+        const labelKey = JSON.stringify(point.labels ?? {})
+        const key = `${point.name}|${labelKey}`
+        const current = business.get(key)
+        if (point.kind === 'counter') {
+          business.set(key, { kind: 'counter', labels: point.labels ?? {}, value: (current?.value ?? 0) + point.value })
+        } else if (point.kind === 'gauge') {
+          business.set(key, { kind: 'gauge', labels: point.labels ?? {}, value: point.value })
+        } else {
+          business.set(key, { kind: 'histogram', labels: point.labels ?? {}, value: (current?.value ?? 0) + point.value })
+        }
+      }
+    },
     render(store) {
       const lines: string[] = []
       lines.push('# HELP roost_http_requests_total Total HTTP requests.')

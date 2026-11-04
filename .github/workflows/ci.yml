@@ -6,10 +6,29 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18.0'
-      - name: Tests (type stripping, no build step)
+
+      # 没有构建步骤，也没有 tsc：类型擦除的语法错误只有真跑才会暴露，
+      # 所以先对每个 .ts 做一次 `node --check`（失败即红，不继续跑测试）。
+      - name: Typecheck (type-stripping syntax check, no build)
+        run: |
+          set -euo pipefail
+          files=0
+          while IFS= read -r file; do
+            node --experimental-strip-types --check "$file"
+            files=$((files + 1))
+          done < <(git ls-files '*.ts')
+          echo "checked $files TypeScript files"
+
+      # 全量：packages/* + apps/* 的 test/*.test.ts。少跑一个目录也算失败（glob 由 node 展开）。
+      - name: Tests (full suite, type stripping, no build step)
         run: node --experimental-strip-types --test "packages/*/test/*.test.ts" "apps/*/test/*.test.ts"
+
+      # 错误码文档是生成物；代码改了文档没重跑，这里会红。
+      - name: Error codes doc is up to date
+        run: node scripts/error-codes.mjs --check

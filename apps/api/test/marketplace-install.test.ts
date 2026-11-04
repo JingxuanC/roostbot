@@ -47,6 +47,7 @@ import type { MarketplaceInstallRouteContext } from '../src/marketplace-install-
 import type { StorePort } from '../src/port.ts'
 import { hashSessionToken } from '../src/server.ts'
 import { createStorePort } from '../src/store-adapter.ts'
+import { pairDevice, startSqliteHarness } from './helpers.ts'
 
 const ACCOUNT = 'acc_install_owner'
 const VIEWER = 'acc_install_viewer'
@@ -425,6 +426,14 @@ test('安装入口：鉴权 / 角色 / 输入 / 版本 / 预检阻断（409 plug
     assert.equal(engines.status, 409)
     assert.equal(engines.json.error.code, 'plugin.preflight')
     assert.match(engines.json.error.message, /engines/)
+    // 前端（apps/web/lib/installs.js）从 error.problems 直接渲染阻断项
+    assert.ok(
+      engines.json.error.problems.some(
+        (problem: any) => problem.code === 'engines' && problem.severity === 'blocking',
+      ),
+    )
+    assert.equal(engines.json.error.tier, 'A')
+    assert.ok(engines.json.error.permissions !== undefined)
 
     const tooNew = await startInstall(fixture, '1.0.0', 'fresh-plugin')
     assert.equal(tooNew.status, 409)
@@ -919,3 +928,58 @@ function listInstallsCount(store: Store): number {
   const row = store.db.prepare('SELECT COUNT(*) AS n FROM plugin_installs').get() as { n: number | bigint }
   return Number(row.n)
 }
+
+// ---- 真实 server.ts 接线（Lead 的 diff 落地后才有意义）------------------------
+
+test('接线：server.ts 的 /api/marketplace/... 与 /api/internal/.../synced 走同一套 handler', async (t) => {
+  // 真实 server 在建 ctx 时读 env（installRoutes），所以先设 runtime token。
+  const savedToken = process.env['ROOST_RUNTIME_TOKEN']
+  process.env['ROOST_RUNTIME_TOKEN'] = RUNTIME_TOKEN
+  const harness = await startSqliteHarness()
+  t.after(async () => {
+    await harness.close()
+    if (savedToken === undefined) delete process.env['ROOST_RUNTIME_TOKEN']
+    else process.env['ROOST_RUNTIME_TOKEN'] = savedToken
+  })
+
+  const token = await pairDevice(harness)
+  const now = harness.clock.now()
+  const workspace = await harness.store.createWorkspace({ accountId: 'acc_test_one', name: '接线工作区', now })
+  seedMarketplace(harness.rawStore!)
+
+  const list = await harness.call('GET', `/api/plugin-installs?workspaceId=${workspace.id}`, { token })
+  assert.equal(list.status, 200, list.text)
+  assert.deepEqual(list.json.installs, [])
+
+  const install = await harness.call('POST', '/api/marketplace/plugins/market-center/install', {
+    token,
+    body: { workspaceId: workspace.id, version: '1.2.0' },
+  })
+  assert.equal(install.status, 202, install.text)
+  const approvalId = install.json.approval.id as string
+  const installId = install.json.job.installId as string
+
+  // 审批走真实 /api/approvals/:id，server.ts 的钩子应把 job 推到 installing 并写安装行。
+  const decided = await harness.call('POST', `/api/approvals/${approvalId}`, {
+    token,
+    body: { decision: 'approved' },
+  })
+  assert.equal(decided.status, 200, decided.text)
+  const detail = await harness.call('GET', `/api/plugin-installs/${installId}`, { token })
+  assert.equal(detail.status, 200, detail.text)
+  assert.equal(detail.json.install.state, 'installing')
+  assert.equal(detail.json.job.state, 'installing')
+
+  // 内部 synced：真实 server 的 runtime token 校验 + 状态推进。
+  const synced = await harness.call('POST', `/api/internal/plugin-installs/${installId}/synced`, {
+    headers: { 'x-runtime-token': RUNTIME_TOKEN },
+    body: { ok: true, tools: [{ name: 'market_quote', source: 'market-center' }], panels: 0 },
+  })
+  assert.equal(synced.status, 200, synced.text)
+  assert.equal(synced.json.job.state, 'installed')
+  assert.equal(synced.json.install.state, 'installed')
+
+  const installedList = await harness.call('GET', `/api/plugin-installs?workspaceId=${workspace.id}`, { token })
+  assert.equal(installedList.json.installs.length, 1)
+  assert.deepEqual(installedList.json.installs[0].tools, [{ name: 'market_quote', source: 'market-center' }])
+})

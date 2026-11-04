@@ -569,6 +569,20 @@ export async function startRoomAgent(options) {
     }
   }
 
+  /** 回合结束后把文本送去做 claims 抽取（fire-and-forget，失败不影响对话）。 */
+  async function rememberClaims(text) {
+    const workspaceId = (options.workspaceId ?? process.env.ROOST_WORKSPACE_ID ?? '').trim()
+    if (workspaceId === '' || typeof text !== 'string' || text.trim() === '') return
+    try {
+      await request('/api/internal/memory/claims', {
+        method: 'POST',
+        body: JSON.stringify({ workspaceId, text })
+      })
+    } catch {
+      // 记忆写入不是本轮对话的前提。
+    }
+  }
+
   async function advance(roundId, slotIndex, result) {
     let response
     let body
@@ -613,6 +627,7 @@ export async function startRoomAgent(options) {
         watch?.cancel()
       }
       await advance(assignment.roundId, assignment.index, result)
+    if (result.kind === 'posted' && typeof result.text === 'string') void rememberClaims(result.text)
     }
   }
 
@@ -637,7 +652,10 @@ export async function startRoomAgent(options) {
     })
     const body = await response.text().catch(() => '')
     if (!response.ok) log(`say failed ${response.status}: ${body}`)
-    else log(`replied ${roomId} seq ${message.seq} session ${sessionId}`)
+    else {
+      log(`replied ${roomId} seq ${message.seq} session ${sessionId}`)
+      void rememberClaims(answer)
+    }
   }
 
   /** 启动/轮询时发现成员就 prepare（resume 每个 session 一次）。 */

@@ -147,7 +147,10 @@ export function assignmentsForRound(store: Store, roomId: string): RoundAssignme
     const unseen = messages.filter((message) => message.seq >= round.startSeq && message.seq > seen && message.botId !== slot.botId)
     const memberShape = { ...member, name: member.name ?? slot.name ?? member.botId }
     const kickoffRoom = { ...detail.room, dm: dmOf(store, roomId), notice: engine.notice ?? null }
-    const prompt = round.startSeq === 0
+    // kickoff 轮里只要已经有用户消息，就从"问这个群做什么"切回正常回答。
+    const hasUserDelta = messages.some((message) => message.seq >= round.startSeq && message.actor.kind === 'user')
+    const mayKickoff = round.startSeq === 0 && !hasUserDelta
+    const prompt = mayKickoff
       ? kickoffPromptFor(kickoffRoom as never, memberShape as never)
       : buildMemberPrompt({
           room: engine as never,
