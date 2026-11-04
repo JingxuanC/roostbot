@@ -25,7 +25,7 @@ Roost 是「栖木 / 鸟舍」：Bot 住在这里，所以 **Bot 就是鸟**。
 | 尾羽 | 短/羽束/长（乌鸦、鹦鹉） | 侧面轮廓 |
 | 爪 | 两条暖黄短斜线 | 落地的感觉 |
 
-## 3. 十二个物种：可爱 6 + 疯狂 6
+## 3. 十八个物种：可爱 9 + 夸张 9
 
 **可爱系**（大眼、软眉、圆润，先让人想靠近）：
 
@@ -37,8 +37,11 @@ Roost 是「栖木 / 鸟舍」：Bot 住在这里，所以 **Bot 就是鸟**。
 | 麻雀 Sparrow | 小圆、短尾 | 绒羽冠、腮红 |
 | 企鹅 Penguin | 竖椭圆、短尾 | 黑白分色、白肚（固定色，不跟调色板） |
 | 知更鸟 Robin | 圆身、短尾 | 橙红胸斑 |
+| 雪鸮 Snowy Owl | 宽扁、短尾 | 白色颊斑 + 角羽，雪地感 |
+| 蜂鸟 Hummingbird | 极小、针尾 | 长针喙，最「快」 |
+| 鹌鹑 Quail | 小圆、短尾 | 头顶水滴状羽冠 |
 
-**疯狂系**（压眉、小瞳、夸张冠/喙，一眼「别惹我」）：
+**夸张/疯狂系**（压眉、小瞳、夸张冠/喙，一眼「别惹我」）：
 
 | 物种 | 轮廓 | 特征 |
 |---|---|---|
@@ -48,6 +51,9 @@ Roost 是「栖木 / 鸟舍」：Bot 住在这里，所以 **Bot 就是鸟**。
 | 鹅 Goose | 宽扁、短尾 | 长扁喙、白身、颈环 |
 | 鹰 Eagle | 宽肩、扇尾 | 鹰冠、钩喙、最低的压眉 |
 | 火鸡 Turkey | 宽身、扇尾 | 红肉垂 + 头饰、扇形尾羽 |
+| 孔雀 Peacock | 标准、孔雀尾 | 三珠冠 + 眼斑尾 |
+| 鹤 Crane | 窄长、短尾 | 红顶、长喙、颈环 |
+| 金刚鹦鹉 Macaw | 标准、长尾 | 白脸斑 + 大钩喙 |
 
 ### 可爱 vs 疯狂（表情规则）
 
@@ -66,6 +72,21 @@ Roost 是「栖木 / 鸟舍」：Bot 住在这里，所以 **Bot 就是鸟**。
 每色给出 `body` / `wing` / `belly` 三档；喙与爪固定 `#E9A23B`，眼白 `#FFFDF7`、瞳孔 `#26211C`。
 深色与浅色主题都验证过：鸟身与背景、喙与鸟身、眼白与鸟身的对比度均足够。
 
+## 4.5 配饰：按角色自动戴
+
+角色只是文案，识别关键词就戴对应配饰；识别不了按 id 稳定兜底（约 29% 不戴）。
+
+| 角色关键词 | 配饰 |
+|---|---|
+| 研究 / 分析 / research / analyst / 策略 | 圆框眼镜（加粗、镜片微高光） |
+| 数据 / 量化 / data / quant / 工程 | 头戴耳机 |
+| 风控 / 风险 / risk / 合规 / 评审 | 安全帽 |
+| 主持 / host / 协调 / lead / 负责 | 王冠 |
+
+- 显式 `accessory` 优先于角色；`paused` 状态不戴配饰（躺平不需要行头）。
+- 配饰不是唯一线索：名字、角色文字、鸟形同时存在；20px 下细配饰只做辅助。
+- 六个配饰：`none / glasses / headphones / tie / hardhat / crown`；`tie` 留给后续「正式场合」角色。
+
 ## 5. 状态（只允许一种动画）
 
 | 状态 | 表现 |
@@ -77,11 +98,26 @@ Roost 是「栖木 / 鸟舍」：Bot 住在这里，所以 **Bot 就是鸟**。
 
 **不做**：不闪、不跳、不在列表里同时动多个（安静优先，沿用 bot-identity §7）。
 
+## 5.5 群聊图标（鸟头拼合）
+
+房间没有独立图片，用成员鸟头拼合：
+
+```
+≤3 人：2×2 / 横排小拼合
+4 人：2×2
+>4 人：2×2 + 右下 "+N"
+```
+
+- 顺序按成员角色（host 第一）；host 的鸟戴王冠；成员未知时退化到 glyph。
+- 侧栏房间 26px、房间页标题 40px；1:1 私聊房间只有一只鸟。
+- 与 `bot-identity.md §8` 一致；实现见 `apps/web/app.js` 的 `roomFlock()`。
+
 ## 6. 尺寸与用法
 
 - 20 / 24 / 32 / 40 / 64 五档；列表 24、侧栏 20–24、详情标题 40、头像编辑器预览 64。
-- 生成规则：`birdSpecFor(id)` = fnv1a(id) → 物种(12) × 调色板(8) × 倾斜(3) × 眉形(3) × 脸颊标记(2)。
-  2026-11-05 从 6 种扩到 12 种时，物种取模变了，**已有 Bot 的头像会变一次**（id 仍然稳定，之后不再变）。
+- 生成规则：`birdSpecFor(id)` = fnv1a(id) → 物种(18) × 调色板(8) × 倾斜(3) × 眉形(3) × 脸颊标记(2)；
+  配饰由角色决定，无角色时按 id 稳定兜底。
+  2026-11-05 从 6 → 12 → 18 种时物种取模变了，**已有 Bot 的头像会变一次**（id 仍然稳定，之后不再变）。
 - **改名不改形象**：id 不变则鸟不变；换 `avatar.image` 上传图时优先用上传图。
 - Bot 详情页的「随机预览」也走同一函数（基于 id），不会出现「预览和列表不是同一只鸟」。
 
@@ -94,8 +130,9 @@ Roost 是「栖木 / 鸟舍」：Bot 住在这里，所以 **Bot 就是鸟**。
 
 ## 8. 实现
 
-- `apps/web/lib/bird.js`：`birdSpecFor(id)`、`birdSvg(id, {size, state, label})`、`BIRD_SPECIES/PALETTES/STATES/MOODS`。
-- `apps/web/lib/dom.js`：`botAvatar()` 无上传图时改用 `birdSvg`；人类 `avatar()` 仍用 glyph。
+- `apps/web/lib/bird.js`：`birdSpecFor(id)`、`birdSvg(id, {size, state, label, role, accessory})`、`accessoryForRole/accessoryForId`、`BIRD_SPECIES/PALETTES/STATES/MOODS/ACCESSORIES`。
+- `apps/web/lib/dom.js`：`botAvatar()` 无上传图时改用 `birdSvg`（带角色配饰）；人类 `avatar()` 仍用 glyph。
+- `apps/web/app.js`：`roomFlock()` 生成房间鸟头拼合；侧栏房间与房间页标题使用。
 - `apps/web/styles.css`：`.bird-ring` 呼吸环 + reduced-motion。
 - 测试：`apps/web/test/bird.test.ts`（确定性、物种/配色覆盖、状态、转义、尺寸回退）。
 - 预览图：`docs/assets/bot-birds.png`（物种/配色/尺寸/状态/列表）、`docs/assets/bot-birds-app.png`（真实应用内）。

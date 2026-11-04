@@ -493,6 +493,42 @@ button {
   color: var(--roost-ink);
 }
 
+.room-head-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.room-flock {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  width: var(--flock-size, 24px);
+  height: var(--flock-size, 24px);
+  align-items: center;
+  justify-items: center;
+  flex: none;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.room-flock .avatar {
+  border-radius: 4px;
+}
+
+.room-flock-more {
+  grid-column: 1 / -1;
+  align-self: end;
+  justify-self: end;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--roost-muted);
+  background: var(--surface, #151a20);
+  border-radius: 999px;
+  padding: 1px 3px;
+}
+
 .room-row .room-mark {
   width: 2px;
   height: 16px;

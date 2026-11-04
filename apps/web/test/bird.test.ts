@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, birdSpecFor, birdSvg } from '../lib/bird.js'
+import { BIRD_ACCESSORIES, BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, accessoryForId, accessoryForRole, birdSpecFor, birdSvg } from '../lib/bird.js'
 
 test('同一个 id 永远得到同一只鸟（改名不影响形象的前提）', () => {
   const a = birdSpecFor('bot_01M6KMHFHMNJ4S8286D7VS8MEQ')
@@ -12,20 +12,54 @@ test('同一个 id 永远得到同一只鸟（改名不影响形象的前提）'
   assert.equal(birdSvg('bot_1'), birdSvg('bot_1'))
 })
 
-test('600 个 id 能覆盖全部 12 个物种、2 种气质与 8 个调色板', () => {
+test('1200 个 id 能覆盖全部 18 个物种、8 个调色板与全部配饰', () => {
   const species = new Set<string>()
   const palettes = new Set<string>()
-  const moods = new Set<string>()
-  for (let i = 0; i < 600; i += 1) {
+  const accessories = new Set<string>()
+  for (let i = 0; i < 1200; i += 1) {
     const spec = birdSpecFor(`bot_${i}`)
     species.add(spec.species)
     palettes.add(spec.palette.name)
-    moods.add(spec.species === 'chick' || spec.species === 'duck' || spec.species === 'owl' || spec.species === 'sparrow' || spec.species === 'penguin' || spec.species === 'robin' ? 'cute' : 'crazy')
+    accessories.add(spec.defaultAccessory)
   }
-  assert.equal(BIRD_SPECIES.length, 12)
+  assert.equal(BIRD_SPECIES.length, 18)
   assert.deepEqual([...species].sort(), [...BIRD_SPECIES].sort())
-  assert.deepEqual([...moods].sort(), [...BIRD_MOODS].sort())
   assert.deepEqual([...palettes].sort(), BIRD_PALETTES.map((palette) => palette.name).sort())
+  assert.deepEqual([...accessories].sort(), [...BIRD_ACCESSORIES].sort())
+  assert.deepEqual([...BIRD_MOODS].sort(), ['crazy', 'cute'])
+})
+
+test('配饰：角色优先，其次 id 稳定兜底，显式 accessory 最高优先', () => {
+  assert.equal(accessoryForRole('研究'), 'glasses')
+  assert.equal(accessoryForRole('数据分析'), 'glasses')
+  assert.equal(accessoryForRole('数据'), 'headphones')
+  assert.equal(accessoryForRole('量化研究'), 'glasses')
+  assert.equal(accessoryForRole('风控'), 'hardhat')
+  assert.equal(accessoryForRole('评审'), 'hardhat')
+  assert.equal(accessoryForRole('主持'), 'crown')
+  assert.equal(accessoryForRole('未知角色'), null)
+
+  const glasses = birdSvg('bot_role', { role: '研究' })
+  assert.match(glasses, /stroke-width="2.2"/)
+  assert.doesNotMatch(glasses, /rect x="16"/)
+  const headphones = birdSvg('bot_role', { role: '数据' })
+  assert.match(headphones, /rect x="16"/)
+  const hat = birdSvg('bot_role', { role: '风控' })
+  assert.match(hat, /E9B23B/)
+  const crown = birdSvg('bot_role', { role: '主持' })
+  assert.match(crown, /E8C24A/)
+
+  // 显式 accessory 覆盖 role
+  const tie = birdSvg('bot_role', { role: '数据', accessory: 'tie' })
+  assert.match(tie, /B33A36/)
+  assert.doesNotMatch(tie, /rect x="16"/)
+
+  // paused 不戴配饰（躺平不需要行头）
+  const paused = birdSvg('bot_role', { role: '数据', state: 'paused' })
+  assert.doesNotMatch(paused, /rect x="16"/)
+
+  // 同一 id 的兜底配饰稳定
+  assert.equal(accessoryForId('bot_fixed'), accessoryForId('bot_fixed'))
 })
 
 test('可爱系与疯狂系的表情不同：疯狂系压眉、瞳孔更小', () => {

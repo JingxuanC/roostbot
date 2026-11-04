@@ -58,7 +58,17 @@ export function botAvatar(bot, size = 24, options = {}) {
     const state = options.state ?? (bot && typeof bot === 'object' && bot.status === 'paused' ? 'paused' : 'idle')
     const label = bot && typeof bot === 'object' && typeof bot.name === 'string' ? bot.name : 'Bot 头像'
     const wrap = el('span', { class: `avatar avatar-${size}` })
-    wrap.append(svgNode(birdSvg(id, { size, state, label })))
+    wrap.append(
+      svgNode(
+        birdSvg(id, {
+          size,
+          state,
+          label,
+          ...(options.accessory === undefined ? {} : { accessory: options.accessory }),
+          ...(bot && typeof bot === 'object' && typeof bot.role === 'string' && bot.role !== '' ? { role: bot.role } : {})
+        })
+      )
+    )
     return wrap
   }
   const wrap = el('span', { class: `avatar avatar-${size}` })

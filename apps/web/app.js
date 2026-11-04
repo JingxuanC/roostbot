@@ -369,6 +369,29 @@ function renderSidebarBots() {
   }
 }
 
+/**
+ * 房间图标（bot-identity §8）：≤4 个成员鸟头拼合，2×2 + 超出计数；
+ * 拿不到成员时返回 null，由调用方决定退化显示。
+ */
+function roomFlock(room, size = 24) {
+  const members = roomMembers(room)
+  if (members.length === 0) return null
+  const wrap = el('span', { class: 'room-flock', style: `--flock-size:${size}px` })
+  for (const member of members.slice(0, 4)) {
+    const bot = STORE.bots.find((item) => item.id === member.botId)
+    const label = member.name || (bot && bot.name) || 'Bot'
+    wrap.append(
+      botAvatar(
+        bot ?? { id: member.botId, name: label },
+        Math.max(10, Math.round(size / 2)),
+        member.role === 'host' ? { accessory: 'crown' } : {}
+      )
+    )
+  }
+  if (members.length > 4) wrap.append(el('span', { class: 'room-flock-more', text: `+${members.length - 4}` }))
+  return wrap
+}
+
 /** 侧栏房间：预览用样例，连上控制面后用真实列表；当前房间 aria-current。 */
 function renderSidebarRooms() {
   const list = $('#room-list')
@@ -380,6 +403,8 @@ function renderSidebarRooms() {
       const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
       const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
       link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
+      const flock = roomFlock(room, 26)
+      if (flock) link.append(flock)
       link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
       const origin = roomOriginLabel(room)
       if (origin !== '') {
@@ -439,7 +464,7 @@ function renderRoomMessage(event) {
   const bot = botIdentity(event.actor.id)
   const article = el('article', { class: 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(avatar(event.actor.id, 24))
+  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 24))
   head.append(el('span', { class: 'msg-name', text: bot.name }))
   if (bot.role) head.append(el('span', { class: 'msg-role', text: bot.role }))
   article.append(head)
@@ -475,7 +500,7 @@ function renderPeerMessage(event, delivery) {
   })
   const chev = el('span', { class: 'chev', 'aria-hidden': 'true', text: '▸' })
   toggle.append(chev)
-  toggle.append(avatar(event.actor.id, 16))
+  toggle.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 16))
   toggle.append(el('span', { class: 'peer-name', text: event.peer.from || bot.name }))
   if (verb) toggle.append(el('span', { class: 'peer-verb', text: ` · ${verb}` }))
   toggle.append(el('span', { class: 'peer-summary', text: ` · ${summary}` }))
@@ -1594,6 +1619,12 @@ function applyLiveRoomChrome(room) {
   ROOM.name = name
   const heading = $('#room-name')
   if (heading) heading.textContent = name
+  const flockHolder = $('#room-flock')
+  if (flockHolder) {
+    const flock = roomFlock(room, 40)
+    flockHolder.replaceChildren(...(flock ? [flock] : []))
+    flockHolder.hidden = flock === null
+  }
   setTitle(name)
   const strip = $('#demo-strip-text')
   if (strip) strip.hidden = true
