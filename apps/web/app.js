@@ -537,6 +537,9 @@ function renderEvent(event) {
 function renderMessages() {
   const list = $('#messages')
   list.replaceChildren()
+  if (LIVE.logHasMore && LIVE.logBefore !== null) {
+    list.append(renderLoadOlder())
+  }
   if (ROOM.events.length === 0) {
     list.append(el('p', { class: 'messages-empty muted', text: '还没有消息。说一句，开启一轮。' }))
   } else {
@@ -544,6 +547,57 @@ function renderMessages() {
   }
   // 初始渲染完再开 live region，避免读屏一次念完整个房间。
   list.setAttribute('aria-live', 'polite')
+}
+
+/** 日志裁剪投影的"向前翻页"入口（rooms.md §3：最多翻到最近 60 条）。 */
+function renderLoadOlder() {
+  const wrap = el('div', { class: 'messages-older' })
+  const button = ui.button('加载更早的消息', { variant: 'ghost', size: 'sm' })
+  button.addEventListener('click', () => {
+    void loadOlderMessages(button)
+  })
+  wrap.append(button)
+  return wrap
+}
+
+async function loadOlderMessages(button) {
+  if (!LIVE.active || !LIVE.roomId || LIVE.logBefore === null) return
+  ui.setBusy(button, true, '加载中…')
+  const roomId = LIVE.roomId
+  const before = LIVE.logBefore
+  try {
+    const data = await api.get(
+      `/api/rooms/${encodeURIComponent(roomId)}/messages?before=${encodeURIComponent(String(before))}`
+    )
+    if (LIVE.roomId !== roomId) return
+    const older = (Array.isArray(data?.messages) ? data.messages : []).map((message) =>
+      toEvent(message, roomId)
+    )
+    LIVE.logHasMore = Boolean(data?.page?.hasMore)
+    LIVE.logBefore = Number.isSafeInteger(data?.page?.before) ? data.page.before : null
+
+    const known = new Set(ROOM.events.map((event) => event.seq))
+    const fresh = older.filter((event) => !known.has(event.seq))
+    if (fresh.length === 0) {
+      renderMessages()
+      return
+    }
+
+    // 把旧消息前插，重新渲染后保持视口停在原来的消息上。
+    const list = $('#messages')
+    const prevHeight = list ? list.scrollHeight : 0
+    const prevTop = list ? list.scrollTop : 0
+    ROOM.events = [...fresh, ...ROOM.events]
+    renderMessages()
+    if (list) list.scrollTop = prevTop + (list.scrollHeight - prevHeight)
+  } catch (error) {
+    if (isAuthError(error)) {
+      requirePair()
+      return
+    }
+    console.error('load older messages failed', error)
+    ui.setBusy(button, false)
+  }
 }
 
 function renderNeeds() {
@@ -776,6 +830,9 @@ const LIVE = {
   lastSeq: 0,
   seen: new Set(),
   stream: null,
+  // 房间日志裁剪投影（rooms.md §3）：首看 12 条，before 向前翻到 60 条。
+  logHasMore: false,
+  logBefore: null,
 }
 
 const STORE = {
@@ -1093,6 +1150,8 @@ function resetRoomChrome() {
   LIVE.roomId = ''
   LIVE.lastSeq = 0
   LIVE.seen = new Set()
+  LIVE.logHasMore = false
+  LIVE.logBefore = null
   if (LIVE.stream) {
     LIVE.stream.close()
     LIVE.stream = null
@@ -1211,6 +1270,9 @@ async function openRoomRoute(id, seq) {
     LIVE.room = room
     LIVE.lastSeq = 0
     LIVE.seen = new Set()
+    // 首看只给最近 12 条；page.before 是"加载更早"的游标。
+    LIVE.logHasMore = Boolean(data?.page?.hasMore)
+    LIVE.logBefore = Number.isSafeInteger(data?.page?.before) ? data.page.before : null
     ROOM.events = list.map((message) => toEvent(message, room.id))
     for (const message of list) {
       LIVE.seen.add(message.seq)

@@ -20,6 +20,7 @@ import {
   createSession as createSessionInStore,
   createWorkspace as createWorkspaceInStore,
   deleteBot as deleteBotInStore,
+  deleteRoom as deleteRoomInStore,
   findSessionByTokenHash,
   getBot as getBotInStore,
   getRoom as getRoomInStore,
@@ -29,7 +30,9 @@ import {
   listRooms as listRoomsInStore,
   listWorkspaces as listWorkspacesInStore,
   readMessages as readMessagesInStore,
+  readRoomLogPage as readRoomLogPageInStore,
   removeRoomMember as removeRoomMemberInStore,
+  restoreBot as restoreBotInStore,
   sendMessage as sendMessageInStore,
   touchSession,
   updateBot as updateBotInStore,
@@ -47,9 +50,13 @@ import {
   type CreateSessionInput,
   type CreateWorkspaceInput,
   type DeleteBotPortInput,
+  type DeleteRoomPortInput,
   type ListBotsInput,
   type PairingRecord,
+  type ReadRoomLogPortInput,
   type RemoveRoomMemberPortInput,
+  type RestoreBotPortInput,
+  type RoomLogPageRecord,
   type RoomMemberMutationInput,
   type RoomMessageRecord,
   type RoomRecord,
@@ -336,7 +343,15 @@ export function createStorePort(store: Store): StorePort {
       const bot = getBotInStore(store, input.botId)
       if (bot === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${input.botId}`)
       requireMembership(store, bot.workspaceId, input.accountId)
-      deleteBotInStore(store, input.botId)
+      deleteBotInStore(store, input.botId, { actor: input.accountId, now: input.now })
+    },
+
+    async restoreBot(input: RestoreBotPortInput): Promise<Bot> {
+      // 软删的 Bot 对 getBot 不可见，这里要带 tombstone 读才能恢复。
+      const bot = getBotInStore(store, input.botId, { includeDeleted: true })
+      if (bot === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${input.botId}`)
+      requireMembership(store, bot.workspaceId, input.accountId)
+      return copyBot(restoreBotInStore(store, input.botId, { actor: input.accountId, now: input.now }))
     },
 
     // ---- M4：房间扩展 -------------------------------------------------------
@@ -403,6 +418,22 @@ export function createStorePort(store: Store): StorePort {
       const updated = getRoomDetailInStore(store, input.roomId)
       if (updated === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
       return detailToRecord(updated, roomIsDm(store, updated.room.id))
+    },
+
+    async deleteRoom(input: DeleteRoomPortInput): Promise<void> {
+      const room = getRoomInStore(store, input.roomId)
+      if (room === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
+      requireMembership(store, room.workspaceId, input.accountId)
+      deleteRoomInStore(store, input.roomId, input.now)
+    },
+
+    async readRoomLog(input: ReadRoomLogPortInput & { accountId: string }): Promise<RoomLogPageRecord> {
+      requireRoomMembership(store, input.roomId, input.accountId)
+      return toRoomLogPage(readRoomLogPageInStore(store, input))
+    },
+
+    async readRoomLogInternal(input: ReadRoomLogPortInput): Promise<RoomLogPageRecord> {
+      return toRoomLogPage(readRoomLogPageInStore(store, input))
     },
   }
 }
@@ -488,6 +519,20 @@ function toMessageRecord(message: {
     actorKind: message.actor.kind as RoomMessageRecord['actorKind'],
     actorId: message.actor.id,
     text: message.text,
+  }
+}
+
+function toRoomLogPage(page: {
+  messages: Array<Parameters<typeof toMessageRecord>[0]>
+  hasMore: boolean
+  oldestSeq: number | null
+  floorSeq: number
+}): RoomLogPageRecord {
+  return {
+    messages: page.messages.map(toMessageRecord),
+    hasMore: page.hasMore,
+    oldestSeq: page.oldestSeq,
+    floorSeq: page.floorSeq,
   }
 }
 

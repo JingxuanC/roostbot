@@ -3,6 +3,7 @@
 //   POST   /api/rooms                扩参：memberBotIds / hostBotId / responder / notice / purpose
 //   GET    /api/rooms/:id            房间 + members + 当前 round（轮次引擎未接入前固定 null）
 //   PATCH  /api/rooms/:id            name / notice / responder / responderBot
+//   DELETE /api/rooms/:id            删房间投影（members/rounds/seen/sessions）；events 不动
 //   POST   /api/rooms/:id/members    {botIds:[]}
 //   DELETE /api/rooms/:id/members/:botId
 //
@@ -267,6 +268,27 @@ export async function handlePatchRoom(
   }
 }
 
+export async function handleDeleteRoom(
+  ctx: RoomsExtContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
+  const roomId = roomIdFromPath(url.pathname)
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+
+  try {
+    // 删除语义在 store 层：rooms/members/rounds/seen/sessions 投影行清掉，
+    // 正在跑的轮次先标 stopped；events 是 append-only 事实源，不动。
+    await ctx.store.deleteRoom({ accountId: auth.session.accountId, roomId, now: ctx.now() })
+    sendJson(res, 200, { ok: true })
+  } catch (err) {
+    sendRoomFailure(res, err)
+  }
+}
+
 export async function handleAddRoomMembers(
   ctx: RoomsExtContext,
   req: IncomingMessage,
@@ -404,6 +426,10 @@ function sendRoomFailure(res: ServerResponse, err: unknown): void {
         break
     }
   }
+  // memory port 抛的是普通 Error；与 server.ts 的 sendStoreFailure 同一套口径。
+  const message = err instanceof Error ? err.message : String(err)
+  if (/unknown room/i.test(message)) return sendError(res, 404, 'room_not_found', message)
+  if (/not a member|forbidden/i.test(message)) return sendError(res, 403, 'forbidden', message)
   console.error('roost api: room store failure', err)
   sendError(res, 500, 'internal_error', 'room store failure')
 }

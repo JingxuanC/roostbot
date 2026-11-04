@@ -5,7 +5,8 @@
 //   POST   /api/bots
 //   GET    /api/bots/:id
 //   PATCH  /api/bots/:id
-//   DELETE /api/bots/:id
+//   DELETE /api/bots/:id            ← 软删：写 deleted_at、退出所有房间（bots.md §5/§8）
+//   POST   /api/bots/:id/restore  ← 7 天内可恢复，超窗 409 bot.restore_expired
 //
 // 全部走 Bearer 会话；写操作的 Origin 校验在 server.ts 的路由入口统一做（所有写方法）。
 // 错误沿用 {ok:false,error:{code,message}}；code 用契约里的点号形式：
@@ -219,8 +220,27 @@ export async function handleDeleteBot(
   if (botId === null) return sendError(res, 404, 'not_found', 'malformed bot path')
 
   try {
-    await ctx.store.deleteBot({ accountId: auth.session.accountId, botId })
+    await ctx.store.deleteBot({ accountId: auth.session.accountId, botId, now: ctx.now() })
     sendJson(res, 200, { ok: true })
+  } catch (err) {
+    sendBotFailure(res, err)
+  }
+}
+
+export async function handleRestoreBot(
+  ctx: BotsRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
+  const botId = botRestoreIdFromPath(url.pathname)
+  if (botId === null) return sendError(res, 404, 'not_found', 'malformed bot restore path')
+
+  try {
+    const bot = await ctx.store.restoreBot({ accountId: auth.session.accountId, botId, now: ctx.now() })
+    sendJson(res, 200, { bot })
   } catch (err) {
     sendBotFailure(res, err)
   }
@@ -278,6 +298,16 @@ function botIdFromPath(pathname: string): string | null {
   }
 }
 
+function botRestoreIdFromPath(pathname: string): string | null {
+  const match = /^\/api\/bots\/([^/]+)\/restore$/.exec(pathname)
+  if (match === null) return null
+  try {
+    return decodeURIComponent(match[1]!)
+  } catch {
+    return null
+  }
+}
+
 function readBotName(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const name = value.trim()
@@ -306,6 +336,8 @@ function sendBotFailure(res: ServerResponse, err: unknown): void {
         return sendError(res, 400, 'bot.no_model', err.message)
       case 'BOT_NOT_FOUND':
         return sendError(res, 404, 'bot.not_found', err.message)
+      case 'BOT_RESTORE_EXPIRED':
+        return sendError(res, 409, 'bot.restore_expired', err.message)
       case 'WORKSPACE_NOT_FOUND':
         return sendError(res, 404, 'workspace_not_found', err.message)
       case 'FORBIDDEN':

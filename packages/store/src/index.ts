@@ -54,19 +54,23 @@ export type { CreateSessionInput, Session } from './types.ts'
 
 export { createRoom, getRoom, listRooms, readMessages, sendMessage, REPLY_MODES } from './rooms.ts'
 export type { Room, RoomMessage, SendMessageInput } from './types.ts'
+export { deleteRoom, readRoomLogPage } from './rooms.ts'
+export type { RoomLogPage } from './rooms.ts'
 
 // ---- M4：Bot 域 ---------------------------------------------------------------
 export {
   BOT_APPROVALS,
+  BOT_SOFT_DELETE_WINDOW_MS,
   BOT_STATUSES,
   createBot,
   deleteBot,
   getBot,
   listBots,
   listBotVersions,
+  restoreBot,
   updateBot,
 } from './bots.ts'
-export type { BotVersion, CreateBotStoreInput, UpdateBotStoreInput } from './bots.ts'
+export type { BotLifecycleOptions, BotVersion, CreateBotStoreInput, UpdateBotStoreInput } from './bots.ts'
 
 // ---- M4：房间成员与扩展列 ------------------------------------------------------
 export {

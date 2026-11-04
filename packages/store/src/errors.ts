@@ -37,6 +37,7 @@ export const STORE_ERROR_CODES = [
   'BOT_NOT_FOUND',
   'BOT_NO_MODEL',
   'BOT_WRITE_FAILED',
+  'BOT_RESTORE_EXPIRED',
 ] as const
 
 export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number]

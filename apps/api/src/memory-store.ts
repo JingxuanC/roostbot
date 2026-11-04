@@ -5,6 +5,7 @@
 //
 // 与真实 store 的差别：这里没有跨进程并发，单线程 JS 天然满足 port.ts 的原子性契约。
 import { randomBytes } from 'node:crypto'
+import { ROUND_LIMITS } from '../../../packages/contract/src/index.ts'
 import { PairingCodeCollisionError } from './port.ts'
 import type {
   ClaimPairingCodeInput,
@@ -12,9 +13,12 @@ import type {
   CreatePairingCodeInput,
   CreateSessionInput,
   CreateWorkspaceInput,
+  DeleteRoomPortInput,
   DevicePlatform,
   HomeMode,
   PairingRecord,
+  ReadRoomLogPortInput,
+  RoomLogPageRecord,
   RoomMessageRecord,
   RoomRecord,
   SessionRecord,
@@ -249,6 +253,47 @@ export function createMemoryStore(): StorePort {
         idem: input.idem,
         actor: { kind: 'user', id: input.accountId }
       })
+    },
+
+    async deleteRoom(input: DeleteRoomPortInput): Promise<void> {
+      // 内存实现直接丢弃消息；真实 store 保留 events（append-only 事实源），
+      // 只清投影行。对 API 可观察行为一致：房间删除后两条路径都读不到房间。
+      const room = rooms.get(input.roomId)
+      if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
+      const entry = workspaces.get(room.workspaceId)
+      if (entry === undefined || !entry.members.has(input.accountId)) {
+        throw new Error(`account ${input.accountId} is not a member of ${room.workspaceId}`)
+      }
+      rooms.delete(input.roomId)
+      messages.delete(input.roomId)
+    },
+
+    async readRoomLog(input: ReadRoomLogPortInput & { accountId: string }): Promise<RoomLogPageRecord> {
+      const room = rooms.get(input.roomId)
+      if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
+      const entry = workspaces.get(room.workspaceId)
+      if (entry === undefined || !entry.members.has(input.accountId)) {
+        throw new Error(`account ${input.accountId} is not a member of ${room.workspaceId}`)
+      }
+      return logPage(messages.get(room.id) ?? [], input.beforeSeq, input.limit)
+    },
+
+    async readRoomLogInternal(input: ReadRoomLogPortInput): Promise<RoomLogPageRecord> {
+      const room = rooms.get(input.roomId)
+      if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
+      return logPage(messages.get(room.id) ?? [], input.beforeSeq, input.limit)
     }
   }
+}
+
+/** 日志裁剪投影（rooms.md §3）：保留最近 logMax 条，首看 firstLook 条；before 向前翻页。 */
+function logPage(all: RoomMessageRecord[], beforeSeq: number | undefined, limit: number | undefined): RoomLogPageRecord {
+  const floorSeq = all.length > ROUND_LIMITS.logMax ? all[all.length - ROUND_LIMITS.logMax]!.seq : 1
+  const take = Math.min(ROUND_LIMITS.logMax, limit ?? ROUND_LIMITS.firstLook)
+  const page = all
+    .filter((message) => message.seq >= floorSeq && (beforeSeq === undefined || message.seq < beforeSeq))
+    .slice(-take)
+    .map((message) => ({ ...message }))
+  const oldestSeq = page.length === 0 ? null : page[0]!.seq
+  return { messages: page, hasMore: oldestSeq !== null && oldestSeq > floorSeq, oldestSeq, floorSeq }
 }

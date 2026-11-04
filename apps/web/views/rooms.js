@@ -568,7 +568,7 @@ function roomSettingsView(ctx, room, bots, botsError) {
       ui.setStatus(
         dangerStatus,
         missing
-          ? `删除失败：控制面还没有房间删除接口（HTTP 404）。${cause instanceof Error ? cause.message : ''}`
+          ? '删除失败：找不到这个房间，它可能已经被删除了。'
           : `删除失败：${cause instanceof Error ? cause.message : String(cause)}`,
         'error'
       )
@@ -587,7 +587,7 @@ function roomSettingsView(ctx, room, bots, botsError) {
   form.append(formError, el('div', { class: 'form-foot sticky-foot' }, [sectionStatus, saveButton]))
 
   const danger = ui.section('危险区', [deleteButton, confirmRow, dangerStatus], {
-    description: '删除房间会连同成员关系一起消失；当前接口还没有 DELETE /api/rooms/:id（契约 §2 未列）。',
+    description: '删除房间会连同成员、轮次与已读游标一起消失，无法在界面上恢复（日志事件仍保留在底层存储里）。',
   })
   danger.classList.add('danger-zone')
   form.append(danger)

@@ -84,7 +84,8 @@ export function createDmRoom(store: Store, input: CreateDmRoomInput): DmRoom {
   const at =
     req.at === undefined || req.at === null ? Date.now() : asInteger(req.at, 'dm.at', 0, 'INVALID_ROOM')
 
-  const bot = store.db.prepare('SELECT id, workspace_id, name FROM bots WHERE id = ?').get(botId) as
+  // 已软删的 Bot（deleted_at 非空）不能建 DM（bots.md §5）。
+  const bot = store.db.prepare('SELECT id, workspace_id, name FROM bots WHERE id = ? AND deleted_at IS NULL').get(botId) as
     | { id: string; workspace_id: string; name: string }
     | undefined
   if (bot === undefined || bot === null) {

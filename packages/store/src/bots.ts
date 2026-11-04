@@ -7,14 +7,22 @@
 //      PATCH 仍可显式改 model（bots.md §4 的「模型」设置项）。
 //   3. 人设版本化：persona 变化时写 bot_versions（field='persona'），历史只追加。
 //
-// 删除：本模块做「直接删」。契约的 bots 表没有 deleted_at / tombstone 列，BotStatus
-// 也只有 active|paused，软删没有可落库的字段；硬删同时清掉 bot_versions 和 room_members，
-// 保证「删掉的 Bot 不能被再拉进房间」且房间的 host/responder 不会指向幽灵成员。
-// （设计文档想要 7 天可恢复；见交付报告里的契约偏差。）
+// 删除（bots.md §5，0010 起）：软删。deleteBot 只写 bots.deleted_at（epoch 毫秒），
+// 同时按 bots.md §8 待决 3 的倾向把 Bot 退出所有房间（room_members，含 DM），
+// 每个房间写一条 bot.removed_from_room 事件，再写一条 workspace 级的 bot.deleted。
+// 软删期间该行仍占住 (workspace_id, name) 唯一约束：名字不可复用，
+// 7 天内 restoreBot 可完整恢复身份（房间成员关系不自动恢复）。
+// 超过 BOT_SOFT_DELETE_WINDOW_MS（7 天）恢复抛 BOT_RESTORE_EXPIRED。
+// getBot/listBots 默认看不到已软删的 Bot；需要时传 includeDeleted。
+//
+// 生命周期事件（bots.md §4/§8）：bot.created / bot.updated / bot.deleted / bot.restored
+// 写进同一份 events 日志（events.md §2），domain='bot'。bot.created/updated/deleted/restored
+// 是 workspace 级事实，audience='team'；bot.removed_from_room 属于那个房间，audience='room:<id>'。
 
 import { BOT_LIMITS } from '../../contract/src/index.ts'
 import type { Bot, BotStatus, UpdateBotInput } from '../../contract/src/index.ts'
 import { StoreError } from './errors.ts'
+import { appendEvent } from './events.ts'
 import { asInteger, asNonEmptyString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
 import { newRoostId } from './ids.ts'
 import { detachBotFromRooms } from './room-members.ts'
@@ -23,8 +31,11 @@ import type { Store } from './types.ts'
 export const BOT_STATUSES = ['active', 'paused'] as const
 export const BOT_APPROVALS = ['ask', 'edits', 'auto', 'full'] as const
 
+/** 软删恢复窗口：7 天（bots.md §5「软删 7 天可恢复」）。 */
+export const BOT_SOFT_DELETE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
 const BOT_COLUMNS =
-  'id, workspace_id, name, role, persona, provider, model, avatar_json, skills_json, tools_allow_json, tools_deny_json, approval, memory_scopes_json, status, created_by, created_at'
+  'id, workspace_id, name, role, persona, provider, model, avatar_json, skills_json, tools_allow_json, tools_deny_json, approval, memory_scopes_json, status, created_by, created_at, deleted_at'
 
 /** 名字里不允许出现的字符：控制字符、路径分隔符、@（@Name 是房间里的提及语法）。 */
 const ILLEGAL_NAME = /[\u0000-\u001f\u007f/\\<>:"|?*@]/
@@ -43,16 +54,22 @@ export interface CreateBotStoreInput {
   toolsDeny?: string[]
   approval?: Bot['approval']
   memoryScopes?: string[]
-  /** 创建者（用户 id 或 bot id）；写 bot_versions 时作为 actor。 */
+  /** 创建者（用户 id 或 bot id）；写 bot_versions 与 bot.created 事件时作为 actor。 */
   createdBy: string
   createdAt?: number
 }
 
 export interface UpdateBotStoreInput {
   botId: string
-  /** 改人设时写进 bot_versions 的 actor。 */
+  /** 改人设时写进 bot_versions、写 bot.updated 事件时的 actor。 */
   actor: string
   patch: UpdateBotInput
+}
+
+/** deleteBot / restoreBot 的可选项：actor 写进事件，now 供测试注入时钟。 */
+export interface BotLifecycleOptions {
+  actor?: string
+  now?: number
 }
 
 export interface BotVersion {
@@ -81,6 +98,7 @@ interface BotRow {
   status: string
   created_by: string
   created_at: number | bigint
+  deleted_at: number | bigint | null
 }
 
 export function createBot(store: Store, input: CreateBotStoreInput): Bot {
@@ -123,7 +141,7 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
     store.db
       .prepare(
         `INSERT INTO bots (${BOT_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)`,
       )
       .run(
         id,
@@ -146,6 +164,15 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
     if (persona !== '') {
       insertBotVersion(store, { botId: id, field: 'persona', value: persona, actor: createdBy, createdAt })
     }
+
+    appendBotEvent(store, {
+      kind: 'bot.created',
+      actor: createdBy,
+      botId: id,
+      audience: 'team',
+      idem: `bot:${id}:created`,
+      payload: { workspaceId, name, model, provider },
+    })
 
     store.db.exec('RELEASE roost_create_bot')
   } catch (err) {
@@ -181,18 +208,24 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
   }
 }
 
-export function getBot(store: Store, id: string): Bot | null {
+/** 默认看不到已软删的 Bot（返回 null）；includeDeleted 时连 tombstone 一起读。 */
+export function getBot(store: Store, id: string, opts: { includeDeleted?: boolean } = {}): Bot | null {
   assertOpen(store)
   const botId = asNonEmptyString(id, 'bot.id', 'INVALID_BOT')
   const row = store.db.prepare(`SELECT ${BOT_COLUMNS} FROM bots WHERE id = ?`).get(botId)
-  return row === undefined || row === null ? null : rowToBot(row)
+  if (row === undefined || row === null) return null
+  if (opts.includeDeleted !== true && (row as BotRow).deleted_at !== null) return null
+  return rowToBot(row)
 }
 
-export function listBots(store: Store, workspaceId: string): Bot[] {
+/** 默认不含已软删的 Bot；includeDeleted 时一并返回（带 deletedAt）。 */
+export function listBots(store: Store, workspaceId: string, opts: { includeDeleted?: boolean } = {}): Bot[] {
   assertOpen(store)
   const id = asNonEmptyString(workspaceId, 'bot.workspaceId', 'INVALID_BOT')
   const rows = store.db
-    .prepare(`SELECT ${BOT_COLUMNS} FROM bots WHERE workspace_id = ? ORDER BY created_at, rowid`)
+    .prepare(
+      `SELECT ${BOT_COLUMNS} FROM bots WHERE workspace_id = ?${opts.includeDeleted === true ? '' : ' AND deleted_at IS NULL'} ORDER BY created_at, rowid`,
+    )
     .all(id)
   return rows.map((row) => rowToBot(row))
 }
@@ -205,7 +238,7 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
   const patch = asRecord(req.patch, 'bot.patch', 'INVALID_BOT')
 
   const current = getBotRow(store, botId)
-  if (current === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${botId}`)
+  if (current === null || current.deleted_at !== null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${botId}`)
 
   const name = patch.name === undefined ? current.name : readBotName(patch.name)
   const role = patch.role === undefined ? current.role : readShortText(patch.role, 'bot.role', BOT_LIMITS.roleMax)
@@ -236,6 +269,22 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
   const status = patch.status === undefined ? readStatus(current.status, 'active') : readStatus(patch.status, 'active')
 
   const personaChanged = patch.persona !== undefined && persona !== current.persona
+
+  // bot.updated 事件的 changed 列表：只记真正变了的字段，同值 PATCH 不写事件。
+  // JSON 字段与 current.*_json 直接按字符串比较：写入侧统一用 JSON.stringify，
+  // 与读出的存储格式一致；若将来引入其它写入路径，这里要改成规范化比较。
+  const changed: string[] = []
+  if (name !== current.name) changed.push('name')
+  if (role !== current.role) changed.push('role')
+  if (personaChanged) changed.push('persona')
+  if (model !== current.model) changed.push('model')
+  if (avatarJson !== current.avatar_json) changed.push('avatar')
+  if (JSON.stringify(skills) !== current.skills_json) changed.push('skills')
+  if (JSON.stringify(toolsAllow) !== current.tools_allow_json) changed.push('toolsAllow')
+  if (JSON.stringify(toolsDeny) !== current.tools_deny_json) changed.push('toolsDeny')
+  if (approval !== current.approval) changed.push('approval')
+  if (JSON.stringify(memoryScopes) !== current.memory_scopes_json) changed.push('memoryScopes')
+  if (status !== current.status) changed.push('status')
 
   store.db.exec('SAVEPOINT roost_update_bot')
   try {
@@ -275,6 +324,16 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
       insertBotVersion(store, { botId, field: 'persona', value: persona, actor, createdAt: Date.now() })
     }
 
+    if (changed.length > 0) {
+      appendBotEvent(store, {
+        kind: 'bot.updated',
+        actor,
+        botId,
+        audience: 'team',
+        payload: { workspaceId: current.workspace_id, changed },
+      })
+    }
+
     store.db.exec('RELEASE roost_update_bot')
   } catch (err) {
     rollback(store, 'roost_update_bot')
@@ -294,20 +353,46 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
 }
 
 /**
- * 硬删（见文件头）：bots 行、bot_versions、所有房间成员关系一起去掉。
- * 若它是某个房间的 host，房间会自动把 host 让给下一个成员（或清空）。
+ * 软删（见文件头）：写 bots.deleted_at，把 Bot 退出所有房间（含 DM），
+ * 每个房间写 bot.removed_from_room 事件，最后写 workspace 级的 bot.deleted。
+ * bots 行与 bot_versions 都保留，7 天内可 restoreBot 恢复。
+ * 已软删的 Bot 视为不存在（BOT_NOT_FOUND）；重复删除不会写第二条 bot.deleted。
  */
-export function deleteBot(store: Store, botId: string): void {
+export function deleteBot(store: Store, botId: string, opts: BotLifecycleOptions = {}): void {
   assertOpen(store)
   const id = asNonEmptyString(botId, 'bot.id', 'INVALID_BOT')
   const row = getBotRow(store, id)
-  if (row === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${id}`)
+  if (row === null || row.deleted_at !== null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${id}`)
+  const now = readLifecycleNow(opts, 'bot.delete.now')
 
   store.db.exec('SAVEPOINT roost_delete_bot')
   try {
+    const memberships = store.db
+      .prepare('SELECT room_id FROM room_members WHERE bot_id = ? AND bot_id IS NOT NULL')
+      .all(id) as Array<{ room_id: string }>
+
     detachBotFromRooms(store, id)
-    store.db.prepare('DELETE FROM bot_versions WHERE bot_id = ?').run(id)
-    store.db.prepare('DELETE FROM bots WHERE id = ?').run(id)
+    store.db.prepare('UPDATE bots SET deleted_at = ? WHERE id = ?').run(now, id)
+
+    for (const membership of memberships) {
+      appendBotEvent(store, {
+        kind: 'bot.removed_from_room',
+        actor: opts.actor,
+        botId: id,
+        audience: `room:${membership.room_id}`,
+        idem: `bot:${id}:removed_from_room:${membership.room_id}:${now}`,
+        payload: { roomId: membership.room_id, name: row.name },
+      })
+    }
+    appendBotEvent(store, {
+      kind: 'bot.deleted',
+      actor: opts.actor,
+      botId: id,
+      audience: 'team',
+      idem: `bot:${id}:deleted:${now}`,
+      payload: { workspaceId: row.workspace_id, name: row.name, rooms: memberships.map((m) => m.room_id) },
+    })
+
     store.db.exec('RELEASE roost_delete_bot')
   } catch (err) {
     rollback(store, 'roost_delete_bot')
@@ -316,6 +401,55 @@ export function deleteBot(store: Store, botId: string): void {
       cause: err,
     })
   }
+}
+
+/**
+ * 恢复软删的 Bot：清掉 deleted_at，写 bot.restored 事件。
+ *
+ * - Bot 不存在 → BOT_NOT_FOUND；
+ * - 没被删过 → 幂等返回当前 Bot，不重复写事件；
+ * - 删除超过 BOT_SOFT_DELETE_WINDOW_MS（7 天）→ BOT_RESTORE_EXPIRED；
+ * - 房间成员关系不自动恢复（删除时已逐房写 bot.removed_from_room）。
+ */
+export function restoreBot(store: Store, botId: string, opts: BotLifecycleOptions = {}): Bot {
+  assertOpen(store)
+  const id = asNonEmptyString(botId, 'bot.id', 'INVALID_BOT')
+  const row = getBotRow(store, id)
+  if (row === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${id}`)
+  if (row.deleted_at === null) return rowToBot(row)
+
+  const deletedAt = toNumber(row.deleted_at)
+  const now = readLifecycleNow(opts, 'bot.restore.now')
+  if (now - deletedAt > BOT_SOFT_DELETE_WINDOW_MS) {
+    throw new StoreError(
+      'BOT_RESTORE_EXPIRED',
+      `bot ${id} was deleted more than 7 days ago and can no longer be restored`,
+    )
+  }
+
+  store.db.exec('SAVEPOINT roost_restore_bot')
+  try {
+    store.db.prepare('UPDATE bots SET deleted_at = NULL WHERE id = ?').run(id)
+    appendBotEvent(store, {
+      kind: 'bot.restored',
+      actor: opts.actor,
+      botId: id,
+      audience: 'team',
+      idem: `bot:${id}:restored:${now}`,
+      payload: { workspaceId: row.workspace_id, name: row.name },
+    })
+    store.db.exec('RELEASE roost_restore_bot')
+  } catch (err) {
+    rollback(store, 'roost_restore_bot')
+    if (err instanceof StoreError) throw err
+    throw new StoreError('BOT_WRITE_FAILED', `failed to restore bot ${id}: ${errorMessage(err)}`, {
+      cause: err,
+    })
+  }
+
+  const restored = getBot(store, id)
+  if (restored === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${id}`)
+  return restored
 }
 
 /** 版本历史按写入时间升序（人设回滚/审计用）。 */
@@ -343,6 +477,37 @@ export function listBotVersions(store: Store, botId: string): BotVersion[] {
 }
 
 // ---- 内部 --------------------------------------------------------------------
+
+/**
+ * Bot 生命周期事件统一走这里：domain='bot'，subject 是这个 Bot，
+ * workspace 级事实 audience='team'，房间级事实 audience='room:<id>'（events.md §3）。
+ * actor 缺省为 null（store 层调用方可以给不出操作者；API 路径总是带账号 id）。
+ */
+function appendBotEvent(
+  store: Store,
+  input: {
+    kind: string
+    actor: string | undefined
+    botId: string
+    audience: string
+    idem?: string
+    payload: Record<string, unknown>
+  },
+): void {
+  appendEvent(store, {
+    domain: 'bot',
+    kind: input.kind,
+    actor: input.actor === undefined ? null : { kind: 'user', id: input.actor },
+    subject: { kind: 'bot', id: input.botId },
+    audience: input.audience,
+    ...(input.idem === undefined ? {} : { idem: input.idem }),
+    payload: input.payload,
+  })
+}
+
+function readLifecycleNow(opts: BotLifecycleOptions, label: string): number {
+  return opts.now === undefined ? Date.now() : asInteger(opts.now, label, 0, 'INVALID_BOT')
+}
 
 function insertBotVersion(
   store: Store,
@@ -509,6 +674,7 @@ function rowToBot(row: unknown): Bot {
     status: (r.status as BotStatus) ?? 'active',
     createdBy: r.created_by,
     createdAt: toNumber(r.created_at),
+    ...(r.deleted_at === null ? {} : { deletedAt: toNumber(r.deleted_at) }),
   }
 }
 

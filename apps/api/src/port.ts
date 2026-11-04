@@ -203,6 +203,15 @@ export interface UpdateBotPortInput {
 export interface DeleteBotPortInput {
   accountId: string
   botId: string
+  /** epoch 毫秒；写进 deleted_at，7 天恢复窗口从这里起算。 */
+  now: number
+}
+
+export interface RestoreBotPortInput {
+  accountId: string
+  botId: string
+  /** epoch 毫秒；7 天恢复窗口以此为「现在」。 */
+  now: number
 }
 
 export interface CreateRoomExtPortInput {
@@ -239,6 +248,31 @@ export interface RemoveRoomMemberPortInput {
   botId: string
 }
 
+export interface DeleteRoomPortInput {
+  accountId: string
+  roomId: string
+  now: number
+}
+
+/** 房间日志裁剪投影（rooms.md §3）：保留窗口最近 60 条，首看 12 条。 */
+export interface ReadRoomLogPortInput {
+  roomId: string
+  /** 只取 seq < beforeSeq 的一页（向前翻页）；省略 = 最新一页。 */
+  beforeSeq?: number
+  /** 默认 12（首看）；实现侧钳到 60（保留窗口）。 */
+  limit?: number
+}
+
+export interface RoomLogPageRecord {
+  messages: RoomMessageRecord[]
+  /** 窗口内还有更早的消息可翻（before=oldestSeq）。 */
+  hasMore: boolean
+  /** 本页最旧一条的 seq；空页为 null。 */
+  oldestSeq: number | null
+  /** 裁剪窗口下界（含）；比它旧的不再通过房间日志 API 提供。 */
+  floorSeq: number
+}
+
 export interface StorePort {
   createPairingCode(input: CreatePairingCodeInput): Promise<PairingRecord>
   claimPairingCode(input: ClaimPairingCodeInput): Promise<ClaimPairingCodeResult>
@@ -271,8 +305,10 @@ export interface StorePort {
   getBot(input: { accountId: string; botId: string }): Promise<Bot | null>
   createBot(input: CreateBotPortInput): Promise<Bot>
   updateBot(input: UpdateBotPortInput): Promise<Bot>
-  /** DELETE /api/bots/:id：软/硬删由适配器决定（当前实现是硬删，见 packages/store/src/bots.ts）。 */
+  /** DELETE /api/bots/:id：软删（写 deleted_at、退出所有房间），7 天内可 restoreBot 恢复。 */
   deleteBot(input: DeleteBotPortInput): Promise<void>
+  /** POST /api/bots/:id/restore：恢复 7 天内软删的 Bot；超窗抛 BOT_RESTORE_EXPIRED。 */
+  restoreBot(input: RestoreBotPortInput): Promise<Bot>
 
   // ---- M4：房间扩展 -----------------------------------------------------------
   /** 单房间详情（含成员）；该账号必须是房间所在 workspace 的成员。 */
@@ -285,6 +321,15 @@ export interface StorePort {
   removeRoomMember(input: RemoveRoomMemberPortInput): Promise<RoomRecord>
   /** 房间最近一轮（running 或已结束）；没有轮次时 null。 */
   getRoomRound(roomId: string): Promise<RoomRound | null>
+  /**
+   * DELETE /api/rooms/:id：删除房间投影（rooms/room_members/room_rounds/room_seen/bot_sessions），
+   * events 不动；找不到抛 ROOM_NOT_FOUND，非该 workspace 成员抛 FORBIDDEN。
+   */
+  deleteRoom(input: DeleteRoomPortInput): Promise<void>
+  /** 房间日志的裁剪投影读（首看/向前翻页）；增量（after）仍走 readMessages。 */
+  readRoomLog(input: ReadRoomLogPortInput & { accountId: string }): Promise<RoomLogPageRecord>
+  /** 内部读：不走成员校验，调用方已经用 runtime token 证明过身份。 */
+  readRoomLogInternal(input: ReadRoomLogPortInput): Promise<RoomLogPageRecord>
 }
 
 /** 6 位码空间很小：签发时必须能发现「同一个码还活着」，由 API 换一个重试。 */

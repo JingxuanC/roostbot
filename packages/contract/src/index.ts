@@ -24,6 +24,8 @@ export interface Bot {
   status: BotStatus
   createdBy: string
   createdAt: number
+  /** 软删时刻（epoch 毫秒）；未删除时缺省。只在 includeDeleted 的读取里出现。 */
+  deletedAt?: number
 }
 
 export interface CreateBotInput {

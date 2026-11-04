@@ -78,8 +78,9 @@ export function addRoomMembers(store: Store, input: AddRoomMembersInput): RoomMe
   }
 
   // 成员必须存在且属于同一个 workspace；这里逐个查，错的时候能说清楚是哪个 Bot。
+  // 已软删的 Bot（deleted_at 非空）不能再进房间（bots.md §5）。
   for (const botId of botIds) {
-    const bot = store.db.prepare('SELECT id, workspace_id, name FROM bots WHERE id = ?').get(botId) as
+    const bot = store.db.prepare('SELECT id, workspace_id, name FROM bots WHERE id = ? AND deleted_at IS NULL').get(botId) as
       | { id: string; workspace_id: string; name: string }
       | undefined
     if (bot === undefined || bot === null) {

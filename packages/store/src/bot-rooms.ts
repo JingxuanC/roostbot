@@ -89,7 +89,7 @@ export function requestBotRoom(store: Store, input: RequestBotRoomInput): Approv
   }
 
   // 2) 发起 Bot 必须存在且属于同一个 workspace（不能跨租户拉群）。
-  const bot = store.db.prepare('SELECT id, workspace_id FROM bots WHERE id = ?').get(botId) as
+  const bot = store.db.prepare('SELECT id, workspace_id FROM bots WHERE id = ? AND deleted_at IS NULL').get(botId) as
     | { id: string; workspace_id: string }
     | undefined
   if (bot === undefined || bot === null) {
@@ -135,7 +135,7 @@ export function requestBotRoom(store: Store, input: RequestBotRoomInput): Approv
     )
   }
   for (const memberId of memberBotIds) {
-    const member = store.db.prepare('SELECT id, workspace_id FROM bots WHERE id = ?').get(memberId) as
+    const member = store.db.prepare('SELECT id, workspace_id FROM bots WHERE id = ? AND deleted_at IS NULL').get(memberId) as
       | { id: string; workspace_id: string }
       | undefined
     if (member === undefined || member === null) {

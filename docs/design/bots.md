@@ -75,7 +75,8 @@ GET    /api/bots
 POST   /api/bots                {name, role, model, avatar, persona?}
 GET    /api/bots/:id
 PATCH  /api/bots/:id            {name?, role?, avatar?, persona?, skills?, tools?, approval?, memory?, model?, status?}
-DELETE /api/bots/:id
+DELETE /api/bots/:id            ← 软删：写 deleted_at、退出所有房间（逐房 bot.removed_from_room 事件）
+POST   /api/bots/:id/restore   ← 7 天内可恢复，超窗 409 bot.restore_expired
 POST   /api/bots/:id/kickoff    ← 可选：重新生成开场（调试用）
 ```
 
@@ -85,10 +86,10 @@ POST   /api/bots/:id/kickoff    ← 可选：重新生成开场（调试用）
 
 1. 技能/工具在创建时给不给选？（倾向：不给，创建后设置）
 2. 人设版本保留几个？（倾向：最近 20 个）
-3. 删除时是否同时退出所有房间并通知？（倾向：是，写 `bot.removed_from_room` 事件）
+3. 删除时是否同时退出所有房间并通知？（已定：是。删除即退出所有房间含 DM，逐房写 `bot.removed_from_room` 事件（audience=room:<id>），另写 workspace 级 `bot.deleted`（audience=team）；恢复不自动回房间）
 
 ## 9. 实现状态（2026-11-04）
 
-已实现：`bots` / `bot_versions` 迁移、名字锁、模型创建时固定、CRUD API、人设版本、权限区、软删（当前为硬删）、前端列表/新建/设置页。
+已实现：`bots` / `bot_versions` 迁移、名字锁、模型创建时固定、CRUD API、人设版本、权限区、软删（迁移 0010 `bots.deleted_at`，7 天窗口 `BOT_SOFT_DELETE_WINDOW_MS`，`POST /api/bots/:id/restore`）、Bot 事件（`bot.created`/`bot.updated`/`bot.deleted`/`bot.restored`/`bot.removed_from_room`，写入 workspace 事件日志）、前端列表/新建/设置页。
 已接：kickoff 消息（DM 房间开场）、头像上传（dataURL ≤256KB，store 上限 512k 字符，API body 上限 1MiB）、审批页。
-未接：Bot 事件（created/updated/deleted）、软删恢复。
+注意：软删期间 `(workspace_id, name)` 唯一约束仍占住名字——恢复窗口内名字不可复用；超过 7 天的物理回收（GC）未做。

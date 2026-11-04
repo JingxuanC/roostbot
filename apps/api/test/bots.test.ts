@@ -1,5 +1,6 @@
 // Bot 用户侧 API：真 SQLite（store-adapter）+ 真 HTTP。
-// 覆盖：鉴权、模型必填、非法名、重名、PATCH、DELETE、删除后不能进房、Origin、no-store。
+// 覆盖：鉴权、模型必填、非法名、重名、PATCH、软删（DELETE）、恢复（POST /:id/restore）、
+// 删除后不能进房、bot.* 事件落库、Origin、no-store。
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -7,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { openStore } from '../../../packages/store/src/index.ts'
+import { BOT_SOFT_DELETE_WINDOW_MS, openStore, readEvents } from '../../../packages/store/src/index.ts'
 import { startServer } from '../src/server.ts'
 import { createStorePort } from '../src/store-adapter.ts'
 
@@ -17,13 +18,14 @@ interface Ctx {
   close: () => Promise<void>
 }
 
-async function withApi(fn: (ctx: Ctx) => Promise<void>): Promise<void> {
+async function withApi(fn: (ctx: Ctx) => Promise<void>, options: { now?: () => number } = {}): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'roost-api-bots-'))
   const store = openStore(join(dir, 'workspace.db'))
   const { url, close } = await startServer({
     store: createStorePort(store),
     port: 0,
-    host: '127.0.0.1'
+    host: '127.0.0.1',
+    ...(options.now === undefined ? {} : { now: options.now })
   })
   try {
     await fn({ base: url, store, close })
@@ -88,6 +90,7 @@ test('Bot 接口都要 Bearer 会话', async () => {
       ['GET', '/api/bots/bot_x'],
       ['PATCH', '/api/bots/bot_x'],
       ['DELETE', '/api/bots/bot_x'],
+      ['POST', '/api/bots/bot_x/restore'],
     ] as const) {
       const res = await call(base, method, path, method === 'GET' ? {} : { body: {} })
       assert.equal(res.status, 401, `${method} ${path}`)
@@ -178,34 +181,108 @@ test('PATCH：人设变化写 bot_versions；改名冲突；非法审批值', as
   })
 })
 
-test('DELETE：删除后 404、名字可复用、不能再被拉进房间', async () => {
-  await withApi(async ({ base }) => {
+test('DELETE 是软删：404、名字仍占用、退出房间、不能进房、事件落库；restore 恢复', async () => {
+  await withApi(async ({ base, store }) => {
     const { token, workspaceId } = await pairWithWorkspace(base)
     const a = await createBot(base, token, workspaceId, 'A')
     const b = await createBot(base, token, workspaceId, 'B')
     const doomed = await createBot(base, token, workspaceId, '要删的')
 
-    const deleted = await call(base, 'DELETE', `/api/bots/${doomed.id}`, { token })
-    assert.equal(deleted.status, 200)
-    assert.deepEqual(await deleted.json(), { ok: true })
-
-    const gone = await call(base, 'GET', `/api/bots/${doomed.id}`, { token })
-    assert.equal(gone.status, 404)
-
-    // 名字可以重新用。
-    await createBot(base, token, workspaceId, '要删的')
-
+    // 先把它拉进一个房间，删除时应该自动退出。
     const roomRes = await call(base, 'POST', '/api/rooms', {
       token,
-      body: { workspaceId, memberBotIds: [a.id, b.id], hostBotId: a.id },
+      body: { workspaceId, memberBotIds: [a.id, doomed.id], hostBotId: a.id },
     })
     assert.equal(roomRes.status, 201)
     const room = ((await roomRes.json()) as { room: { id: string } }).room
 
+    const deleted = await call(base, 'DELETE', `/api/bots/${doomed.id}`, { token })
+    assert.equal(deleted.status, 200)
+    assert.deepEqual(await deleted.json(), { ok: true })
+
+    // 软删后详情 404、列表不含。
+    const gone = await call(base, 'GET', `/api/bots/${doomed.id}`, { token })
+    assert.equal(gone.status, 404)
+    const listed = await call(base, 'GET', `/api/bots?workspaceId=${workspaceId}`, { token })
+    assert.deepEqual(
+      ((await listed.json()) as { bots: Array<{ name: string }> }).bots.map((row) => row.name),
+      ['A', 'B'],
+    )
+
+    // 软删期间名字仍被占用（恢复窗口内身份完整保留）。
+    const reuse = await call(base, 'POST', '/api/bots', {
+      token,
+      body: { workspaceId, name: '要删的', model: 'deepseek-v3' },
+    })
+    assert.equal(reuse.status, 409)
+    assert.equal(((await reuse.json()) as { error: { code: string } }).error.code, 'bot.name_taken')
+
+    // 房间成员里已没有它；也不能再被拉进房间。
+    const roomDetail = await call(base, 'GET', `/api/rooms/${room.id}`, { token })
+    const members = ((await roomDetail.json()) as { room: { members: Array<{ botId: string }> } }).room.members
+    assert.deepEqual(members.map((member) => member.botId), [a.id])
     const add = await call(base, 'POST', `/api/rooms/${room.id}/members`, { token, body: { botIds: [doomed.id] } })
     assert.equal(add.status, 400)
     assert.equal(((await add.json()) as { error: { code: string } }).error.code, 'room.members')
+
+    // 事件落库：bot.created ×3、bot.removed_from_room（房间级）、bot.deleted（workspace 级）。
+    const botEvents = readEvents(store, { domain: 'bot' })
+    assert.deepEqual(
+      botEvents.map((event) => event.kind),
+      ['bot.created', 'bot.created', 'bot.created', 'bot.removed_from_room', 'bot.deleted'],
+    )
+    const removed = botEvents.find((event) => event.kind === 'bot.removed_from_room')
+    assert.equal(removed?.audience, `room:${room.id}`)
+    assert.deepEqual(removed?.subject, { kind: 'bot', id: doomed.id })
+    const deletedEvent = botEvents.find((event) => event.kind === 'bot.deleted')
+    assert.equal(deletedEvent?.audience, 'team')
+    assert.deepEqual(deletedEvent?.subject, { kind: 'bot', id: doomed.id })
+
+    // 7 天内恢复：200，详情可读，可以重新进房，写 bot.restored。
+    const restored = await call(base, 'POST', `/api/bots/${doomed.id}/restore`, { token, body: {} })
+    assert.equal(restored.status, 200)
+    assert.equal(((await restored.json()) as { bot: { id: string; name: string } }).bot.name, '要删的')
+
+    const back = await call(base, 'GET', `/api/bots/${doomed.id}`, { token })
+    assert.equal(back.status, 200)
+
+    const readd = await call(base, 'POST', `/api/rooms/${room.id}/members`, { token, body: { botIds: [doomed.id] } })
+    assert.equal(readd.status, 200)
+
+    const kinds = readEvents(store, { domain: 'bot' }).map((event) => event.kind)
+    assert.ok(kinds.includes('bot.restored'), `expected bot.restored in ${kinds.join(',')}`)
+
+    // 不存在的 Bot restore → 404。
+    const missing = await call(base, 'POST', '/api/bots/bot_missing/restore', { token, body: {} })
+    assert.equal(missing.status, 404)
+    assert.equal(((await missing.json()) as { error: { code: string } }).error.code, 'bot.not_found')
   })
+})
+
+test('恢复窗口：软删超过 7 天 restore → 409 bot.restore_expired', async () => {
+  const BASE = 1_760_000_000_000
+  let now = BASE
+  await withApi(
+    async ({ base }) => {
+      const { token, workspaceId } = await pairWithWorkspace(base)
+      const bot = await createBot(base, token, workspaceId, '救不回来的')
+
+      await call(base, 'DELETE', `/api/bots/${bot.id}`, { token })
+
+      // 恰好 7 天：仍可恢复。
+      now = BASE + BOT_SOFT_DELETE_WINDOW_MS
+      const edge = await call(base, 'POST', `/api/bots/${bot.id}/restore`, { token, body: {} })
+      assert.equal(edge.status, 200)
+
+      // 再删一次并越过窗口：409。
+      await call(base, 'DELETE', `/api/bots/${bot.id}`, { token })
+      now = BASE + BOT_SOFT_DELETE_WINDOW_MS * 2 + 1
+      const expired = await call(base, 'POST', `/api/bots/${bot.id}/restore`, { token, body: {} })
+      assert.equal(expired.status, 409)
+      assert.equal(((await expired.json()) as { error: { code: string } }).error.code, 'bot.restore_expired')
+    },
+    { now: () => now },
+  )
 })
 
 test('写操作 Origin 校验：非回环 Origin 被拒；响应都是 no-store', async () => {

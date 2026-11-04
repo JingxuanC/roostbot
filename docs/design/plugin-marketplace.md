@@ -214,3 +214,13 @@ Bot 设置里的工具列表要标**来源**（`mcp__data__* ← 行情中心`�
 3. **postinstall**：一律禁（推荐）还是允许但隔离构建？
 4. **更新策略**：跟镜像（稳）还是独立通道（快）？
 5. **市场来源**：npm 公共为主，还是私有 registry 为主（我们自己的插件）？
+
+## 12. 实现状态
+
+- **2026-11-04（M4，TODO 4.3.4）**：`POST /api/internal/plugins/sync` 已落地（runtime token 鉴权，
+  未配置 = 404）。锁文档 = package.json + patch 行 + lockfile（可空）+ sha256 integrity +
+  内容寻址 id + generatedAt；**锁数据源目前是镜像基线 profile 目录**（apps/runtime/profile/），
+  插件市场落地后换成从 plugins 表生成，锁形状不变。启动链路已接：`openShellRuntimeManager.ensure`
+  在建沙箱前经 sync 接口拉锁，拉不到即失败（不假装启动成功），锁 id 注入沙箱 env
+  （`ROOST_PROFILE_LOCK_ID`）。未做：沙箱内 `dsh plugin sync --lockfile` 应用锁、锁落盘到
+  workspace 卷（等真实插件安装才有内容可装）。锁的纯构造在 `packages/plugins/src/profile-lock.ts`。

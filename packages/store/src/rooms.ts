@@ -2,9 +2,13 @@
 //
 // 消息不单独建表：一条消息就是一个 chat.message 事件，seq 是它的身份。
 // 这里只做「房间」与「按房间读消息」两件事，避免存两份真相。
+//
+// 日志裁剪（rooms.md §3「保留 60 条，最近 12 条首次全给」）是读模型投影：
+// readRoomLogPage 只决定 API 给出哪一段，events 表本身一条不动。
 
+import { ROUND_LIMITS } from '../../contract/src/index.ts'
 import { StoreError } from './errors.ts'
-import { asInteger, asNonEmptyString, asOptionalString, asRecord, assertOpen, toNumber } from './internal.ts'
+import { asInteger, asNonEmptyString, asOptionalString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
 import { newRoostId } from './ids.ts'
 import { appendEvent, readEvents } from './events.ts'
 import type { Actor, SendMessageInput, Store, Room, RoomMessage } from './types.ts'
@@ -133,6 +137,132 @@ export function readMessages(
       text: typeof payload.text === 'string' ? payload.text : '',
     }
   })
+}
+
+export interface RoomLogPage {
+  /** 按 seq 升序。 */
+  messages: RoomMessage[]
+  /** 保留窗口内还有更早的消息（用 before=oldestSeq 继续向前翻）。 */
+  hasMore: boolean
+  /** 本页最旧一条的 seq；空页为 null。 */
+  oldestSeq: number | null
+  /** 裁剪窗口下界（含）：比它旧的消息不再通过房间日志读出来（events 里仍在）。 */
+  floorSeq: number
+}
+
+interface LogRow {
+  seq: number | bigint
+  at: string
+  actor_json: string | null
+  payload_json: string
+}
+
+/**
+ * 房间日志的裁剪投影（rooms.md §3：日志保留 60 条、首看 12 条）。
+ * 省略 beforeSeq = 最新一页；给 beforeSeq = 只取 seq 比它小的上一页。
+ * limit 默认 ROUND_LIMITS.firstLook，上限 ROUND_LIMITS.logMax。
+ * 增量（afterSeq）读取不走这里，用 readMessages。
+ */
+export function readRoomLogPage(
+  store: Store,
+  input: { roomId: string; beforeSeq?: number; limit?: number },
+): RoomLogPage {
+  assertOpen(store)
+  const roomId = asNonEmptyString(input.roomId, 'message.roomId', 'INVALID_MESSAGE')
+  const beforeSeq =
+    input.beforeSeq === undefined || input.beforeSeq === null
+      ? null
+      : asInteger(input.beforeSeq, 'message.beforeSeq', 1, 'INVALID_MESSAGE')
+  const limit =
+    input.limit === undefined || input.limit === null
+      ? ROUND_LIMITS.firstLook
+      : Math.min(ROUND_LIMITS.logMax, asInteger(input.limit, 'message.limit', 1, 'INVALID_MESSAGE'))
+
+  const audience = `room:${roomId}`
+  // 窗口下界 = 第 logMax 新的一条的 seq；不足 logMax 条时从头（seq 1）起。
+  const floorRow = store.db
+    .prepare(
+      `SELECT seq FROM events WHERE domain = 'chat' AND audience = ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
+    )
+    .get(audience, ROUND_LIMITS.logMax - 1) as { seq: number | bigint } | undefined
+  const floorSeq = floorRow === undefined || floorRow === null ? 1 : toNumber(floorRow.seq)
+
+  const clauses = [`domain = 'chat'`, 'audience = ?', 'seq >= ?']
+  const params: unknown[] = [audience, floorSeq]
+  if (beforeSeq !== null) {
+    clauses.push('seq < ?')
+    params.push(beforeSeq)
+  }
+  const rows = store.db
+    .prepare(
+      `SELECT seq, at, actor_json, payload_json FROM events WHERE ${clauses.join(' AND ')} ORDER BY seq DESC LIMIT ?`,
+    )
+    .all(...params, limit) as LogRow[]
+
+  const messages = rows.reverse().map((row) => {
+    const actor = parseLogActor(row.actor_json, toNumber(row.seq))
+    let text = ''
+    try {
+      const payload = JSON.parse(row.payload_json) as { text?: unknown }
+      text = typeof payload.text === 'string' ? payload.text : ''
+    } catch (err) {
+      throw new StoreError('EVENT_CORRUPT', `event seq=${row.seq}: payload_json is not valid JSON`, {
+        cause: err,
+      })
+    }
+    return { seq: toNumber(row.seq), at: row.at, actor, roomId, text }
+  })
+  const oldestSeq = messages.length === 0 ? null : messages[0]!.seq
+  return { messages, hasMore: oldestSeq !== null && oldestSeq > floorSeq, oldestSeq, floorSeq }
+}
+
+function parseLogActor(raw: string | null, seq: number): Actor {
+  if (raw === null) return { kind: 'system', id: 'unknown' }
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch (err) {
+    throw new StoreError('EVENT_CORRUPT', `event seq=${seq}: actor_json is not valid JSON`, { cause: err })
+  }
+  const actor = value as { kind?: unknown; id?: unknown }
+  if (typeof actor.kind !== 'string' || typeof actor.id !== 'string') {
+    throw new StoreError('EVENT_CORRUPT', `event seq=${seq}: actor is missing kind/id`)
+  }
+  return { kind: actor.kind, id: actor.id }
+}
+
+/**
+ * 删除房间投影：rooms / room_members / room_rounds / room_seen / bot_sessions。
+ * events 是 append-only 事实源，一条不动（rooms.md §7「日志本体仍是 events」）。
+ * 正在跑的轮次先标 stopped（§10 的 stop 语义），再清投影行；整个操作在一个 savepoint 里。
+ */
+export function deleteRoom(store: Store, roomId: string, now?: number): void {
+  assertOpen(store)
+  const id = asNonEmptyString(roomId, 'room.id', 'INVALID_ROOM')
+  if (getRoom(store, id) === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${id}`)
+  const endedAt = now === undefined || now === null ? Date.now() : asInteger(now, 'room.now', 0, 'INVALID_ROOM')
+
+  store.db.exec('SAVEPOINT roost_delete_room')
+  try {
+    store.db
+      .prepare(`UPDATE room_rounds SET state = 'stopped', ended_at = ? WHERE room_id = ? AND state = 'running'`)
+      .run(endedAt, id)
+    store.db.prepare('DELETE FROM room_seen WHERE room_id = ?').run(id)
+    store.db.prepare('DELETE FROM bot_sessions WHERE room_id = ?').run(id)
+    store.db.prepare('DELETE FROM room_rounds WHERE room_id = ?').run(id)
+    store.db.prepare('DELETE FROM room_members WHERE room_id = ?').run(id)
+    store.db.prepare('DELETE FROM rooms WHERE id = ?').run(id)
+    store.db.exec('RELEASE roost_delete_room')
+  } catch (err) {
+    try {
+      store.db.exec('ROLLBACK TO roost_delete_room')
+      store.db.exec('RELEASE roost_delete_room')
+    } catch {
+      // 外层事务可能已经把 savepoint 一起回滚；保留原始错误。
+    }
+    if (err instanceof StoreError) throw err
+    throw new StoreError('ROOM_WRITE_FAILED', `failed to delete room ${id}: ${errorMessage(err)}`, { cause: err })
+  }
 }
 
 function asActor(value: unknown): Actor {

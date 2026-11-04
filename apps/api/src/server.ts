@@ -27,11 +27,13 @@ import {
   handleDeleteBot,
   handleGetBot,
   handleListBots,
-  handlePatchBot
+  handlePatchBot,
+  handleRestoreBot
 } from './bots-routes.ts'
 import {
   handleAddRoomMembers,
   handleCreateRoomExtended,
+  handleDeleteRoom,
   handleGetRoom,
   handlePatchRoom,
   handleRemoveRoomMember
@@ -41,6 +43,7 @@ import {
   handleDecideApproval,
   handleListApprovals,
 } from './bot-rooms-routes.ts'
+import { handlePluginsSync } from './plugins-sync-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
@@ -694,11 +697,17 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
     return sendError(res, 400, 'invalid_body', 'after must be a non-negative integer seq')
   }
   try {
-    const messages = await ctx.store.readMessagesInternal({
-      roomId,
-      ...(afterSeq === undefined ? {} : { afterSeq })
-    })
-    sendJson(res, 200, { messages: messages.map(messageJson) })
+    if (afterSeq !== undefined) {
+      // 增量路径（room-agent 轮询）不受裁剪影响：after 之后照单全收。
+      const messages = await ctx.store.readMessagesInternal({ roomId, afterSeq })
+      sendJson(res, 200, { messages: messages.map(messageJson) })
+      return
+    }
+    // 首看/向前翻页走裁剪投影（rooms.md §3：保留 60、首看 12）。
+    const query = readLogQuery(res, url)
+    if (query === null) return
+    const page = await ctx.store.readRoomLogInternal({ roomId, ...query })
+    sendJson(res, 200, { messages: page.messages.map(messageJson), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -772,15 +781,45 @@ async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, r
   const roomId = roomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
   try {
-    const messages = await ctx.store.readMessages({
-      accountId: auth.session.accountId,
-      roomId,
-      ...(afterSeq === undefined ? {} : { afterSeq })
-    })
-    sendJson(res, 200, { messages: messages.map(messageJson) })
+    if (afterSeq !== undefined) {
+      // 增量路径（SSE 断线补拉）不受裁剪影响：after 之后照单全收。
+      const messages = await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, afterSeq })
+      sendJson(res, 200, { messages: messages.map(messageJson) })
+      return
+    }
+    // 首看给最近 12 条；before 游标向前翻，最多翻到最近 60 条（rooms.md §3）。
+    const query = readLogQuery(res, url)
+    if (query === null) return
+    const page = await ctx.store.readRoomLog({ accountId: auth.session.accountId, roomId, ...query })
+    sendJson(res, 200, { messages: page.messages.map(messageJson), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
+}
+
+/** 解析 before/limit 翻页参数；不合法时直接回 400 并返回 null。 */
+function readLogQuery(res: ServerResponse, url: URL): { beforeSeq?: number; limit?: number } | null {
+  const beforeRaw = url.searchParams.get('before')
+  const beforeSeq = beforeRaw === null ? undefined : Number.parseInt(beforeRaw, 10)
+  if (beforeSeq !== undefined && (!Number.isSafeInteger(beforeSeq) || beforeSeq < 1)) {
+    sendError(res, 400, 'invalid_body', 'before must be a positive integer seq')
+    return null
+  }
+  const limitRaw = url.searchParams.get('limit')
+  const limit = limitRaw === null ? undefined : Number.parseInt(limitRaw, 10)
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+    sendError(res, 400, 'invalid_body', 'limit must be a positive integer')
+    return null
+  }
+  return {
+    ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    ...(limit === undefined ? {} : { limit })
+  }
+}
+
+/** 给前端的翻页信息：before 是下一页的游标（本页最旧一条的 seq）。 */
+function logPageJson(page: { hasMore: boolean; oldestSeq: number | null; floorSeq: number }): Record<string, unknown> {
+  return { hasMore: page.hasMore, before: page.oldestSeq, floor: page.floorSeq }
 }
 
 async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -1004,6 +1043,10 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       await handlePatchRoom(ctx, req, res, url)
       return
     }
+    if (method === 'DELETE') {
+      await handleDeleteRoom(ctx, req, res, url)
+      return
+    }
     notFound(req, res, method, path)
     return
   }
@@ -1109,6 +1152,16 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleBotCreateRoom(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  // 沙箱启动前拉 profile 锁（TODO 4.3.4；plugin-marketplace.md §6）。
+  if (path === '/api/internal/plugins/sync') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handlePluginsSync(ctx as RoomRouteContext, req, res)
     return
   }
 
@@ -1260,6 +1313,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     }
     if (method === 'POST') {
       await handleCreateBot(ctx, req, res)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/bots\/[^/]+\/restore$/.test(path)) {
+    if (method === 'POST') {
+      await handleRestoreBot(ctx, req, res, url)
       return
     }
     notFound(req, res, method, path)

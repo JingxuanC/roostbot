@@ -6,7 +6,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { openStore } from '../../../packages/store/src/index.ts'
+import {
+  getRoomDetail,
+  markSeen,
+  openStore,
+  readEvents,
+  saveRound,
+  sendMessage,
+  setBotSession,
+} from '../../../packages/store/src/index.ts'
 import { startServer } from '../src/server.ts'
 import { createStorePort } from '../src/store-adapter.ts'
 
@@ -16,13 +24,18 @@ interface Ctx {
   close: () => Promise<void>
 }
 
-async function withApi(fn: (ctx: Ctx) => Promise<void>): Promise<void> {
+async function withApi(
+  fn: (ctx: Ctx) => Promise<void>,
+  options: { rawStore?: boolean; runtimeToken?: string } = {},
+): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'roost-api-rooms-'))
   const store = openStore(join(dir, 'workspace.db'))
   const { url, close } = await startServer({
     store: createStorePort(store),
     port: 0,
-    host: '127.0.0.1'
+    host: '127.0.0.1',
+    ...(options.rawStore === true ? { rawStore: store } : {}),
+    ...(options.runtimeToken === undefined ? {} : { runtimeToken: options.runtimeToken }),
   })
   try {
     await fn({ base: url, store, close })
@@ -286,4 +299,199 @@ test('写操作 Origin 校验 + 跨账号读不到房间', async () => {
     assert.equal(peek.status, 404)
     assert.equal(((await peek.json()) as { error: { code: string } }).error.code, 'room_not_found')
   })
+})
+
+function rowCount(store: Ctx['store'], table: string, roomId: string): number {
+  const row = store.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE room_id = ?`).get(roomId) as
+    | { n: number | bigint }
+    | undefined
+  return row === undefined ? 0 : Number(row.n)
+}
+
+test('DELETE /api/rooms/:id：删后 GET 404；成员/轮次/已读/会话投影清理；events 保留', async () => {
+  await withApi(async ({ base, store }) => {
+    const { token, workspaceId } = await pairWithWorkspace(base)
+    const a = await createBot(base, token, workspaceId, 'A')
+    const b = await createBot(base, token, workspaceId, 'B')
+    const room = (await (
+      await call(base, 'POST', '/api/rooms', { token, body: { workspaceId, memberBotIds: [a, b] } })
+    ).json() as RoomBody).room
+
+    // 造投影行：一条消息（event）、一轮 running、已读游标、bot 会话。
+    const message = sendMessage(store, {
+      roomId: room.id,
+      text: '开场',
+      actor: { kind: 'user', id: 'acc_rooms_ext' },
+    })
+    saveRound(store, {
+      id: 'rd_delete_me',
+      roomId: room.id,
+      startSeq: message.seq,
+      state: 'running',
+      slots: [{ botId: a, status: 'speaking' }],
+      turns: 0,
+      startedAt: 1,
+    })
+    markSeen(store, room.id, a, message.seq)
+    setBotSession(store, room.id, a, 'sess_delete_me')
+
+    const deleted = await call(base, 'DELETE', `/api/rooms/${room.id}`, { token })
+    assert.equal(deleted.status, 200)
+    assert.deepEqual(await deleted.json(), { ok: true })
+
+    const gone = await call(base, 'GET', `/api/rooms/${room.id}`, { token })
+    assert.equal(gone.status, 404)
+    assert.equal(((await gone.json()) as { error: { code: string } }).error.code, 'room_not_found')
+
+    const listed = await call(base, 'GET', `/api/rooms?workspaceId=${workspaceId}`, { token })
+    assert.equal(((await listed.json()) as { rooms: unknown[] }).rooms.length, 0)
+
+    assert.equal(getRoomDetail(store, room.id), null)
+    assert.equal(rowCount(store, 'room_members', room.id), 0)
+    assert.equal(rowCount(store, 'room_rounds', room.id), 0)
+    assert.equal(rowCount(store, 'room_seen', room.id), 0)
+    assert.equal(rowCount(store, 'bot_sessions', room.id), 0)
+
+    // events 是 append-only 事实源：删房间一条不动。
+    const events = readEvents(store, { domain: 'chat', audience: `room:${room.id}` })
+    assert.equal(events.length, 1)
+    assert.equal(events[0]!.seq, message.seq)
+
+    // 再删一次 → 404 room_not_found。
+    const again = await call(base, 'DELETE', `/api/rooms/${room.id}`, { token })
+    assert.equal(again.status, 404)
+    assert.equal(((await again.json()) as { error: { code: string } }).error.code, 'room_not_found')
+  })
+})
+
+test('DELETE /api/rooms/:id：越权删别人的房间 403；无 token 401；不存在 404', async () => {
+  await withApi(async ({ base }) => {
+    const mine = await pairWithWorkspace(base, 'acc_mine_del')
+    const a = await createBot(base, mine.token, mine.workspaceId, 'A')
+    const b = await createBot(base, mine.token, mine.workspaceId, 'B')
+    const room = (await (
+      await call(base, 'POST', '/api/rooms', {
+        token: mine.token,
+        body: { workspaceId: mine.workspaceId, memberBotIds: [a, b] },
+      })
+    ).json() as RoomBody).room
+
+    const noAuth = await call(base, 'DELETE', `/api/rooms/${room.id}`)
+    assert.equal(noAuth.status, 401)
+
+    const other = await pairWithWorkspace(base, 'acc_other_del', '另一个组')
+    const forbidden = await call(base, 'DELETE', `/api/rooms/${room.id}`, { token: other.token })
+    assert.equal(forbidden.status, 403)
+    assert.equal(((await forbidden.json()) as { error: { code: string } }).error.code, 'forbidden')
+
+    const missing = await call(base, 'DELETE', '/api/rooms/rm_missing', { token: mine.token })
+    assert.equal(missing.status, 404)
+    assert.equal(((await missing.json()) as { error: { code: string } }).error.code, 'room_not_found')
+
+    // 越权尝试之后房间还在。
+    const still = await call(base, 'GET', `/api/rooms/${room.id}`, { token: mine.token })
+    assert.equal(still.status, 200)
+  })
+})
+
+interface MessagesBody {
+  messages: Array<{ seq: number; text: string }>
+  page?: { hasMore: boolean; before: number | null; floor: number }
+}
+
+async function seedMessages(store: Ctx['store'], roomId: string, count: number): Promise<number[]> {
+  const seqs: number[] = []
+  for (let index = 1; index <= count; index += 1) {
+    const message = sendMessage(store, {
+      roomId,
+      text: `m${index}`,
+      actor: { kind: 'user', id: 'acc_rooms_ext' },
+    })
+    seqs.push(message.seq)
+  }
+  return seqs
+}
+
+test('日志裁剪：首看 12 条、before 向前翻到 60、60 之前拿不到、after 增量照常', async () => {
+  await withApi(async ({ base, store }) => {
+    const { token, workspaceId } = await pairWithWorkspace(base)
+    const created = await call(base, 'POST', '/api/rooms', { token, body: { workspaceId, name: '长日志' } })
+    assert.equal(created.status, 201)
+    const room = ((await created.json()) as RoomBody).room
+    const seqs = await seedMessages(store, room.id, 70)
+
+    // 首看：最近 12 条，带翻页信息。
+    const first = await call(base, 'GET', `/api/rooms/${room.id}/messages`, { token })
+    assert.equal(first.status, 200)
+    const firstBody = (await first.json()) as MessagesBody
+    assert.deepEqual(firstBody.messages.map((m) => m.seq), seqs.slice(58))
+    assert.equal(firstBody.page?.hasMore, true)
+    assert.equal(firstBody.page?.before, seqs[58])
+    assert.equal(firstBody.page?.floor, seqs[10])
+
+    // limit=60 一次拿满保留窗口。
+    const full = await call(base, 'GET', `/api/rooms/${room.id}/messages?limit=60`, { token })
+    const fullBody = (await full.json()) as MessagesBody
+    assert.equal(fullBody.messages.length, 60)
+    assert.deepEqual(fullBody.messages.map((m) => m.seq), seqs.slice(10))
+    assert.equal(fullBody.page?.hasMore, false)
+
+    // before 游标连续向前翻，直到窗口底。
+    let before = seqs[58]!
+    const paged: number[] = []
+    for (;;) {
+      const res = await call(base, 'GET', `/api/rooms/${room.id}/messages?before=${before}`, { token })
+      assert.equal(res.status, 200)
+      const body = (await res.json()) as MessagesBody
+      paged.unshift(...body.messages.map((m) => m.seq))
+      if (body.page?.hasMore !== true) break
+      assert.ok(body.page.before !== null)
+      before = body.page.before
+    }
+    assert.deepEqual(paged, seqs.slice(10, 58))
+
+    // 60 条之前不再提供：before=窗口下界 → 空页。
+    const beyond = await call(base, 'GET', `/api/rooms/${room.id}/messages?before=${seqs[10]}`, { token })
+    const beyondBody = (await beyond.json()) as MessagesBody
+    assert.deepEqual(beyondBody.messages, [])
+    assert.equal(beyondBody.page?.hasMore, false)
+
+    // after 增量不受裁剪影响：after 之后照单全收。
+    const incremental = await call(base, 'GET', `/api/rooms/${room.id}/messages?after=${seqs[64]}`, { token })
+    const incBody = (await incremental.json()) as MessagesBody
+    assert.deepEqual(incBody.messages.map((m) => m.seq), seqs.slice(65))
+    assert.equal(incBody.page, undefined)
+
+    // 非法游标 → 400。
+    const badBefore = await call(base, 'GET', `/api/rooms/${room.id}/messages?before=abc`, { token })
+    assert.equal(badBefore.status, 400)
+  })
+})
+
+test('内部 GET /api/internal/rooms/:id/messages：无 after 同样裁剪，after 增量不变', async () => {
+  await withApi(
+    async ({ base, store }) => {
+      const { token, workspaceId } = await pairWithWorkspace(base)
+      const created = await call(base, 'POST', '/api/rooms', { token, body: { workspaceId, name: '内部日志' } })
+      const room = ((await created.json()) as RoomBody).room
+      const seqs = await seedMessages(store, room.id, 70)
+      const headers = { 'x-runtime-token': 'test-runtime' }
+
+      const first = await call(base, 'GET', `/api/internal/rooms/${room.id}/messages`, { headers })
+      assert.equal(first.status, 200)
+      const firstBody = (await first.json()) as MessagesBody
+      assert.deepEqual(firstBody.messages.map((m) => m.seq), seqs.slice(58))
+      assert.equal(firstBody.page?.hasMore, true)
+
+      const incremental = await call(base, 'GET', `/api/internal/rooms/${room.id}/messages?after=${seqs[64]}`, {
+        headers,
+      })
+      const incBody = (await incremental.json()) as MessagesBody
+      assert.deepEqual(incBody.messages.map((m) => m.seq), seqs.slice(65))
+
+      const noToken = await call(base, 'GET', `/api/internal/rooms/${room.id}/messages`)
+      assert.equal(noToken.status, 401)
+    },
+    { runtimeToken: 'test-runtime' },
+  )
 })

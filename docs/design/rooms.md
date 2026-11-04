@@ -201,11 +201,13 @@ CREATE TABLE bot_sessions (
 ```
 POST /api/rooms                    {workspaceId, name?, bulletin?, memberBotIds[], hostBotId?, responder}
 PATCH /api/rooms/:id               {name?, bulletin?, responder?, responderBot?}
+DELETE /api/rooms/:id              ← 删房间投影（members/rounds/seen/sessions）；events 不动
 POST /api/rooms/:id/members        {botIds[]}
 DELETE /api/rooms/:id/members/:botId
 POST /api/rooms/:id/messages       {text}          ← 开启一轮
 POST /api/rooms/:id/turns/:turnId/stop             ← 停止当前成员（不终止整轮）
 GET  /api/rooms/:id                ← 房间 + members + 当前轮次 + 正在说话的人
+GET  /api/rooms/:id/messages       ← 裁剪投影：首看最近 12 条；before 游标向前翻，最多翻到最近 60 条；?after= 增量不受影响
 GET  /api/rooms/:id/stream         ← SSE：message / round / speaking / status
 ```
 
@@ -214,7 +216,7 @@ GET  /api/rooms/:id/stream         ← SSE：message / round / speaking / status
 ```
 GET  /api/internal/rooms                     ← 房间 + 成员 + responder
 GET  /api/internal/rooms/:id/round           ← 当前轮次与 slots（断点续跑）
-GET  /api/internal/rooms/:id/messages?after  ← 增量
+GET  /api/internal/rooms/:id/messages?after  ← 增量；无 after 时同样走裁剪投影（最近 12，before 翻到 60）
 POST /api/rooms/:id/say                      ← 成员发言（带 idem）
 POST /api/internal/rounds/:id/advance        ← 报告 slot 状态（posted/passed/failed/working）
 ```
@@ -271,5 +273,5 @@ POST /api/internal/rounds/:id/advance        ← 报告 slot 状态（posted/pas
 - `apps/runtime`：room-agent 按 assignments 派发、单 Bot 回退、退避、session resume
 - `apps/web`：Bot 列表/新建/设置、建群、房间设置、谁会回答、@ 菜单
 - 本地验收：HTTP 冒烟 14/14、双 Bot 假模型 E2E、全量 297 测试
-- 已接：kickoff（DM/群；kickoff 未结束时用户插话会把发言人并入同一轮）、Bot 建群审批+配额、轮内 stop（stopping 字段）、宽限与 late rounds
-- 未接：profile sync、日志裁剪、远端真实模型双 Bot
+- 已接：kickoff（DM/群；kickoff 未结束时用户插话会把发言人并入同一轮）、Bot 建群审批+配额、轮内 stop（stopping 字段）、宽限与 late rounds、日志裁剪投影（首看 12 / before 向前翻到 60，events 不动）、`DELETE /api/rooms/:id`（清投影行，running 轮次先标 stopped）
+- 未接：远端真实模型双 Bot

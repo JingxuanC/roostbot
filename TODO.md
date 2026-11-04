@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：8 / 149 · 进行中：41（M4 全部在实现中）
+- 完成：13 / 149 · 进行中：36
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -22,10 +22,10 @@
 - [x] 4.1.2 `POST /api/bots`（名字锁、重名/非法名校验、模型固定）
 - [x] 4.1.3 `GET /api/bots` / `GET /api/bots/:id`
 - [x] 4.1.4 `PATCH /api/bots/:id`（人设版本留痕、能力区仅 admin）
-- [~] 4.1.5 `DELETE /api/bots/:id`（软删 7 天）
+- [x] 4.1.5 `DELETE /api/bots/:id`（软删 7 天）
 - [x] 4.1.6 创建后 kickoff（模型生成自我介绍 + 问用途）
 - [x] 4.1.7 头像：程序化 glyph 默认 + 上传（≥256 WebP，剥 EXIF）
-- [~] 4.1.8 `bot.created/updated/deleted` 事件
+- [x] 4.1.8 `bot.created/updated/deleted` 事件
 
 **验收**：见 4.5.1。
 
@@ -44,8 +44,8 @@
 - [x] 4.2.11 回复超时 240s
 - [x] 4.2.16 工作宽限 15s / late rounds ≤10 / 轮内 stop（引擎与 runtime 尚未接）
 - [x] 4.2.12 prompt 侧增量 24 / 更早 8
-- [ ] 4.2.17 房间日志裁剪到 60 条、首看 12（events 是事实源，裁剪做成投影）
-- [ ] 4.2.18 `DELETE /api/rooms/:id`（前端房间设置已有按钮，后端还没有接口，404 时会如实报错）
+- [x] 4.2.17 房间日志裁剪到 60 条、首看 12（events 是事实源，裁剪做成投影）
+- [x] 4.2.18 `DELETE /api/rooms/:id`（前端房间设置已有按钮，后端已落地）
 - [x] 4.2.13 内部接口：`GET /internal/rooms/:id/round`、`POST /internal/rounds/:id/advance`
 - [x] 4.2.14 建群 kickoff（无首句时 host 问"这个群要做什么"）
 - [x] 4.2.15 Bot 建群：`POST /internal/rooms` + 一次人工确认 + 每日上限 3
@@ -57,7 +57,7 @@
 - [x] 4.3.1 控制面 `POST /api/workspaces/:id/start`（替代 `planA-boot.mjs`）
 - [x] 4.3.2 `runtimes` 表落库（沙箱名/阶段/最近心跳）
 - [x] 4.3.3 `GET /api/workspaces/:id/runtime`（面板显示状态）
-- [~] 4.3.4 沙箱启动前 profile sync 拉锁（占位：空锁）
+- [x] 4.3.4 沙箱启动前 profile sync 拉锁（`POST /api/internal/plugins/sync`，锁 = 基线 profile + integrity）
 - [x] 4.3.5 room-agent 按 `room_members` prepare 会话（多 Bot）
 - [x] 4.3.6 room-agent 断线重连/控制面不可达时的退避
 
@@ -248,3 +248,4 @@
 - 2026-11-04 收尾修正：kickoff 轮未结束时用户消息并入同一轮（否则 cloud-run 的双 Bot 验收会只回一个）。
 - 2026-11-04 第二批子 agent：kickoff（DM+群）、Bot 建群+审批+配额、头像上传/审批页、轮次 stop/宽限/late rounds 全部落地并接线；367 测试 + 4 个 HTTP 冒烟（kickoff/审批/stop）全过。
 - 2026-11-04 M4 主体完成：bots CRUD/建群/成员/responder/轮次引擎/内部接口/workspace start-local/前端四视图；本地 HTTP 冒烟 14/14、本地双 Bot E2E 通过。剩：kickoff、软删、Bot 建群、profile sync、远端真实模型双 Bot、浏览器全流程（见 4.1.5/4.1.6/4.2.14/4.2.15/4.3.4/4.5.1/4.5.3/4.5.4）。
+- 2026-11-04 M4 收尾第三批子 agent：Bot 软删 7 天 + 恢复（迁移 0010、`POST /api/bots/:id/restore`、删即退房 + `bot.removed_from_room`）、`bot.created/updated/deleted/restored` 事件、房间日志裁剪投影（保留 60 / 首看 12 / `before` 翻页 / 增量不受影响）、`DELETE /api/rooms/:id`、profile sync 拉锁（`POST /api/internal/plugins/sync`，ensure 前硬门 + `ROOST_PROFILE_LOCK_ID` 注入沙箱）。392 测试全绿 + 真实 HTTP 冒烟（锁拉取/软删/恢复/删房间）通过。M4 仅剩远端真实模型验收（4.5.3/4.5.4）。

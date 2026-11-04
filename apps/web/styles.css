@@ -2019,6 +2019,13 @@ button {
   text-align: center;
 }
 
+/* 日志裁剪投影：首看 12 条，向前翻页最多到最近 60 条。 */
+.messages-older {
+  display: flex;
+  justify-content: center;
+  padding-bottom: var(--space-sm);
+}
+
 /* ------------------------------------------------------------------ 头像上传 */
 
 .avatar-img {
