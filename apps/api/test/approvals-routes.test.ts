@@ -141,15 +141,18 @@ function internalBody(fx: Fixture, overrides: Record<string, unknown> = {}): Rec
   }
 }
 
-test('runtime token：未配置 404、缺失/错误 401', async () => {
+test('runtime token：全局未配置但 SQLite 可用 → 401（workspace token 模式开启）', async () => {
+  // E6 之后，有 rawStore 就能用每 workspace token，所以「全局 token 未配置」不再是
+  // 404 关闭，而是 401（调用方没带有效凭据）。真正的 404 关闭只在无 rawStore 时出现，
+  // 见 runtime-token-wiring.test.ts。
   await withApi(
     async (fx) => {
       const disabled = await fx.call('POST', '/api/internal/approvals', {
         body: internalBody(fx),
         runtimeToken: RUNTIME_TOKEN,
       })
-      assert.equal(disabled.status, 404)
-      assert.equal(disabled.json.error.code, 'not_found')
+      assert.equal(disabled.status, 401)
+      assert.equal(disabled.json.error.code, 'unauthenticated')
     },
     { runtimeToken: '' },
   )

@@ -126,6 +126,26 @@ export {
 
 export { getWorkspaceRuntime, saveWorkspaceRuntime } from './workspace-runtime.ts'
 
+// ---- 每 workspace 短期 runtime token（ADR 0005 / TODO E6）---------------------
+export {
+  RUNTIME_TOKEN_BYTES,
+  hashRuntimeToken,
+  issueRuntimeToken,
+  revokeRuntimeToken,
+  revokeRuntimeTokens,
+  verifyRuntimeToken,
+} from './runtime-tokens.ts'
+export type {
+  IssueRuntimeTokenInput,
+  IssuedRuntimeToken,
+  RevokeRuntimeTokenInput,
+  RevokeRuntimeTokensInput,
+  RevokeRuntimeTokensResult,
+  RevokedRuntimeToken,
+  RuntimeTokenVerification,
+  VerifyRuntimeTokenInput,
+} from './runtime-tokens.ts'
+
 // ---- M6：控制面调度（schedule / activation / run / run_event）----------------
 export {
   MAX_CATCH_UP_PER_TICK,

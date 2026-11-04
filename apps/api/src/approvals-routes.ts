@@ -13,7 +13,8 @@
 //     否则落一条 pending 审批，再由用户通过 POST /api/approvals/:id 单次决策。
 //   * 决策接口只做单次，绝不隐式写 approval_grants；长期授权只能在这里显式创建。
 //
-// 鉴权沿用现有语义：runtime token 未配置 = 404（不暴露内部接口），错误 token = 401；
+// 鉴权统一走 runtime-auth.ts：没有全局 token 且没有 rawStore = 404（不暴露内部接口），
+// 有 rawStore 时每 workspace token 生效（401/403 见下），错误 token = 401。
 // 用户侧 Bearer 由 server.authenticate 校验，权限用 store.listWorkspaces 的 role 判断。
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -32,6 +33,7 @@ import {
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { StorePort } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import { approvalJson } from './bot-rooms-routes.ts'
 
 export interface ApprovalsRouteContext {
@@ -51,7 +53,8 @@ export async function handleInternalCreateApproval(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const store = ctx.rawStore
   if (store === undefined) {
     return sendError(res, 503, 'runtime.not_configured', 'approvals need the SQLite store')
@@ -68,6 +71,8 @@ export async function handleInternalCreateApproval(
   if (workspaceId === null) {
     return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
   }
+  // workspace token 只能给自己的 workspace 申请审批。
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const kind = readId(body['kind'])
   if (kind === null) {
     return sendError(res, 400, 'invalid_body', 'kind is required (non-empty string)')
@@ -126,7 +131,8 @@ export async function handleInternalGetApproval(
   res: ServerResponse,
   url: URL,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const store = ctx.rawStore
   if (store === undefined) {
     return sendError(res, 503, 'runtime.not_configured', 'approvals need the SQLite store')
@@ -140,6 +146,8 @@ export async function handleInternalGetApproval(
     if (approval === null) {
       return sendError(res, 404, 'approval.not_found', `unknown approval ${approvalId}`)
     }
+    // workspace token 不能轮询别的 workspace 的审批。
+    if (!ensureRuntimeWorkspace(auth, approval.workspaceId, res)) return
     sendJson(res, 200, { approval: approvalJson(approval) })
   } catch (err) {
     sendApprovalFailure(res, err)
@@ -273,28 +281,6 @@ export function grantJson(grant: ApprovalGrant): Record<string, unknown> {
     grantedAt: grant.grantedAt,
     revokedAt: grant.revokedAt,
   }
-}
-
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-/** 与 server.ts / bot-rooms-routes.ts 同一套语义：未配置 404，错 token 401。 */
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
 }
 
 async function isWorkspaceAdmin(ctx: Ctx, accountId: string, workspaceId: string): Promise<boolean> {

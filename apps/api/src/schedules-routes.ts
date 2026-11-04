@@ -12,7 +12,8 @@
 //   POST   /api/internal/scheduler/tick    handleInternalSchedulerTick  runtime token
 //
 // schedule / activation / run 只在 SQLite 里；内存 port（无 rawStore）一律 503 runtime.not_configured。
-// runtime token 语义与其他内部接口一致：未配置 404，错误 token 401。
+// runtime token 语义与其他内部接口一致：无全局 token 且无 rawStore = 404；有 rawStore
+// 时 workspace token 生效（但 tick 是全局操作，workspace token 一律 403）。
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -37,6 +38,7 @@ import type { RunStatus, Schedule, ScheduledRun, ScheduleOverlap } from '../../.
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { SessionRecord, StorePort, WorkspaceRole } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp } from './runtime-auth.ts'
 
 export interface ScheduleRouteContext {
   store: StorePort
@@ -287,9 +289,15 @@ export async function handleInternalSchedulerTick(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const store = requireStore(ctx, res)
   if (store === null) return
+  if (auth.workspaceId !== null) {
+    // tick 没有 workspace 维度：一次调用会创建/推进所有 workspace 的到期 run。
+    // workspace token 触发它就等于跨租户写入，所以只允许控制面全局 token。
+    return sendError(res, 403, 'forbidden_workspace', 'scheduler tick is control-plane scoped')
+  }
   try {
     const result = tick(store, { now: ctx.now() })
     sendJson(res, 200, result)
@@ -341,27 +349,6 @@ function runJson(run: ScheduledRun): Record<string, unknown> {
 }
 
 // ---- 鉴权 / 输入 / 错误 -----------------------------------------------------
-
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
-}
 
 function requireStore(ctx: Ctx, res: ServerResponse): Store | null {
   if (ctx.rawStore !== undefined) return ctx.rawStore

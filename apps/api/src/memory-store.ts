@@ -234,6 +234,10 @@ export function createMemoryStore(): StorePort {
       return [...rooms.values()].sort((a, b) => a.createdAt - b.createdAt).map((room) => ({ ...room }))
     },
 
+    async getRoomWorkspace(roomId: string): Promise<string | null> {
+      return rooms.get(roomId)?.workspaceId ?? null
+    },
+
     async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
       return postMessageAs({ roomId: input.roomId, text: input.text, idem: input.idem, actor: { kind: 'bot', id: input.botId } })
     },

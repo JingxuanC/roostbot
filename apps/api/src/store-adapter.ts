@@ -254,6 +254,13 @@ export function createStorePort(store: Store): StorePort {
       return rows.map((row) => toRoomRecord(store, row))
     },
 
+    async getRoomWorkspace(roomId: string): Promise<string | null> {
+      const row = store.db.prepare('SELECT workspace_id FROM rooms WHERE id = ?').get(roomId) as
+        | { workspace_id: string }
+        | undefined
+      return row === undefined || row === null ? null : row.workspace_id
+    },
+
     async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
       const message = sendMessageInStore(store, {
         roomId: input.roomId,

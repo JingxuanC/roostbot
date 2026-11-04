@@ -12,7 +12,8 @@
 //   GET   /api/usage                    handleGetUsage               Bearer（owner/admin）
 //
 // 配额/预留/用量只在 SQLite 里；内存 port（无 rawStore）一律 503 runtime.not_configured。
-// runtime token 语义与其他内部接口一致：未配置 404，错误 token 401。
+// runtime token 语义与其他内部接口一致：无全局 token 且无 rawStore = 404；有 rawStore
+// 时 workspace token 生效（跨 workspace = 403），错误 token = 401。
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -22,6 +23,7 @@ import {
   QUOTA_SCOPES,
   StoreError,
   getQuota,
+  getReservation,
   getWorkspaceRole,
   isSoftLimitReached,
   listQuotas,
@@ -46,6 +48,8 @@ import { USAGE_DAILY_MAX_DAYS, usageDaily } from '../../../packages/store/src/bu
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { SessionRecord, StorePort, WorkspaceRole } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
+import type { RuntimeRequestAuth } from './runtime-auth.ts'
 
 export interface BudgetRouteContext {
   store: StorePort
@@ -65,8 +69,9 @@ export async function handleInternalBudgetReserve(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   if (!isPlainObject(parsed.value)) {
@@ -76,6 +81,7 @@ export async function handleInternalBudgetReserve(
 
   const workspaceId = readId(body['workspaceId'])
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const runId = readId(body['runId'])
   if (runId === null) return sendError(res, 400, 'invalid_body', 'runId is required')
   const turnId = readOptionalId(body['turnId'])
@@ -134,8 +140,9 @@ export async function handleInternalBudgetSettle(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   if (!isPlainObject(parsed.value)) {
@@ -145,6 +152,9 @@ export async function handleInternalBudgetSettle(
 
   const reservationId = readId(body['reservationId'])
   if (reservationId === null) return sendError(res, 400, 'invalid_body', 'reservationId is required')
+  // 结算按 reservationId 定位；workspace token 只能结算自己 workspace 的预留。
+  const reservation = getReservation(store, reservationId)
+  if (reservation !== null && !ensureRuntimeWorkspace(auth, reservation.workspaceId, res)) return
   const actual = readCount(body['actual'])
   if (actual === null) return sendError(res, 400, 'invalid_body', 'actual must be an integer >= 0')
 
@@ -164,8 +174,9 @@ export async function handleInternalUsage(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   if (!isPlainObject(parsed.value)) {
@@ -175,6 +186,7 @@ export async function handleInternalUsage(
 
   const workspaceId = readId(body['workspaceId'])
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const turnId = readOptionalId(body['turnId'])
   if (turnId === INVALID) return sendError(res, 400, 'invalid_body', 'turnId must be a string')
   const idem = readOptionalId(body['idem'])
@@ -258,8 +270,9 @@ export async function handleInternalMeter(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   if (!isPlainObject(parsed.value)) {
@@ -269,6 +282,7 @@ export async function handleInternalMeter(
 
   const workspaceId = readId(body['workspaceId'])
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const kind = readMeterKind(body['kind'])
   if (kind === null) {
     return sendError(res, 400, 'invalid_body', `kind must be one of ${METER_KINDS.join(', ')}`)
@@ -460,30 +474,17 @@ function usageJson(row: UsageRow): Record<string, unknown> {
 
 // ---- 鉴权 / 输入 / 错误 -----------------------------------------------------
 
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
+interface RuntimeStore {
+  store: Store
+  auth: RuntimeRequestAuth
 }
 
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
-}
-
-function requireRuntimeStore(ctx: Ctx, req: IncomingMessage, res: ServerResponse): Store | null {
-  if (!authorizeRuntime(ctx, req, res)) return null
-  return requireStore(ctx, res)
+function requireRuntimeStore(ctx: Ctx, req: IncomingMessage, res: ServerResponse): RuntimeStore | null {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return null
+  const store = requireStore(ctx, res)
+  if (store === null) return null
+  return { store, auth }
 }
 
 function requireStore(ctx: Ctx, res: ServerResponse): Store | null {

@@ -3,26 +3,31 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { activeRound, getStopping, latestRound, setStopping } from '../../../packages/store/src/rounds.ts'
+import { activeRound, getRound, getStopping, latestRound, setStopping } from '../../../packages/store/src/rounds.ts'
+import { getRoom } from '../../../packages/store/src/rooms.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { applyAdvance, assignmentsForRound } from './round-orchestrator.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
+import type { RuntimeRequestAuth } from './runtime-auth.ts'
 
 export interface RoundsHttpContext {
+  /** 轮次表所在的原始 SQLite store（同时充当 runtime token 的校验库）。 */
   store: Store
+  /** 显式注入的原始 store；省略时复用 `store`（两者本来就是同一个库）。 */
+  rawStore?: Store
   runtimeToken?: string
   now?: () => number
 }
 
-function tokenFrom(req: IncomingMessage): string | null {
-  const header = req.headers['x-runtime-token']
-  const value = Array.isArray(header) ? header[0] : header
-  if (typeof value === 'string' && value !== '') return value
-  return null
+/** 统一鉴权：workspace token 的 workspaceId 用来校验 room/round 归属。 */
+function authorize(ctx: RoundsHttpContext, req: IncomingMessage, res: ServerResponse): RuntimeRequestAuth | null {
+  return authorizeRuntimeHttp({ ...ctx, rawStore: ctx.rawStore ?? ctx.store }, req, res)
 }
 
-function authorized(ctx: RoundsHttpContext, req: IncomingMessage): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') return false
-  return tokenFrom(req) === ctx.runtimeToken
+/** 房间 → workspace；未知房间返回 null，交给原来的 404 路径。 */
+function roomWorkspace(ctx: RoundsHttpContext, roomId: string): string | null {
+  const room = getRoom(ctx.store, roomId)
+  return room === null ? null : room.workspaceId
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -54,10 +59,9 @@ export async function handleInternalAssignments(
   res: ServerResponse,
   roomId: string
 ): Promise<void> {
-  if (!authorized(ctx, req)) {
-    fail(res, 401, 'unauthorized', 'runtime token required')
-    return
-  }
+  const auth = authorize(ctx, req, res)
+  if (auth === null) return
+  if (!ensureRuntimeWorkspace(auth, roomWorkspace(ctx, roomId), res)) return
   try {
     send(res, 200, { assignments: assignmentsForRound(ctx.store, roomId) })
   } catch (error) {
@@ -72,10 +76,9 @@ export async function handleInternalRound(
   res: ServerResponse,
   roomId: string
 ): Promise<void> {
-  if (!authorized(ctx, req)) {
-    fail(res, 401, 'unauthorized', 'runtime token required')
-    return
-  }
+  const auth = authorize(ctx, req, res)
+  if (auth === null) return
+  if (!ensureRuntimeWorkspace(auth, roomWorkspace(ctx, roomId), res)) return
   const round = activeRound(ctx.store, roomId) ?? latestRound(ctx.store, roomId)
   const stopping = round === null ? null : getStopping(ctx.store, round.id)
   send(res, 200, { round, stopping })
@@ -88,10 +91,12 @@ export async function handleInternalAdvance(
   res: ServerResponse,
   roundId: string
 ): Promise<void> {
-  if (!authorized(ctx, req)) {
-    fail(res, 401, 'unauthorized', 'runtime token required')
-    return
-  }
+  const auth = authorize(ctx, req, res)
+  if (auth === null) return
+  const roundForToken = getRound(ctx.store, roundId)
+  const targetWorkspace =
+    roundForToken === null ? null : (getRoom(ctx.store, roundForToken.roomId)?.workspaceId ?? null)
+  if (!ensureRuntimeWorkspace(auth, targetWorkspace, res)) return
   const body = await readJson(req)
   if (typeof body !== 'object' || body === null || (body as { __parseError?: boolean }).__parseError === true) {
     fail(res, 400, 'invalid_input', 'body must be JSON')

@@ -44,17 +44,25 @@ export async function loadBaselineProfileLock(options: { profileDir?: string; no
  * 从控制面拉锁（runtime 侧；POST /api/internal/plugins/sync，runtime token 鉴权）。
  * 失败一律抛错：锁拉不到就不许假装启动成功。拉到后校验形状与 integrity，
  * 被篡改/截断的锁文档同样算失败。
+ *
+ * `workspaceId` 是给每 workspace 短期 token 用的：sync 接口要求 workspace token
+ * 声明自己是谁（缺失或伪造 → 403）；全局 token 不需要这个头。
  */
 export async function fetchProfileLock(options: {
   apiBase: string
   runtimeToken: string
+  workspaceId?: string
   fetchImpl?: typeof fetch
 }): Promise<ProfileLock> {
   const doFetch = options.fetchImpl ?? fetch
   const url = `${options.apiBase.replace(/\/+$/, '')}/api/internal/plugins/sync`
+  const headers: Record<string, string> = { 'x-runtime-token': options.runtimeToken }
+  if (options.workspaceId !== undefined && options.workspaceId !== '') {
+    headers['x-roost-workspace-id'] = options.workspaceId
+  }
   let res: Awaited<ReturnType<typeof fetch>>
   try {
-    res = await doFetch(url, { method: 'POST', headers: { 'x-runtime-token': options.runtimeToken } })
+    res = await doFetch(url, { method: 'POST', headers })
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`profile lock sync failed: ${url} unreachable (${detail})`)

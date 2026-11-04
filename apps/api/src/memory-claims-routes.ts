@@ -10,18 +10,19 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extractClaims, planCleanup } from '../../../packages/memory/src/index.ts'
 import { MEMORY_DAILY_LIMIT, deleteMemory, listMemories, writeMemory } from '../../../packages/store/src/memories.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
+import type { RuntimeRequestAuth } from './runtime-auth.ts'
 
 export interface MemoryClaimsContext {
   store: Store
+  /** 原始 store；省略时复用 `store`（memory claims 本来就只接真库）。 */
+  rawStore?: Store
   runtimeToken?: string
+  now?: () => number
 }
 
-function authorized(ctx: MemoryClaimsContext, req: IncomingMessage): boolean {
-  const expected = ctx.runtimeToken ?? ''
-  if (expected === '') return false
-  const header = req.headers['x-runtime-token']
-  const value = Array.isArray(header) ? header[0] : header
-  return typeof value === 'string' && value === expected
+function authorize(ctx: MemoryClaimsContext, req: IncomingMessage, res: ServerResponse): RuntimeRequestAuth | null {
+  return authorizeRuntimeHttp({ ...ctx, rawStore: ctx.rawStore ?? ctx.store }, req, res)
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -47,7 +48,8 @@ function todayCount(store: Store, workspaceId: string, now: number): number {
 }
 
 export async function handleMemoryClaims(ctx: MemoryClaimsContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authorized(ctx, req)) return send(res, 401, { ok: false, error: { code: 'unauthorized', message: 'runtime token required' } })
+  const auth = authorize(ctx, req, res)
+  if (auth === null) return
   const body = await readJson(req)
   if (body === null) return send(res, 400, { ok: false, error: { code: 'invalid_body', message: 'body must be a JSON object' } })
   const workspaceId = typeof body['workspaceId'] === 'string' ? body['workspaceId'].trim() : ''
@@ -55,7 +57,9 @@ export async function handleMemoryClaims(ctx: MemoryClaimsContext, req: Incoming
   if (workspaceId === '' || text.trim() === '') {
     return send(res, 400, { ok: false, error: { code: 'invalid_body', message: 'workspaceId and text are required' } })
   }
-  const now = Date.now()
+  // workspace token 只能给自己 workspace 写记忆。
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
+  const now = ctx.now?.() ?? Date.now()
   const alreadyToday = typeof body['alreadyToday'] === 'number' ? body['alreadyToday'] : todayCount(ctx.store, workspaceId, now)
   const extracted = extractClaims({ text, now, dailyCap: MEMORY_DAILY_LIMIT, alreadyToday })
   const accepted: string[] = []
@@ -83,12 +87,15 @@ export async function handleMemoryClaims(ctx: MemoryClaimsContext, req: Incoming
 }
 
 export async function handleMemoryCleanup(ctx: MemoryClaimsContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authorized(ctx, req)) return send(res, 401, { ok: false, error: { code: 'unauthorized', message: 'runtime token required' } })
+  const auth = authorize(ctx, req, res)
+  if (auth === null) return
   const body = await readJson(req)
   if (body === null) return send(res, 400, { ok: false, error: { code: 'invalid_body', message: 'body must be a JSON object' } })
   const workspaceId = typeof body['workspaceId'] === 'string' ? body['workspaceId'].trim() : ''
   if (workspaceId === '') return send(res, 400, { ok: false, error: { code: 'invalid_body', message: 'workspaceId is required' } })
-  const now = Date.now()
+  // workspace token 只能清理自己 workspace 的记忆。
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
+  const now = ctx.now?.() ?? Date.now()
   // store 目前没有 falsified_at 列：用「retracted 之后的过期」近似（planCleanup 只清带 falsifiedAt 的条目）。
   const memories = listMemories(ctx.store, { workspaceId }).map((memory) => ({
     id: memory.id,

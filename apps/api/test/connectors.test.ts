@@ -444,15 +444,15 @@ test('内部调用：命中 approval_grants 直接放行；idem 重放只调用�
   })
 })
 
-test('内部接口：未配置 runtime token → 404（不暴露）', async () => {
+test('内部接口：全局 token 未配置但 SQLite 可用 → 401（workspace token 模式）', async () => {
   await withApi(
     async (fx) => {
       const disabled = await fx.call('POST', '/api/internal/connectors/call', {
         body: callBody({ workspaceId: fx.wsId }),
         runtimeToken: RUNTIME_TOKEN,
       })
-      assert.equal(disabled.status, 404)
-      assert.equal(disabled.json.error.code, 'not_found')
+      assert.equal(disabled.status, 401)
+      assert.equal(disabled.json.error.code, 'unauthenticated')
     },
     { runtimeToken: '' },
   )

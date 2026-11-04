@@ -77,6 +77,7 @@ import { DEFAULT_DSH_VERSION } from './marketplace-routes.ts'
 import type { SessionRecord, StorePort, WorkspaceRole } from './port.ts'
 import type { RateLimiter } from './rate-limit.ts'
 import { authenticate, isPlainObject, readJsonBody, readText, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 
 export const PLUGIN_INSTALL_APPROVAL_KIND = 'plugin_install'
 
@@ -94,7 +95,7 @@ export interface MarketplaceInstallRouteContext {
   now: () => number
   /** 市场目录 / 安装行 / 作业表只在 SQLite 里。 */
   rawStore?: Store
-  /** runtime token（未配置 = 内部接口 404）；默认读 ROOST_RUNTIME_TOKEN。 */
+  /** runtime token；默认读 ROOST_RUNTIME_TOKEN（无 store 且未配置 = 404）。 */
   runtimeToken?: string
   /** 每个 server 实例的写接口限流器（可选）。 */
   rateLimiter?: RateLimiter
@@ -717,7 +718,8 @@ export async function handlePluginInstallSynced(
   res: ServerResponse,
   url: URL,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res, { globalToken: runtimeTokenOf(ctx) })
+  if (auth === null) return
   if (!requireStore(ctx, res)) return
 
   const installId = syncedInstallIdFrom(url.pathname)
@@ -738,6 +740,9 @@ export async function handlePluginInstallSynced(
   if (job === null) {
     return sendError(res, 404, 'plugin.job_not_found', `unknown plugin install job for ${installId}`)
   }
+  // workspace token 只能回报自己 workspace 的安装作业。
+  const ownedInstall = getInstall(store, job.installId)
+  if (ownedInstall !== null && !ensureRuntimeWorkspace(auth, ownedInstall.workspaceId, res)) return
 
   const at = ctx.now()
   const ok = body['ok']
@@ -1311,29 +1316,6 @@ function syncedInstallIdFrom(pathname: string): string | null {
 function runtimeTokenOf(ctx: Ctx): string {
   if (ctx.runtimeToken !== undefined) return ctx.runtimeToken
   return process.env.ROOST_RUNTIME_TOKEN ?? ''
-}
-
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-/** 未配置 = 404（不暴露内部接口）；错 token = 401。 */
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  const expected = runtimeTokenOf(ctx)
-  if (expected === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== expected) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
 }
 
 // ---- 错误映射 ----------------------------------------------------------------

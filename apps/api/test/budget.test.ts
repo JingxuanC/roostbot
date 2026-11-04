@@ -129,14 +129,16 @@ function eventCount(store: Store, kind: string): number {
   return Number(row.n)
 }
 
-test('runtime token：未配置 404，缺失 401；memory port 503', async () => {
+test('runtime token：全局未配置但 SQLite 可用 → 401，缺失 401；memory port 503', async () => {
+  // 有 rawStore 时 workspace token 可用，所以全局 token 未配置是 401 而不是 404。
   await withApi(
     async (fx) => {
       const disabled = await fx.call('POST', '/api/internal/budget/reserve', {
         body: { workspaceId: fx.ws.id, runId: 'run_1', metric: 'tokens', amount: 1 },
         runtimeToken: RUNTIME_TOKEN,
       })
-      assert.equal(disabled.status, 404)
+      assert.equal(disabled.status, 401)
+      assert.equal(disabled.json.error.code, 'unauthenticated')
     },
     { runtimeToken: '' },
   )

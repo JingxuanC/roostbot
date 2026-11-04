@@ -58,6 +58,7 @@ import type { Store } from '../../../packages/store/src/types.ts'
 import type { StorePort, WorkspaceRole } from './port.ts'
 import { approvalJson } from './bot-rooms-routes.ts'
 import { authenticate, isPlainObject, readJsonBody, readText, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 
 /** OAuth state 有效期：design §4 要求 10 分钟。 */
 export const CONNECTOR_STATE_TTL_MS = 10 * 60 * 1000
@@ -369,7 +370,8 @@ export async function handleInternalConnectorCall(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const store = requireStore(ctx, res)
   if (store === null) return
 
@@ -387,6 +389,8 @@ export async function handleInternalConnectorCall(
   if (workspaceId === null || botId === null || !isConnectorSlug(slug) || action === null) {
     return sendError(res, 400, 'invalid_body', 'workspaceId, botId, slug, action are required')
   }
+  // workspace token 只能调用自己 workspace 的连接器。
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const idem = readOptionalKey(body['idem'])
   if (idem === INVALID) {
     return sendError(res, 400, 'invalid_body', `idem must be a string of 1..${MAX_ID_CHARS} chars when present`)
@@ -613,28 +617,6 @@ function requireStore(ctx: Ctx, res: ServerResponse): Store | null {
 function isAdmin(store: Store, workspaceId: string, accountId: string): boolean {
   const role: WorkspaceRole | null = getWorkspaceRole(store, workspaceId, accountId)
   return role === 'owner' || role === 'admin'
-}
-
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-/** 与 server.ts / approvals-routes.ts 同一套语义：未配置 404，错 token 401。 */
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
 }
 
 /** `/api/connectors/<slug>[/<suffix>]`；suffix='' 表示只到 slug。 */

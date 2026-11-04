@@ -5,13 +5,17 @@
 #   * OpenShell gateway 可认证（openshell status → Authenticated）
 #   * 镜像已构建：docker build -f apps/runtime/agent.Dockerfile -t roost/agent:dev .
 #   * 环境变量：
-#       ROOST_RUNTIME_TOKEN=<随机串>      内部接口 token（脚本也会用）
+#       ROOST_RUNTIME_TOKEN=<随机串>      控制面管理员级内部凭据（旧部署兼容）
 #       ROOST_SANDBOX=openshell           （固定）
 #       ROOST_CP_HOST=host.openshell.internal
 #       ROOST_CP_PORT=<控制面端口，默认 8792>
 #       ROOST_SANDBOX_IMAGE=roost/agent:dev
 #       PORT=<控制面端口，默认 8792>
 #       ROOST_DB=<sqlite 路径，默认 ./data/roost.db>
+#
+# E6 起沙箱不再继承这个全局 token：/start 会为每个 workspace 签发 24h 短 token，
+# 通过 ROOST_RUNTIME_TOKEN 注入沙箱 env。云主机上的 ROOST_RUNTIME_TOKEN 只作为
+# 控制面管理员凭据（运维面 / 旧部署兼容），轮换它不再需要重启所有沙箱。
 #
 # 用法： sh scripts/cloud-run.sh
 # 结束后：浏览器打开 http://<云主机>:<PORT>/ ，用脚本打印的新配对码配对。
@@ -58,8 +62,12 @@ ROOM=$(post /api/rooms "$SESSION" "{\"workspaceId\":\"$WS\",\"name\":\"云端验
 echo "  bots=$BOT_A,$BOT_B room=$ROOM"
 
 echo "== 3) 启动用户沙箱（room-agent 作为主进程）"
+# 沙箱的 ROOST_RUNTIME_TOKEN 由控制面在这里签发（每 workspace 一个 24h 短 token），
+# 不再沿用云主机 env 里的全局 token；响应里的 tokenId 只用于审计/回收，不是明文。
 post "/api/workspaces/$WS/start" "$SESSION" '{}' > /tmp/roost-start.json
 cat /tmp/roost-start.json | head -c 300; echo
+START_TOKEN_ID=$(json "d.get('tokenId','')" < /tmp/roost-start.json)
+echo "  sandbox runtime token issued: ${START_TOKEN_ID:-none (legacy global token)}"
 for i in $(seq 1 60); do
   PHASE=$(get "/api/workspaces/$WS/runtime" "$SESSION" | json "d.get('runtime') and d['runtime']['phase'] or ''")
   [ "$PHASE" = "ready" ] && break

@@ -293,6 +293,8 @@ export interface StorePort {
   // ---- 服务端内部（runtime worker 用；只由持有 runtime token 的进程调用）----
   /** 所有房间（worker 启动时发现要盯哪些房间）。 */
   listAllRooms(): Promise<RoomRecord[]>
+  /** 房间归属的 workspace；未知房间 null。workspace token 的内部接口用它做归属校验。 */
+  getRoomWorkspace(roomId: string): Promise<string | null>
   /** 以 Bot 身份写一条消息。 */
   postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord>
   /** 内部读：不走成员校验，调用方已经用 runtime token 证明过身份。 */

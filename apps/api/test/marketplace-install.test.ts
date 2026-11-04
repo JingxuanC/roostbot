@@ -594,14 +594,15 @@ test('tier：C 级只提示面板容器（202），D 级拒绝（409）', async 
 
 // ---- 沙箱 sync ---------------------------------------------------------------
 
-test('synced：runtime token 校验（未配置 404 / 缺 token 401 / 错 token 401）', async () => {
+test('synced：runtime token 校验（全局未配置但 SQLite 可用 → 401 / 缺 token 401 / 错 token 401）', async () => {
   const disabled = await startFixture({ runtimeToken: null })
   try {
+    // E6：ctx.rawStore 存在即可校验 workspace token，所以这里不再是 404 关闭。
     const res = await disabled.call('POST', '/api/internal/plugin-installs/pli_x/synced', {
       body: { ok: true },
     })
-    assert.equal(res.status, 404)
-    assert.equal(res.json.error.code, 'not_found')
+    assert.equal(res.status, 401)
+    assert.equal(res.json.error.code, 'unauthenticated')
   } finally {
     await disabled.close()
   }

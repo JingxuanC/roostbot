@@ -182,7 +182,7 @@ function countRooms(store: Store): number {
   return Number(row.n)
 }
 
-test('runtime token：缺失/错误 401；未配置 404（不暴露内部接口）', async () => {
+test('runtime token：缺失/错误 401；全局未配置但 SQLite 可用 → 401', async () => {
   await withApi(async (fx) => {
     const missing = await fx.call('POST', '/api/internal/bot-rooms', { body: requestBody(fx) })
     assert.equal(missing.status, 401)
@@ -197,12 +197,13 @@ test('runtime token：缺失/错误 401；未配置 404（不暴露内部接口�
 
   await withApi(
     async (fx) => {
+      // E6：有 rawStore 就能用每 workspace token，因此这里是 401（缺凭据）。
       const disabled = await fx.call('POST', '/api/internal/bot-rooms', {
         body: requestBody(fx),
         runtimeToken: RUNTIME_TOKEN,
       })
-      assert.equal(disabled.status, 404)
-      assert.equal(disabled.json.error.code, 'not_found')
+      assert.equal(disabled.status, 401)
+      assert.equal(disabled.json.error.code, 'unauthenticated')
     },
     { runtimeToken: undefined },
   )

@@ -8,7 +8,8 @@
 //
 // 鉴权分两条路：
 //   * Bot 侧走 runtime token（x-runtime-token 或 Authorization: Runtime <token>），
-//     与 server.ts 的内部接口同一套语义（未配置 = 404，不暴露接口存在）；
+//     与 server.ts 的内部接口同一套语义（无全局 token 且无 rawStore = 404；
+//     有 rawStore 时 workspace token 生效，跨 workspace = 403）；
 //   * 用户侧走 Bearer 会话，审批必须落在该账号是成员的 workspace 里。
 //
 // 错误形状与现有 API 一致：{ok:false,error:{code,message}}，全部 no-store（sendError/sendJson 保证）。
@@ -29,6 +30,7 @@ import {
 import type { RoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { authenticate, isPlainObject, readJsonBody, roomJson, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { RoomRecord, StorePort } from './port.ts'
 
 export interface BotRoomsRouteContext {
@@ -44,7 +46,8 @@ type Ctx = BotRoomsRouteContext
 // ---- 内部：Bot 申请建群 ------------------------------------------------------
 
 export async function handleBotCreateRoom(ctx: Ctx, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const store = ctx.rawStore
   if (store === undefined) {
     return sendError(res, 503, 'runtime.not_configured', 'bot room approvals need the SQLite store')
@@ -61,6 +64,8 @@ export async function handleBotCreateRoom(ctx: Ctx, req: IncomingMessage, res: S
   if (workspaceId === null) {
     return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
   }
+  // workspace token 只能给自己的 workspace 申请建群。
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const botId = readId(body['botId'])
   if (botId === null) {
     return sendError(res, 400, 'invalid_body', 'botId is required (non-empty string)')
@@ -248,27 +253,6 @@ function roomRecordFromDetail(detail: RoomDetail): RoomRecord {
 }
 
 // ---- 内部 --------------------------------------------------------------------
-
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
-}
 
 function approvalIdFromPath(pathname: string): string | null {
   const match = /^\/api\/approvals\/([^/]+)$/.exec(pathname.replace(/\/+$/, ''))

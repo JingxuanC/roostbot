@@ -168,11 +168,13 @@ test('内部写入：201 落库，falsifier/kind/confidence 校验返回 400 mem
   })
 })
 
-test('内部写入：runtime token 未配置 404，错 token 401', async () => {
+test('内部写入：全局 token 未配置但 SQLite 可用 → 401，错 token 401', async () => {
+  // E6：rawStore 存在时 workspace token 生效，因此未配置全局 token 是 401。
   await withApi(
     async ({ ws, call }) => {
       const disabled = await call('POST', '/api/internal/memories', { body: { workspaceId: ws.id, ...payload() } })
-      assert.equal(disabled.status, 404)
+      assert.equal(disabled.status, 401)
+      assert.equal(disabled.json.error.code, 'unauthenticated')
     },
     { runtimeToken: '' },
   )

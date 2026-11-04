@@ -11,7 +11,8 @@
 //
 // 抽取器不在这里：runtime 侧用规则校验后调用内部写接口；本层只做输入形状、权限与错误映射。
 // 记忆表只在 SQLite 里；内存 port（无 rawStore）一律 503 runtime.not_configured。
-// runtime token 语义与其他内部接口一致：未配置 404，错误 token 401。
+// runtime token 语义与其他内部接口一致：无全局 token 且无 rawStore = 404；有 rawStore
+// 时 workspace token 生效（跨 workspace = 403），错误 token = 401。
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -32,6 +33,8 @@ import type { Memory, MemoryEvidence, MemoryKind, MemoryStatus } from '../../../
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { SessionRecord, StorePort } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
+import type { RuntimeRequestAuth } from './runtime-auth.ts'
 
 export interface MemoriesRouteContext {
   store: StorePort
@@ -57,13 +60,15 @@ export async function handleInternalWriteMemory(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const body = await readObjectBody(req, res)
   if (body === null) return
 
   const workspaceId = readString(body['workspaceId'], MAX_ID_CHARS)
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const scope = readString(body['scope'], MAX_SCOPE_CHARS)
   if (scope === null) return sendError(res, 400, 'invalid_body', 'scope is required')
   const subject = readString(body['subject'], MAX_SUBJECT_CHARS)
@@ -123,13 +128,15 @@ export async function handleInternalRetrieve(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const body = await readObjectBody(req, res)
   if (body === null) return
 
   const workspaceId = readString(body['workspaceId'], MAX_ID_CHARS)
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
   const scopes = readStringArray(body['scopes'], MAX_SCOPE_CHARS)
   if (scopes === null) return sendError(res, 400, 'invalid_body', 'scopes must be an array of scope strings')
   if (typeof body['query'] !== 'string') {
@@ -162,8 +169,9 @@ export async function handleInternalRecordReads(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const store = requireRuntimeStore(ctx, req, res)
-  if (store === null) return
+  const runtime = requireRuntimeStore(ctx, req, res)
+  if (runtime === null) return
+  const { store, auth } = runtime
   const body = await readObjectBody(req, res)
   if (body === null) return
 
@@ -173,6 +181,15 @@ export async function handleInternalRecordReads(
   if (ids === null) return sendError(res, 400, 'invalid_body', 'ids must be an array of memory ids')
   if (body['used'] !== undefined && typeof body['used'] !== 'boolean') {
     return sendError(res, 400, 'invalid_body', 'used must be a boolean when present')
+  }
+  // recordReads 只收 memory id：workspace token 不能给别的 workspace 的记忆记 hit。
+  if (auth.workspaceId !== null) {
+    for (const id of ids) {
+      const memory = getMemory(store, id)
+      if (memory !== null && memory.workspaceId !== auth.workspaceId) {
+        return sendError(res, 403, 'forbidden_workspace', `runtime token is scoped to workspace ${auth.workspaceId}`)
+      }
+    }
   }
 
   try {
@@ -309,30 +326,17 @@ export function memoryJson(memory: Memory): Record<string, unknown> {
   }
 }
 
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
+interface RuntimeStore {
+  store: Store
+  auth: RuntimeRequestAuth
 }
 
-function authorizeRuntime(ctx: Ctx, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
-}
-
-function requireRuntimeStore(ctx: Ctx, req: IncomingMessage, res: ServerResponse): Store | null {
-  if (!authorizeRuntime(ctx, req, res)) return null
-  return requireStore(ctx, res)
+function requireRuntimeStore(ctx: Ctx, req: IncomingMessage, res: ServerResponse): RuntimeStore | null {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return null
+  const store = requireStore(ctx, res)
+  if (store === null) return null
+  return { store, auth }
 }
 
 function requireStore(ctx: Ctx, res: ServerResponse): Store | null {

@@ -170,6 +170,7 @@ import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
 import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import {
   createHttpLogEntry,
@@ -1277,36 +1278,23 @@ function messagesJson(
 
 // ---- 服务端内部接口（runtime worker 专用，runtime token 鉴权）----------------
 // 这不是给浏览器用的：worker 要能发现房间、按 seq 读、以 Bot 身份说话。
-
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const header = (req.headers['x-runtime-token'] ?? '').toString()
-  if (header !== '') return header
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-function authorizeRuntime(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    // 没配置 = 功能关闭：404 而不是 401，避免暴露"这里有内部接口"。
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
-  return true
-}
+// 鉴权统一走 runtime-auth.ts：全局 token（管理员）或每 workspace 短期 token；
+// workspace token 只能访问自己 workspace 的房间（见 handleInternal* 的归属校验）。
 
 async function handleInternalRooms(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url?: URL): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   try {
     // 一沙箱一 workspace：带 workspaceId 时只返回这个 workspace 的房间，避免串房间。
     const requested = url?.searchParams.get('workspaceId') ?? process.env.ROOST_WORKSPACE_ID ?? null
+    if (auth.workspaceId !== null) {
+      // workspace token：省略 workspaceId 时按自己的 workspace 处理；显式给了别的
+      // workspaceId 一律 403，而不是静默返回空列表。
+      if (!ensureRuntimeWorkspace(auth, requested ?? auth.workspaceId, res)) return
+    }
+    const effective = auth.workspaceId ?? requested
     const all = await ctx.store.listAllRooms()
-    const filtered = requested === null ? all : all.filter((room) => room.workspaceId === requested)
+    const filtered = effective === null ? all : all.filter((room) => room.workspaceId === effective)
     sendJson(res, 200, { rooms: filtered.map(roomJson) })
   } catch (err) {
     sendStoreFailure(res, err)
@@ -1314,9 +1302,14 @@ async function handleInternalRooms(ctx: RoomRouteContext, req: IncomingMessage, 
 }
 
 async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const roomId = internalRoomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
   const afterRaw = url.searchParams.get('after')
   const afterSeq = afterRaw === null ? undefined : Number.parseInt(afterRaw, 10)
   if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
@@ -1340,9 +1333,14 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
 }
 
 async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
   const roomId = roomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   const body = parsed.value as Record<string, unknown>
@@ -2027,7 +2025,7 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, 503, 'runtime.not_configured', 'memory requires the SQLite store')
       return
     }
-    await handleMemoryClaims({ store: ctx.rawStore, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
+    await handleMemoryClaims({ store: ctx.rawStore, rawStore: ctx.rawStore, now: ctx.now, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
     return
   }
 
@@ -2040,7 +2038,7 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, 503, 'runtime.not_configured', 'memory requires the SQLite store')
       return
     }
-    await handleMemoryCleanup({ store: ctx.rawStore, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
+    await handleMemoryCleanup({ store: ctx.rawStore, rawStore: ctx.rawStore, now: ctx.now, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
     return
   }
 
@@ -2477,7 +2475,7 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, 404, 'not_found', 'malformed room path')
       return
     }
-    await handleInternalAssignments({ store: ctx.rawStore, runtimeToken: ctx.runtimeToken, ...(ctx.now === undefined ? {} : { now: ctx.now }) }, req, res, roomId)
+    await handleInternalAssignments({ store: ctx.rawStore, rawStore: ctx.rawStore, now: ctx.now, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res, roomId)
     return
   }
 
@@ -2496,7 +2494,7 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, 404, 'not_found', 'malformed room path')
       return
     }
-    await handleInternalRound({ store: ctx.rawStore, runtimeToken: ctx.runtimeToken }, req, res, roomId)
+    await handleInternalRound({ store: ctx.rawStore, rawStore: ctx.rawStore, now: ctx.now, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res, roomId)
     return
   }
 
@@ -2515,7 +2513,7 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, 404, 'not_found', 'malformed round path')
       return
     }
-    await handleInternalAdvance({ store: ctx.rawStore, runtimeToken: ctx.runtimeToken, ...(ctx.now === undefined ? {} : { now: ctx.now }) }, req, res, roundId)
+    await handleInternalAdvance({ store: ctx.rawStore, rawStore: ctx.rawStore, now: ctx.now, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res, roundId)
     return
   }
 
@@ -2610,7 +2608,11 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       } catch {
         // 启动后的宿主回调失败不影响 API 结果。
       }
-      sendJson(res, result.created ? 201 : 200, { runtime: result.runtime })
+      // tokenId 只是可回收凭据的 id，不是明文 token；带上便于审计/测试定位本次签发。
+      sendJson(res, result.created ? 201 : 200, {
+        runtime: result.runtime,
+        ...(result.tokenId === undefined ? {} : { tokenId: result.tokenId }),
+      })
     } catch (error) {
       sendError(res, 502, 'runtime.start_failed', error instanceof Error ? error.message : String(error))
     }

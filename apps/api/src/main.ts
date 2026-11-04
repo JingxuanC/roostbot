@@ -87,6 +87,8 @@ async function main(): Promise<void> {
   const store = sqlite === undefined ? createMemoryStore() : createStorePort(sqlite)
 
   // 沙箱管理只在显式配置时启用；没有 OpenShell 的机器上 /start 返回 runtime.not_configured。
+  // E6：rawStore 交给 manager，ensure 时为每个 workspace 签发 24h token；没有 SQLite
+  // （ROOST_DB=memory）时退回全局 ROOST_RUNTIME_TOKEN，保持旧部署可用。
   const runtimeManager =
     process.env.ROOST_SANDBOX === 'openshell'
       ? openShellRuntimeManager({
@@ -94,6 +96,7 @@ async function main(): Promise<void> {
           cpHost: process.env.ROOST_CP_HOST ?? 'host.openshell.internal',
           cpPort: Number(process.env.ROOST_CP_PORT ?? port),
           runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
+          ...(sqlite === undefined ? {} : { rawStore: sqlite }),
           ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
           log: (line: string) => console.log(`[sandbox] ${line}`)
         })

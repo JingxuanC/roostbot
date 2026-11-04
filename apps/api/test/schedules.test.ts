@@ -306,13 +306,15 @@ test('内部 tick：runtime token、幂等与 miss/skip 计数', async () => {
   })
 })
 
-test('未配置 runtime token 时内部接口 404', async () => {
+test('全局 token 未配置但 SQLite 可用时内部接口 401（workspace token 模式）', async () => {
+  // E6：有 rawStore 就能校验每 workspace token，因此不再是 404 关闭。
   await withApi(
     async (fx) => {
       const response = await fx.call('POST', '/api/internal/scheduler/tick', {
         runtimeToken: RUNTIME_TOKEN,
       })
-      assert.equal(response.status, 404)
+      assert.equal(response.status, 401)
+      assert.equal(response.json.error.code, 'unauthenticated')
     },
     { runtimeToken: null },
   )

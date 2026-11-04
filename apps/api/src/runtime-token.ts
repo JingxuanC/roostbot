@@ -23,7 +23,8 @@
 //   * 失败一律返回同一种 unauthorized，且不回显 token 长度、不区分「没这个 token」
 //     与「token 错了」，避免枚举。
 //
-// 这里不接线：server.ts / 各 routes 的调用点由 Lead 改（见 handoff 清单）。
+// 接线在 runtime-auth.ts：它负责 404（内部接口关闭）/ 401 / 403（跨 workspace），
+// 各 route 模块只调用 authorizeRuntimeHttp + ensureRuntimeWorkspace（E6 已接完）。
 
 import { verifyRuntimeToken } from '../../../packages/store/src/runtime-tokens.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
