@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：57 / 152 · 进行中：3
+- 完成：60 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -129,8 +129,8 @@
 ### 5.5 多端（`docs/design/workspace.md`）
 
 - [ ] 5.5.1 设备管理页（列表/吊销/在线状态）
-- [ ] 5.5.2 同一 workspace 两窗口同步（SSE 已验证，补 UI 去重）
-- [ ] 5.5.3 离线态与重连补拉（after=seq）
+- [x] 5.5.2 同一 workspace 两窗口同步（`LIVE.seen` 统一去重 + 按 seq 乱序插入）
+- [x] 5.5.3 离线态与重连补拉（after=seq，指数退避 + online/visibility 触发）
 - [ ] 5.5.4 深链（`/w/:id/room/:id`、`/w/:id/bot/:id`）
 - [ ] 5.5.5 移动端布局
 - [ ] 5.5.6 通知策略（只在"需要你"时提醒）
@@ -216,7 +216,7 @@
 - [ ] E7 CI 在远端/GitHub 真跑（typecheck + 138 测试）
 - [ ] E8 远端 e2e 自动化（脚本 → CI job）
 - [ ] E9 web 端从"UI 切片"升级（组件化、tokens 包接入、可访问性审计）
-- [ ] E10 统一 SSE 断线重连与去重（已有 after=seq，补客户端）
+- [x] E10 统一 SSE 断线重连与去重（客户端显式状态机）
 - [ ] E11 错误码/文案统一（中文 + 稳定 code）
 - [ ] E12 包版本与发布（Changesets 或手写 CHANGELOG）
 
@@ -251,3 +251,4 @@
 - 2026-11-04 M4 收尾第三批子 agent：Bot 软删 7 天 + 恢复（迁移 0010、`POST /api/bots/:id/restore`、删即退房 + `bot.removed_from_room`）、`bot.created/updated/deleted/restored` 事件、房间日志裁剪投影（保留 60 / 首看 12 / `before` 翻页 / 增量不受影响）、`DELETE /api/rooms/:id`、profile sync 拉锁（`POST /api/internal/plugins/sync`，ensure 前硬门 + `ROOST_PROFILE_LOCK_ID` 注入沙箱）。392 测试全绿 + 真实 HTTP 冒烟（锁拉取/软删/恢复/删房间）通过。M4 仅剩远端真实模型验收（4.5.3/4.5.4）。
 - 2026-11-04 M5 认证加固（后端 agent）：配对码签发鉴权（Bearer owner/admin + 回环 bootstrap 例外）、会话续期（<15 天续到 createdAt+180d）、`GET /api/devices` + `DELETE /api/devices/:id`（写 `auth.session.revoked`）；399 测试全绿。
 - 2026-11-04 M5 审批闭环（后端 agent）：迁移 0011（approvals 增 action/target/consequence + `approval_grants`）、`approval.requested/decided` 事件（savepoint 保证恰好一次）、运行时 `POST/GET /api/internal/approvals`（命中长期授权直接放行）、用户侧 `/api/approval-grants`（仅 owner/admin 显式创建/撤销）；406 测试全绿。
+- 2026-11-04 M5 多端（前端 agent）：SSE 显式重连（1s→30s 退避，重连前 `after=lastSeq` 补拉）、`LIVE.seen` 统一去重与按 seq 乱序插入、离线提示与 online/visibilitychange/pageshow 补拉；`apps/web` 61 测试 + CDP 断网实测通过。

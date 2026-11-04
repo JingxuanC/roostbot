@@ -543,7 +543,13 @@ function renderMessages() {
   if (ROOM.events.length === 0) {
     list.append(el('p', { class: 'messages-empty muted', text: '还没有消息。说一句，开启一轮。' }))
   } else {
-    for (const event of ROOM.events) list.append(renderEvent(event))
+    for (const event of ROOM.events) {
+      const node = renderEvent(event)
+      // data-seq 供乱序到达时定位插入点（appendLiveEvent → insertEvent）。
+      const seq = Number(event && event.seq)
+      if (Number.isFinite(seq)) node.dataset.seq = String(seq)
+      list.append(node)
+    }
   }
   // 初始渲染完再开 live region，避免读屏一次念完整个房间。
   list.setAttribute('aria-live', 'polite')
@@ -570,15 +576,21 @@ async function loadOlderMessages(button) {
       `/api/rooms/${encodeURIComponent(roomId)}/messages?before=${encodeURIComponent(String(before))}`
     )
     if (LIVE.roomId !== roomId) return
-    const older = (Array.isArray(data?.messages) ? data.messages : []).map((message) =>
-      toEvent(message, roomId)
-    )
+    // 统一登记进 LIVE.seen：翻页拿到的旧消息和 SSE / after 补拉走同一套去重。
+    const older = (Array.isArray(data?.messages) ? data.messages : [])
+      .map((message) => toEvent(message, roomId))
+      .filter((event) => {
+        const seq = Number(event.seq)
+        if (!Number.isFinite(seq)) return true
+        if (LIVE.seen.has(seq)) return false
+        LIVE.seen.add(seq)
+        return true
+      })
+      .sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0))
     LIVE.logHasMore = Boolean(data?.page?.hasMore)
     LIVE.logBefore = Number.isSafeInteger(data?.page?.before) ? data.page.before : null
 
-    const known = new Set(ROOM.events.map((event) => event.seq))
-    const fresh = older.filter((event) => !known.has(event.seq))
-    if (fresh.length === 0) {
+    if (older.length === 0) {
       renderMessages()
       return
     }
@@ -587,7 +599,7 @@ async function loadOlderMessages(button) {
     const list = $('#messages')
     const prevHeight = list ? list.scrollHeight : 0
     const prevTop = list ? list.scrollTop : 0
-    ROOM.events = [...fresh, ...ROOM.events]
+    ROOM.events = [...older, ...ROOM.events]
     renderMessages()
     if (list) list.scrollTop = prevTop + (list.scrollHeight - prevHeight)
   } catch (error) {
@@ -830,6 +842,11 @@ const LIVE = {
   lastSeq: 0,
   seen: new Set(),
   stream: null,
+  // 显式重连状态机（TODO 5.5.3 / E10）：idle → connecting → open → reconnecting。
+  // 不依赖 EventSource 自带重连，因为它会复用打开时 URL 里的旧 after。
+  streamState: 'idle',
+  reconnectAttempt: 0,
+  reconnectTimer: null,
   // 房间日志裁剪投影（rooms.md §3）：首看 12 条，before 向前翻到 60 条。
   logHasMore: false,
   logBefore: null,
@@ -1052,11 +1069,8 @@ async function renderRoute() {
   const seq = ++routeSeq
   closeMentionMenu()
   const route = routeMatch(location.hash)
-  // 离开房间页就断开 SSE，别在后台一直收消息。
-  if (route.name !== 'room' && LIVE.stream) {
-    LIVE.stream.close()
-    LIVE.stream = null
-  }
+  // 离开房间页就断开 SSE 并清掉重连定时器，别在后台一直收消息/重连。
+  if (route.name !== 'room') stopStream()
 
   if (route.name === 'pair') {
     showView('pair')
@@ -1152,17 +1166,18 @@ function resetRoomChrome() {
   LIVE.seen = new Set()
   LIVE.logHasMore = false
   LIVE.logBefore = null
-  if (LIVE.stream) {
-    LIVE.stream.close()
-    LIVE.stream = null
-  }
+  // 关流 + 清掉待执行的重连定时器，避免旧房间继续补拉/重连。
+  stopStream()
   const settings = $('#room-settings-link')
   if (settings) {
     settings.hidden = true
     settings.removeAttribute('href')
   }
   const working = $('#working')
-  if (working) working.hidden = true
+  if (working) {
+    working.hidden = true
+    working.classList.remove('is-offline')
+  }
   const round = $('#round-status')
   if (round) {
     round.hidden = true
@@ -1273,11 +1288,19 @@ async function openRoomRoute(id, seq) {
     // 首看只给最近 12 条；page.before 是"加载更早"的游标。
     LIVE.logHasMore = Boolean(data?.page?.hasMore)
     LIVE.logBefore = Number.isSafeInteger(data?.page?.before) ? data.page.before : null
-    ROOM.events = list.map((message) => toEvent(message, room.id))
+    // 初始加载也走 LIVE.seen 去重，并按 seq 排序，后续乱序插入才有稳定基线。
+    const events = []
     for (const message of list) {
-      LIVE.seen.add(message.seq)
-      LIVE.lastSeq = Math.max(LIVE.lastSeq, Number(message.seq) || 0)
+      const seq = Number(message && message.seq)
+      if (Number.isFinite(seq)) {
+        if (LIVE.seen.has(seq)) continue
+        LIVE.seen.add(seq)
+        LIVE.lastSeq = Math.max(LIVE.lastSeq, seq)
+      }
+      events.push(toEvent(message, room.id))
     }
+    events.sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0))
+    ROOM.events = events
 
     applyLiveRoomChrome(room)
     renderMessages()
@@ -1358,9 +1381,18 @@ function renderWorking() {
   if (!working || !text) return
   if (!LIVE.active) {
     working.hidden = false
+    working.classList.remove('is-offline')
     text.textContent = ROOM.working.text
     return
   }
+  // 离线或流断开时，状态区优先说明连接问题；恢复 open 后回到轮次状态。
+  if (LIVE.streamState === 'reconnecting') {
+    working.hidden = false
+    working.classList.add('is-offline')
+    text.textContent = '离线，正在重连…'
+    return
+  }
+  working.classList.remove('is-offline')
   const round = LIVE.room && LIVE.room.round
   if (!round) {
     working.hidden = true
@@ -1388,29 +1420,71 @@ function renderWorking() {
 }
 
 function appendLiveEvent(message) {
-  if (message.seq === undefined || LIVE.seen.has(message.seq)) return
-  LIVE.seen.add(message.seq)
-  LIVE.lastSeq = Math.max(LIVE.lastSeq, Number(message.seq) || 0)
+  const seq = Number(message && message.seq)
+  if (!message || (Number.isFinite(seq) && LIVE.seen.has(seq))) return false
+  if (Number.isFinite(seq)) {
+    LIVE.seen.add(seq)
+    LIVE.lastSeq = Math.max(LIVE.lastSeq, seq)
+  }
+  insertEvent(toEvent(message, LIVE.roomId))
+  return true
+}
+
+/** 按 seq 把事件插到正确位置：乱序到达不会跑到末尾。 */
+function insertEvent(event) {
+  const seq = Number(event && event.seq)
+  let index = ROOM.events.length
+  if (Number.isFinite(seq)) {
+    for (let i = 0; i < ROOM.events.length; i += 1) {
+      const existing = Number(ROOM.events[i].seq)
+      if (Number.isFinite(existing) && existing > seq) {
+        index = i
+        break
+      }
+    }
+  }
+  const isAppend = index >= ROOM.events.length
+  ROOM.events.splice(index, 0, event)
+
   const list = $('#messages')
   if (!list) return
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
-  const event = toEvent(message, LIVE.roomId)
-  ROOM.events.push(event)
   const placeholder = list.querySelector('.messages-empty')
   if (placeholder) placeholder.remove()
-  list.append(renderEvent(event))
+  const node = renderEvent(event)
+  if (Number.isFinite(seq)) node.dataset.seq = String(seq)
+  if (isAppend) {
+    list.append(node)
+    if (nearBottom) list.scrollTop = list.scrollHeight
+    return
+  }
+
+  // DOM 里已有的第 index 个事件就是第一条 seq 更大的消息，插在它前面。
+  const ref = list.querySelectorAll('[data-seq]')[index] || null
+  const refAbove = ref ? ref.getBoundingClientRect().top < list.getBoundingClientRect().top : false
+  if (ref) list.insertBefore(node, ref)
+  else list.append(node)
   if (nearBottom) list.scrollTop = list.scrollHeight
+  else if (refAbove) list.scrollTop += node.offsetHeight
 }
 
+/**
+ * 用 after=LIVE.lastSeq 补拉断线期间的消息。
+ * 返回是否成功；重连状态机据此决定继续退避还是重新开流。
+ */
 async function refreshMessages() {
-  if (!LIVE.active || !LIVE.roomId) return
+  if (!LIVE.active || !LIVE.roomId) return false
+  const roomId = LIVE.roomId
   try {
     const query = LIVE.lastSeq > 0 ? `?after=${encodeURIComponent(String(LIVE.lastSeq))}` : ''
-    const data = await api.get(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages${query}`)
+    const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages${query}`)
+    if (!LIVE.active || LIVE.roomId !== roomId) return false
     const list = Array.isArray(data?.messages) ? data.messages : []
     for (const message of list) appendLiveEvent(message)
+    return true
   } catch (error) {
     if (isAuthError(error)) requirePair()
+    return false
   }
 }
 
@@ -1455,34 +1529,129 @@ function handleSpeakingEvent(event) {
   }
 }
 
-function openStream() {
-  if (!STREAM_ENABLED || !LIVE.active || !LIVE.roomId) return
+function setStreamState(state) {
+  LIVE.streamState = state
+  if (LIVE.active) renderWorking()
+}
+
+function clearReconnectTimer() {
+  if (LIVE.reconnectTimer) {
+    clearTimeout(LIVE.reconnectTimer)
+    LIVE.reconnectTimer = null
+  }
+}
+
+function closeStream() {
   if (LIVE.stream) {
     LIVE.stream.close()
     LIVE.stream = null
   }
+}
+
+/** 关流并清掉定时器：切房间、页面卸载、离开房间页时调用，避免旧房间还在重连。 */
+function stopStream() {
+  clearReconnectTimer()
+  closeStream()
+  LIVE.streamState = 'idle'
+  LIVE.reconnectAttempt = 0
+}
+
+function openStream() {
+  if (!STREAM_ENABLED || !LIVE.active || !LIVE.roomId) return
+  clearReconnectTimer()
+  if (LIVE.stream) {
+    LIVE.stream.close()
+    LIVE.stream = null
+  }
+  // 首次打开是 connecting；重连期间保持 reconnecting，直到 open 才隐藏离线提示。
+  if (LIVE.streamState === 'idle') LIVE.streamState = 'connecting'
   const path = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?access_token=${encodeURIComponent(LIVE.token)}&after=${LIVE.lastSeq}`
   let stream
   try {
     stream = new EventSource(API_BASE ? `${API_BASE}${path}` : path)
   } catch {
+    scheduleReconnect()
     return
   }
+  LIVE.stream = stream
+  stream.addEventListener('open', () => {
+    if (stream !== LIVE.stream) return
+    LIVE.reconnectAttempt = 0
+    setStreamState('open')
+  })
   stream.addEventListener('message', (event) => {
     try {
       appendLiveEvent(JSON.parse(event.data))
     } catch {
-      // 坏帧不该打断整条流；服务端会重连补拉。
+      // 坏帧不该打断整条流；重连补拉会兜住。
     }
   })
   stream.addEventListener('round', handleRoundEvent)
   stream.addEventListener('status', handleRoundEvent)
   stream.addEventListener('speaking', handleSpeakingEvent)
   stream.addEventListener('error', () => {
-    const text = $('#working-text')
-    if (text && LIVE.active) text.textContent = '连接断开，正在重连…'
+    if (stream !== LIVE.stream) return
+    // 关掉浏览器自动重连：它会带着旧的 after 重放，可能漏掉断线期间的消息。
+    // 这里只关流、不重置 reconnectAttempt，才能让退避逐次翻倍。
+    closeStream()
+    scheduleReconnect()
   })
-  LIVE.stream = stream
+}
+
+/** 指数退避：1s、2s、4s、8s… 上限 30s，下一次先补拉再开流。 */
+function scheduleReconnect() {
+  if (!STREAM_ENABLED || !LIVE.active || !LIVE.roomId) return
+  setStreamState('reconnecting')
+  if (LIVE.reconnectTimer) return
+  const attempt = LIVE.reconnectAttempt
+  LIVE.reconnectAttempt += 1
+  const delay = Math.min(1000 * 2 ** Math.min(attempt, 5), 30000)
+  LIVE.reconnectTimer = setTimeout(() => {
+    LIVE.reconnectTimer = null
+    void reconnectStream()
+  }, delay)
+}
+
+async function reconnectStream() {
+  if (!STREAM_ENABLED || !LIVE.active || !LIVE.roomId) return
+  const roomId = LIVE.roomId
+  const ok = await refreshMessages()
+  if (!LIVE.active || LIVE.roomId !== roomId) return
+  if (!ok) {
+    scheduleReconnect()
+    return
+  }
+  openStream()
+}
+
+function handleOnline() {
+  if (!LIVE.active) return
+  clearReconnectTimer()
+  LIVE.reconnectAttempt = 0
+  if (LIVE.stream && LIVE.stream.readyState !== 2) void refreshMessages()
+  else void reconnectStream()
+}
+
+function handleOffline() {
+  if (!LIVE.active) return
+  closeStream()
+  scheduleReconnect()
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState !== 'visible' || !LIVE.active) return
+  // 回到可见立即补拉一次：后台标签页的 SSE 可能被节流，断线提示也可能还没触发。
+  if (LIVE.reconnectTimer) {
+    clearReconnectTimer()
+    LIVE.reconnectAttempt = 0
+    void reconnectStream()
+    return
+  }
+  if (!LIVE.stream || LIVE.stream.readyState === 2) {
+    void reconnectStream()
+    return
+  }
+  void refreshMessages()
 }
 
 /** 配对成功后进入：有房间去房间，没房间先去建 Bot。 */
@@ -1817,6 +1986,17 @@ function boot() {
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
     void renderRoute()
+  })
+  // 离线/回到前台时显式补拉；页面卸载时清掉定时器与 EventSource。
+  window.addEventListener('online', handleOnline)
+  window.addEventListener('offline', handleOffline)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('pagehide', stopStream)
+  // 从往返缓存恢复时 pagehide 已经关过流，这里补一次重连。
+  window.addEventListener('pageshow', () => {
+    if (!LIVE.active || LIVE.stream || LIVE.reconnectTimer) return
+    LIVE.reconnectAttempt = 0
+    void reconnectStream()
   })
   void renderRoute()
 }

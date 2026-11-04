@@ -525,6 +525,16 @@ button {
   animation: breathe 2.4s var(--easing) infinite;
 }
 
+/* 离线/流断开：状态区就地说「离线，正在重连…」，不另造顶部横幅。 */
+.working.is-offline {
+  color: var(--roost-warn);
+}
+
+.working.is-offline .dot {
+  background: var(--roost-warn);
+  animation: none;
+}
+
 @keyframes breathe {
   0%,
   100% {
