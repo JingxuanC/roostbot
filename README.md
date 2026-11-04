@@ -13,6 +13,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| [TODO.md](TODO.md) | **唯一任务清单**（进度：`node scripts/todo-stats.mjs`） |
 | [docs/vision.md](docs/vision.md) | 做什么、不做什么、为谁做 |
 | [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户模型 |
 | [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时必须提供的七条契约 |
