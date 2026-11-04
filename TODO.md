@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：68 / 152 · 进行中：3
+- 完成：70 / 152 · 进行中：3
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -154,8 +154,8 @@
 - [x] 6.2.3 上传/下载 API + Range + 预签名
 - [x] 6.2.4 消息级文件授权路由
 - [ ] 6.2.5 缩略图（图片 + PDF 首页）+ EXIF 剥离
-- [ ] 6.2.6 产物渲染（image/pdf/html/table/code/page）
-- [ ] 6.2.7 产物卡片 UI + 沙箱 iframe（HTML）
+- [x] 6.2.6 产物渲染（image/pdf/html/table/code/page）
+- [x] 6.2.7 产物卡片 UI + 沙箱 iframe（HTML，`sandbox="allow-scripts"`）
 
 ### 6.3 记忆（`memory.md`）
 
@@ -255,3 +255,4 @@
 - 2026-11-04 M6 存储与产物（后端 agent）：`LocalVolumeStore`（内容寻址/原子写/去重/HMAC 签名读取）、迁移 0012（attachments/attachment_refs/artifacts/message_attachments，`message_seq` 对齐 events.seq）、raw 上传（产物 50MB / 附件 10MB）、消息级文件路由（Range/206、`?raw=1`、失败一律 404）、`attachment.gc`、EXIF 剥离与尺寸解析；431 测试全绿。缩略图尽力而为（有 sips/convert 才生成），PDF 首页缩略图未做。
 - 2026-11-04 M5 审批前端（前端 agent）：卡片展示 action/target/consequence + 请求方，已决策留历史行；「需要你」角标改真实 pending 数；新增 `#/settings` 长期授权管理（列表/创建/撤销，403 提示仅 owner/admin）。`apps/web` 70 测试 + CDP 手工验收通过。
 - 2026-11-04 M5 插件市场第一批（后端 agent）：迁移 0013（4 张表 + `plugin_installs.state`）、目录/详情/版本/预检 API、安装记录与 `plugin.install/update/uninstall` 事件、发布者白名单与 A/B tier 校验；升级后 state 回到 `installing` 等第二批 sync。462 测试全绿。沙箱 sync/重启/冒烟/快照回滚留第二批。
+- 2026-11-04 M6 产物前端（前端 agent）：消息附件按 kind 渲染（图片懒加载/灯箱、PDF 卡片、HTML/SVG 沙箱 iframe、CSV 表格预览、代码块折叠、未知类型下载），`getBlob` 带 Bearer 读取，blob URL 统一登记与回收；86 前端测试 + 无头 Chrome 六种附件实测通过。6.2.5 的 PDF 首页缩略图仍未做。

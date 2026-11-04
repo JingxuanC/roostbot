@@ -15,6 +15,7 @@
 // 受保护页面遇到 401 会回配对页并用 pendingRoute 记住原地址（见 README）。
 
 import { $, avatar, botAvatar, el } from './lib/dom.js'
+import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
 import { routeMatch } from './lib/routing.js'
@@ -388,13 +389,23 @@ function botLabel(id) {
   return botIdentity(id).name
 }
 
+/** 附件渲染上下文：只有实时房间才画附件区；预览模式没有后端。 */
+function attachmentContext() {
+  return { live: LIVE.active, api, requirePair }
+}
+
 /** 用户气泡：主色、右对齐，绝不和 Bot 消息混淆（messaging.md §14）。 */
-function renderUserMessage(text) {
+function renderUserMessage(event) {
+  const payload = event.payload
   const row = el('div', { class: 'msg msg-user' })
-  row.append(el('span', { class: 'sr-only', text: '你：' }))
+  const body = el('div', { class: 'msg-user-body' })
+  body.append(el('span', { class: 'sr-only', text: '你：' }))
   const bubble = el('div', { class: 'bubble bubble-user' })
-  bubble.append(markdownFragment(text))
-  row.append(bubble)
+  bubble.append(markdownFragment(payload.text))
+  body.append(bubble)
+  const attachments = renderAttachmentList(payload.attachments, attachmentContext())
+  if (attachments) body.append(attachments)
+  row.append(body)
   return row
 }
 
@@ -410,6 +421,8 @@ function renderRoomMessage(event) {
   const bubble = el('div', { class: 'bubble bubble-bot' })
   bubble.append(markdownFragment(event.payload.text))
   article.append(bubble)
+  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+  if (attachments) article.append(attachments)
   return article
 }
 
@@ -447,6 +460,8 @@ function renderPeerMessage(event, delivery) {
   const peerText = el('div', { class: 'peer-text' })
   peerText.append(markdownFragment(text))
   body.append(peerText)
+  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+  if (attachments) body.append(attachments)
   const meta = []
   if (event.peer.source) meta.push(`来源：${event.peer.source}`)
   if (event.peer.doneWhen) meta.push(`完成条件：${event.peer.doneWhen}`)
@@ -520,7 +535,7 @@ function renderToolCall(event) {
 /** 一条事件按来源分类，选渲染方式（对应 events.md 的 domain / kind）。 */
 function renderEvent(event) {
   if (event.domain === 'tool') return renderToolCall(event)
-  if (event.payload.role === 'user') return renderUserMessage(event.payload.text)
+  if (event.payload.role === 'user') return renderUserMessage(event)
 
   const delivery =
     event.peer && event.peer.delivery
@@ -536,6 +551,8 @@ function renderEvent(event) {
 }
 
 function renderMessages() {
+  // 整表重建 = 旧附件节点全部丢弃：先释放它们的 blob URL，避免内存泄漏。
+  resetAttachmentUrls()
   const list = $('#messages')
   list.replaceChildren()
   if (LIVE.logHasMore && LIVE.logBefore !== null) {
@@ -1190,6 +1207,8 @@ function toEvent(message, roomId) {
       role: isUser ? 'user' : 'bot',
       text: message.text,
       framing: isUser ? 'user' : 'room',
+      // 无附件时后端也会给 []；历史/翻页/补拉都走这里，形状保持一致。
+      attachments: Array.isArray(message.attachments) ? message.attachments : [],
     },
   }
 }
@@ -1212,6 +1231,8 @@ function setNeedsMode(live) {
 }
 
 function resetRoomChrome() {
+  // 切房间：旧房间的附件 blob URL 与灯箱/iframe 一起清掉。
+  resetAttachmentUrls()
   LIVE.active = false
   LIVE.room = null
   LIVE.roomId = ''
@@ -2054,7 +2075,10 @@ function boot() {
   window.addEventListener('online', handleOnline)
   window.addEventListener('offline', handleOffline)
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  window.addEventListener('pagehide', stopStream)
+  window.addEventListener('pagehide', () => {
+    stopStream()
+    resetAttachmentUrls()
+  })
   // 从往返缓存恢复时 pagehide 已经关过流，这里补一次重连。
   window.addEventListener('pageshow', () => {
     if (!LIVE.active || LIVE.stream || LIVE.reconnectTimer) return

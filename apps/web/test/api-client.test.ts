@@ -114,3 +114,68 @@ test('isMissingRoute 只认 404 not_found', () => {
   assert.equal(isMissingRoute(new ApiError('http_404', 'nope', { status: 404 })), true)
   assert.equal(isMissingRoute(new ApiError('internal_error', '坏了', { status: 500 })), false)
 })
+
+function binaryResponse(status, blob, contentType, errorText = '') {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 401 ? 'Unauthorized' : '',
+    headers: {
+      get(name) {
+        return name.toLowerCase() === 'content-type' ? contentType : null
+      },
+    },
+    blob: async () => blob,
+    text: async () => errorText,
+  }
+}
+
+test('getBlob 带 Bearer 读取二进制并返回 contentType', async () => {
+  const calls = []
+  const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' })
+  const api = createApiClient({
+    getToken: () => 'tok_blob',
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return binaryResponse(200, blob, 'image/png')
+    },
+  })
+  const result = await api.getBlob('/api/messages/7/files/a1')
+  assert.equal(calls[0].url, '/api/messages/7/files/a1')
+  assert.equal(calls[0].init.method, 'GET')
+  assert.equal(calls[0].init.headers.authorization, 'Bearer tok_blob')
+  assert.equal(calls[0].init.credentials, 'include')
+  assert.equal(result.contentType, 'image/png')
+  assert.equal(result.blob, blob)
+})
+
+test('getBlob 的 401 抛 ApiError，isAuthError 认它', async () => {
+  const api = createApiClient({
+    fetchImpl: async () =>
+      binaryResponse(
+        401,
+        new Blob([]),
+        'application/json',
+        JSON.stringify({ ok: false, error: { code: 'unauthenticated', message: '请先配对' } })
+      ),
+  })
+  await assert.rejects(api.getBlob('/api/messages/7/files/a1'), (error) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.status, 401)
+    assert.equal(error.code, 'unauthenticated')
+    assert.equal(isAuthError(error), true)
+    return true
+  })
+})
+
+test('getBlob 网络失败是 network 错误', async () => {
+  const api = createApiClient({
+    fetchImpl: async () => {
+      throw new TypeError('Failed to fetch')
+    },
+  })
+  await assert.rejects(api.getBlob('/api/messages/7/files/a1'), (error) => {
+    assert.equal(error.code, 'network')
+    return true
+  })
+})
