@@ -57,7 +57,10 @@ test('发消息：30/分钟/账号，超限 429 + Retry-After，注入时钟回�
 })
 
 test('插件安装：10/小时/账号，超限 429；未认证请求不消耗桶', async (t) => {
+  const savedAllow = process.env['ROOST_PLUGIN_ALLOWLIST']
+  process.env['ROOST_PLUGIN_ALLOWLIST'] = 'rate-plugin'
   const harness = await startSqliteHarness()
+  t.after(() => { if (savedAllow === undefined) delete process.env['ROOST_PLUGIN_ALLOWLIST']; else process.env['ROOST_PLUGIN_ALLOWLIST'] = savedAllow })
   t.after(() => harness.close())
   const token = await pairDevice(harness)
   const workspace = await harness.call('POST', '/api/workspaces', {
@@ -86,7 +89,7 @@ test('插件安装：10/小时/账号，超限 429；未认证请求不消耗桶
     engines: '^0.2.1-alpha.2',
     manifest: { engines: '^0.2.1-alpha.2' },
     permissions: {},
-    publishedAt: NOW,
+    publishedAt: NOW - 2 * 86_400_000,
   })
 
   const installPath = '/api/marketplace/plugins/rate-plugin/install'
@@ -111,5 +114,5 @@ test('插件安装：10/小时/账号，超限 429；未认证请求不消耗桶
   // 10/小时 = 每 6 分钟回填 1 个令牌。
   harness.clock.advance(RATE_LIMITS.pluginInstall.windowMs / RATE_LIMITS.pluginInstall.capacity)
   const recovered = await harness.call('POST', installPath, { token, body })
-  assert.equal(recovered.status, 200)
+  assert.ok(recovered.status === 202 || recovered.status === 200, `recovered got ${recovered.status}`)
 })

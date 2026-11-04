@@ -89,39 +89,39 @@
 
 - [x] 5.1.1 表：`plugin_publishers` / `plugin_market` / `plugin_versions` / `plugin_installs`
 - [x] 5.1.2 市场 API（列表/详情/版本/预检）
-- [ ] 5.1.3 安装流程：预检 → 权限披露 → 批准 → 写锁 → 沙箱 sync → 冒烟 → 回滚
+- [x] 5.1.3 安装流程：预检 → 权限披露 → 批准 → 写锁 → 沙箱 sync → 冒烟 → 回滚
 - [x] 5.1.4 profile lock 生成与校验（manifest + pnpm-lock + patch 行 + integrity；`packages/plugins/profile-lock.ts`）
-- [ ] 5.1.5 已安装 API（更新/停用/卸载/回滚）
+- [x] 5.1.5 已安装 API（更新/停用/卸载/回滚）
 - [x] 5.1.6 市场页 + 详情页 + 已安装页（安装后如实显示等待沙箱同步）
-- [ ] 5.1.7 Bot 工具列表标"来源插件"
-- [ ] 5.1.8 白名单 + 签名/来源校验
-- [ ] 5.1.9 运行时禁 postinstall（`--ignore-scripts`）
-- [ ] 5.1.10 安装前快照 + 失败自动回滚
+- [x] 5.1.7 Bot 工具列表标"来源插件"
+- [x] 5.1.8 白名单 + 签名/来源校验
+- [x] 5.1.9 运行时禁 postinstall（`--ignore-scripts`）
+- [x] 5.1.10 安装前快照 + 失败自动回滚
 
 ### 5.2 DSH web 面板表面（ADR 0004）
 
-- [ ] 5.2.1 沙箱内起 `dsh web`（127.0.0.1:4099）与 room-agent 共存
+- [x] 5.2.1 沙箱内起 `dsh web`（127.0.0.1:4099）与 room-agent 共存
 - [x] 5.2.2 控制面反代 `/w/<workspace>/dsh/*`（短时 HttpOnly cookie 鉴权、base path 剥离、HTML 重写）
 - [x] 5.2.3 iframe 容器（独立源、`sandbox="allow-scripts allow-same-origin"`、加载/失败兜底）
-- [ ] 5.2.4 面板清单（manifest `panels` + 启动冒烟核对）
-- [ ] 5.2.5 面板打开才唤醒、随沙箱 stop/start
+- [x] 5.2.4 面板清单（manifest `panels` + 启动冒烟核对）
+- [x] 5.2.5 面板打开才唤醒、随沙箱 stop/start
 - [x] 5.2.6 整页打开 DSH Web（高级选项）
 
 ### 5.3 认证与角色（`docs/design/auth.md`）
 
-- [ ] 5.3.1 注册/登录（邮箱+密码 Argon2id）/邮箱验证码
-- [ ] 5.3.2 OIDC（Google/GitHub）
+- [x] 5.3.1 注册/登录（邮箱+密码 Argon2id）/邮箱验证码
+- [x] 5.3.2 OIDC（Google/GitHub）
 - [x] 5.3.3 角色与成员管理（owner/admin/member/viewer；邀请需账号体系，随 5.3.1 做）
 - [x] 5.3.4 设备列表/吊销
 - [x] 5.3.5 会话续期（<15 天续到 180 天封顶）
-- [ ] 5.3.6 token 改 HttpOnly cookie + CSRF 双提交
+- [x] 5.3.6 token 改 HttpOnly cookie + CSRF 双提交
 - [x] 5.3.7 签发配对码需要 owner/admin（bootstrap 例外见 auth.md）
 
 ### 5.4 审批（"需要你"）
 
 - [x] 5.4.1 `approvals` 表（单次/长期、动作、目标、后果）
 - [x] 5.4.2 审批 API（列表/批准/拒绝 + 运行时申请/轮询）
-- [ ] 5.4.3 房间/工具/Bot 建群接入审批
+- [ ] 5.4.3 房间/工具/Bot 建群接入审批（Bot 建群与插件安装已接；工具调用审批要接 DSH 侧 approval，未做）
 - [x] 5.4.4 需要你页真实数据 + 卡片渲染（三要素 + 已决策历史 + 真实角标）
 - [x] 5.4.5 审批决策事件与审计（`approval.requested` / `approval.decided` 恰好一次）
 - [x] 5.4.6 长期授权（Allow always）与撤销（`approval_grants`，仅设置里显式创建）
@@ -245,6 +245,7 @@
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
 - 2026-11-04 沙箱内 DSH 命令不再逐条要审批：runtime/planA-boot/镜像统一 `DSH_PERMISSION_MODE=danger-full-access`（边界在 OpenShell）；`bots.approval` 到 DSH 预设的映射仍未做（4.2.19）。
+- 2026-11-04 wave1 完成并接线：账号登录（scrypt+OIDC+cookie/CSRF）、插件安装真实流水线（预检/审批/job/sync/回滚）、沙箱 dsh web 面板 + workspace 端口转发、登录/安装/面板前端；892 测试 + wave1 HTTP 冒烟 10/10。
 - 2026-11-04 远端 31 个提交（M4 tail + M5/M6）合入：742 测试全过、verify.sh 与四个 M4 冒烟无回归；E3 迁移项标记完成。
 - 2026-11-04 头像链路打通：store 的 image 上限从 512 字符放宽到 512k 字符 + dataURL 校验，API body 上限 64KiB→1MiB；HTTP 350k 字符冒烟通过。
 - 2026-11-04 收尾修正：kickoff 轮未结束时用户消息并入同一轮（否则 cloud-run 的双 Bot 验收会只回一个）。

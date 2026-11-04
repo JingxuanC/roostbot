@@ -44,6 +44,8 @@ async function withApi(fn: (fx: Fixture) => Promise<void>): Promise<void> {
   const store = openStore(join(dir, 'workspace.db'))
   const port = createStorePort(store)
   let started: Awaited<ReturnType<typeof startServer>> | null = null
+  const savedAllow = process.env['ROOST_PLUGIN_ALLOWLIST']
+  const savedRuntime = process.env['ROOST_RUNTIME_TOKEN']
 
   try {
     const ws = await port.createWorkspace({ accountId: ACCOUNT, name: '市场工作区', now: NOW })
@@ -80,15 +82,17 @@ async function withApi(fn: (fx: Fixture) => Promise<void>): Promise<void> {
       },
     }
 
+    process.env['ROOST_PLUGIN_ALLOWLIST'] = 'market-center,desktop-tool,future-plugin,unverified-plugin,client-plugin'
+    process.env['ROOST_RUNTIME_TOKEN'] = 'rt_market_test'
     started = await startServer({ store: storePort, rawStore: store, now: () => NOW, port: 0, host: '127.0.0.1' })
     const baseUrl = started.url
 
     async function call(
       method: string,
       path: string,
-      options: { body?: unknown; token?: string } = {},
+      options: { body?: unknown; token?: string; headers?: Record<string, string> } = {},
     ): Promise<ApiResult> {
-      const headers: Record<string, string> = {}
+      const headers: Record<string, string> = { ...(options.headers ?? {}) }
       if (options.token !== undefined) headers['authorization'] = `Bearer ${options.token}`
       let body: string | undefined
       if (options.body !== undefined) {
@@ -113,6 +117,10 @@ async function withApi(fn: (fx: Fixture) => Promise<void>): Promise<void> {
     await fn({ store, wsId: ws.id, call })
   } finally {
     if (started !== null) await started.close()
+    if (savedAllow === undefined) delete process.env['ROOST_PLUGIN_ALLOWLIST']
+    else process.env['ROOST_PLUGIN_ALLOWLIST'] = savedAllow
+    if (savedRuntime === undefined) delete process.env['ROOST_RUNTIME_TOKEN']
+    else process.env['ROOST_RUNTIME_TOKEN'] = savedRuntime
     store.close()
     rmSync(dir, { recursive: true, force: true })
   }
@@ -142,7 +150,7 @@ function seedMarketplace(store: Store): void {
     engines: '^0.2.1-alpha.2',
     manifest: { engines: '^0.2.1-alpha.2', routes: ['/api/market-center'], panels: 0 },
     permissions: { tools: 12, network: ['api.tushare.pro'], credentials: ['tushare'], diskBytes: 320_000_000 },
-    publishedAt: NOW,
+    publishedAt: NOW - 2 * 86_400_000,
   })
   upsertVersion(store, {
     slug: 'market-center',
@@ -151,7 +159,7 @@ function seedMarketplace(store: Store): void {
     engines: '^0.2.1-alpha.2',
     manifest: { engines: '^0.2.1-alpha.2', routes: ['/api/market-center'], panels: 0 },
     permissions: { tools: 12, network: ['api.tushare.pro'], credentials: ['tushare'], diskBytes: 320_000_000 },
-    publishedAt: NOW + 100,
+    publishedAt: NOW - 2 * 86_400_000 + 100,
   })
 
   upsertMarketPlugin(store, {
@@ -171,7 +179,7 @@ function seedMarketplace(store: Store): void {
     engines: '^0.2.1-alpha.2',
     manifest: { engines: '^0.2.1-alpha.2' },
     permissions: { desktopOnly: true },
-    publishedAt: NOW,
+    publishedAt: NOW - 2 * 86_400_000,
   })
 
   upsertMarketPlugin(store, {
@@ -191,7 +199,7 @@ function seedMarketplace(store: Store): void {
     engines: '^9.0.0',
     manifest: { engines: '^9.0.0' },
     permissions: {},
-    publishedAt: NOW,
+    publishedAt: NOW - 2 * 86_400_000,
   })
 
   upsertMarketPlugin(store, {
@@ -211,7 +219,7 @@ function seedMarketplace(store: Store): void {
     engines: '^0.2.1-alpha.2',
     manifest: { engines: '^0.2.1-alpha.2' },
     permissions: {},
-    publishedAt: NOW,
+    publishedAt: NOW - 2 * 86_400_000,
   })
 
   upsertMarketPlugin(store, {
@@ -231,7 +239,7 @@ function seedMarketplace(store: Store): void {
     engines: '^0.2.1-alpha.2',
     manifest: { engines: '^0.2.1-alpha.2' },
     permissions: { clientHalf: true, panels: 2 },
-    publishedAt: NOW,
+    publishedAt: NOW - 2 * 86_400_000,
   })
 
 }
@@ -380,43 +388,62 @@ test('安装：owner/admin 校验、发布者白名单、tier/预检阻断、幂
       token: TOKEN,
       body: { workspaceId: wsId, version: '1.0.0' },
     })
-    assert.equal(unverified.status, 403)
-    assert.equal(unverified.json.error.code, 'plugin.publisher_unverified')
+    // 白名单内即使发布者未验证也放行（只是 warning）；白名单外则 409 preflight。
+    assert.equal(unverified.status, 202)
+    assert.equal(unverified.json.job.state, 'awaiting-approval')
+    assert.ok(Array.isArray(unverified.json.job.permissions.problems))
 
     const desktop = await call('POST', '/api/marketplace/plugins/desktop-tool/install', {
       token: TOKEN,
       body: { workspaceId: wsId, version: '1.0.0' },
     })
-    assert.equal(desktop.status, 400)
-    assert.equal(desktop.json.error.code, 'plugin.tier')
+    assert.equal(desktop.status, 409)
+    assert.equal(desktop.json.error.code, 'plugin.preflight')
 
     const future = await call('POST', '/api/marketplace/plugins/future-plugin/install', {
       token: TOKEN,
       body: { workspaceId: wsId, version: '1.0.0' },
     })
-    assert.equal(future.status, 400)
-    assert.equal(future.json.error.code, 'plugin.preflight_failed')
+    assert.equal(future.status, 409)
+    assert.equal(future.json.error.code, 'plugin.preflight')
 
     const installed = await call('POST', '/api/marketplace/plugins/market-center/install', {
       token: TOKEN,
       body: installBody(wsId),
     })
     assert.equal(installed.status, 202)
-    assert.equal(installed.json.next, 'sync')
-    assert.equal(installed.json.install.state, 'installing')
-    assert.equal(installed.json.install.version, '1.2.0')
-    assert.equal(installed.json.install.enabled, true)
-    assert.equal(installed.json.install.lock.kind, 'roost.profile-lock-summary')
+    assert.equal(installed.json.job.state, 'awaiting-approval')
+    assert.ok(installed.json.approval?.id)
+    const installId = installed.json.job.installId as string
+
+    // 审批通过 → job installing（streamline ②）
+    const approved = await call('POST', `/api/approvals/${installed.json.approval.id}`, {
+      token: TOKEN,
+      body: { decision: 'approved' },
+    })
+    assert.equal(approved.status, 200)
+
+    // 沙箱 sync 回报 → installed（5.1.3 ⑤）
+    const synced = await call('POST', `/api/internal/plugin-installs/${installId}/synced`, {
+      headers: { 'x-runtime-token': 'rt_market_test' },
+      body: { ok: true, tools: [{ name: 'demo', source: 'market-center' }] },
+    })
+    assert.equal(synced.status, 200)
+    const after = await call('GET', `/api/plugin-installs/${installId}`, { token: TOKEN })
+    assert.equal(after.status, 200)
+    assert.equal(after.json.install.state, 'installed')
+    assert.equal(after.json.install.version, '1.2.0')
+    assert.equal(after.json.install.tools[0].source, 'market-center')
     assert.equal(pluginEventKinds(store).filter((kind) => kind === 'plugin.install').length, 1)
 
-    // 重复安装：幂等返回同一行，不写第二条事件。
+    // 重复安装：已安装 → 200 alreadyInstalled，不写第二条事件。
     const again = await call('POST', '/api/marketplace/plugins/market-center/install', {
       token: TOKEN,
       body: installBody(wsId),
     })
     assert.equal(again.status, 200)
     assert.equal(again.json.alreadyInstalled, true)
-    assert.equal(again.json.install.id, installed.json.install.id)
+    assert.equal(again.json.install.id, installId)
     assert.equal(pluginEventKinds(store).filter((kind) => kind === 'plugin.install').length, 1)
 
     // 列表里的 installed 标记开始为 true。
@@ -433,7 +460,17 @@ test('已安装列表、PATCH 升级/启停（事件）与 DELETE 幂等（事�
       body: installBody(wsId, '1.0.0'),
     })
     assert.equal(installed.status, 202)
-    const installId = installed.json.install.id as string
+    const installId = installed.json.job.installId as string
+    const approved = await call('POST', `/api/approvals/${installed.json.approval.id}`, {
+      token: TOKEN,
+      body: { decision: 'approved' },
+    })
+    assert.equal(approved.status, 200)
+    const synced = await call('POST', `/api/internal/plugin-installs/${installId}/synced`, {
+      headers: { 'x-runtime-token': 'rt_market_test' },
+      body: { ok: true, tools: [] },
+    })
+    assert.equal(synced.status, 200)
 
     const list = await call('GET', `/api/plugin-installs?workspaceId=${wsId}`, { token: TOKEN })
     assert.equal(list.status, 200)

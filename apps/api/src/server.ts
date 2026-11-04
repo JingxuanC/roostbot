@@ -57,6 +57,26 @@ import {
   handleListApprovals,
 } from './bot-rooms-routes.ts'
 import {
+  AUTH_LOGIN_ROUTES,
+  oidcProviderFromEnv,
+  type AuthRoutesContext,
+  type OidcProvider,
+} from './auth-login-routes.ts'
+import {
+  handleMarketplaceInstallStart,
+  handlePluginInstallDisable,
+  handlePluginInstallEnable,
+  handlePluginInstallGet,
+  handlePluginInstallList,
+  handlePluginInstallRollback,
+  handlePluginInstallSynced,
+  handlePluginInstallUninstall,
+  handlePluginInstallUpdate,
+  onInstallApproved,
+  type MarketplaceInstallRouteContext,
+} from './marketplace-install-routes.ts'
+import { getApproval } from '../../../packages/store/src/approvals.ts'
+import {
   handleCreateApprovalGrant,
   handleInternalCreateApproval,
   handleInternalGetApproval,
@@ -100,6 +120,12 @@ import {
   resolveDshWebPort,
 } from './dsh-proxy-routes.ts'
 import type { DshRouteContext } from './dsh-proxy-routes.ts'
+import {
+  ensurePanelForward,
+  resolvePanelPort,
+  stopAllPanelForwards,
+  stopPanelForward,
+} from './panel-forward.ts'
 import {
   handleDeletePluginInstall,
   handleGetMarketplacePlugin,
@@ -181,6 +207,23 @@ const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
 const SESSION_TOKEN_PATTERN = /^[0-9a-f]{64}$/
 const PLATFORMS: readonly DevicePlatform[] = ['web', 'desktop', 'ios', 'android', 'cli']
 
+/** 面板端口转发：workspace → 本机端口（openshell forward）。 */
+export interface PanelForwardHooks {
+  ensure(workspaceId: string, options: { sandboxName: string }): Promise<{ port: number; url: string }>
+  resolvePort(workspaceId: string): number | undefined
+  stop(workspaceId: string): Promise<boolean>
+  stopAll(): Promise<void>
+}
+
+export function defaultPanelForwardHooks(): PanelForwardHooks {
+  return {
+    ensure: (workspaceId, options) => ensurePanelForward(workspaceId, { sandboxName: options.sandboxName }),
+    resolvePort: resolvePanelPort,
+    stop: (workspaceId) => stopPanelForward(workspaceId),
+    stopAll: stopAllPanelForwards
+  }
+}
+
 export interface ServerOptions {
   /** SSE 轮询间隔（毫秒）；默认 700，测试里调小。 */
   streamPollMs?: number
@@ -196,6 +239,13 @@ export interface ServerOptions {
   rawStore?: Store
   /** 工作区沙箱管理器；不配置时 /start 返回 runtime.not_configured。 */
   runtimeManager?: RuntimeManager
+  /** 面板端口转发的可注入钩子（测试用）；默认走 panel-forward.ts 的 openshell submit。 */
+  panelForward?: PanelForwardHooks
+  /** 发信口（测试注入）；不传时验证/重置 token 写 stdout。 */
+  authMailer?: import('./auth-login-routes.ts').Mailer
+  /** OIDC provider 注入（测试用）；不传时从 ROOST_OIDC_* 环境变量拼。 */
+  oidc?: import('./auth-login-routes.ts').OidcConfig
+  authSessionTtlMs?: number
   /** 附件内容存储根目录；默认 ROOST_ATTACHMENTS_DIR 或 <cwd>/data/attachments。 */
   attachmentsDir?: string
   /** 附件签名密钥；默认 ROOST_SIGNING_SECRET，未配置时进程内随机。 */
@@ -575,7 +625,58 @@ export async function readJsonBody(req: IncomingMessage): Promise<ParsedBody | B
   }
 }
 
-export type AuthResult = { ok: true; session: SessionRecord } | { ok: false; status: number; code: string; message: string }
+export type AuthResult =
+  | { ok: true; session: SessionRecord; via?: 'bearer' | 'cookie' }
+  | { ok: false; status: number; code: string; message: string }
+
+/** 读一个 cookie；同名只取第一个。 */
+export function readCookie(req: IncomingMessage, name: string): string | null {
+  const header = req.headers.cookie
+  if (typeof header !== 'string' || header === '') return null
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=')
+    if (index < 0) continue
+    if (part.slice(0, index).trim() !== name) continue
+    return part.slice(index + 1).trim()
+  }
+  return null
+}
+
+/** Bearer 优先；否则回退到登录下发的 roost_session cookie（wave1 §A/§D）。 */
+function requestSessionToken(req: IncomingMessage): { token: string; via: 'bearer' | 'cookie' } | null {
+  const header = req.headers.authorization
+  if (typeof header === 'string' && header.trim() !== '') {
+    const match = /^Bearer[ ]+(\S+)$/.exec(header.trim())
+    if (match === null) return null
+    return { token: match[1]!, via: 'bearer' }
+  }
+  const cookie = readCookie(req, 'roost_session')
+  return cookie === null || cookie === '' ? null : { token: cookie, via: 'cookie' }
+}
+
+function hasBearer(req: IncomingMessage): boolean {
+  const header = req.headers.authorization
+  return typeof header === 'string' && /^Bearer[ ]+\S+$/.test(header.trim())
+}
+
+/** OIDC provider 从环境变量拼；没有配置时返回 null（前端隐藏按钮）。 */
+function buildOidcConfig(): Record<string, OidcProvider> | null {
+  const out: Record<string, OidcProvider> = {}
+  for (const name of ['google', 'github']) {
+    const provider = oidcProviderFromEnv(name)
+    if (provider !== null) out[name] = provider
+  }
+  return Object.keys(out).length === 0 ? null : out
+}
+
+function cookieCsrfInvalid(req: IncomingMessage): boolean {
+  const cookie = readCookie(req, 'roost_csrf')
+  const header = req.headers['x-csrf-token']
+  const value = Array.isArray(header) ? header[0] : header
+  if (typeof value !== 'string' || value === '') return true
+  if (cookie === null || cookie === '') return true
+  return cookie !== value
+}
 
 function authFailure(message: string, code = 'unauthenticated'): AuthResult {
   return { ok: false, status: 401, code, message }
@@ -585,13 +686,16 @@ const BEARER_HEADER = 'Authorization: Bearer <sessionToken> is required'
 
 /** 校验 Bearer token：只做一次 sha256，然后按 hash 查库。 */
 export async function authenticate(ctx: AuthContext, req: IncomingMessage): Promise<AuthResult> {
-  const header = req.headers.authorization
-  if (typeof header !== 'string') return authFailure(BEARER_HEADER)
+  const resolved = requestSessionToken(req)
+  if (resolved === null) {
+    return authFailure(
+      typeof req.headers.authorization === 'string'
+        ? 'Authorization header must be "Bearer <sessionToken>"'
+        : BEARER_HEADER
+    )
+  }
 
-  const match = /^Bearer[ ]+(\S+)$/.exec(header.trim())
-  if (match === null) return authFailure('Authorization header must be "Bearer <sessionToken>"')
-
-  const token = match[1]!
+  const { token, via } = resolved
   if (!SESSION_TOKEN_PATTERN.test(token)) return authFailure('session token must be 64 lowercase hex characters')
 
   const session = await ctx.store.findSessionByToken(hashSessionToken(token))
@@ -599,7 +703,7 @@ export async function authenticate(ctx: AuthContext, req: IncomingMessage): Prom
   if (session.revokedAt !== undefined) return authFailure('session revoked', 'session_revoked')
   if (session.expiresAt <= ctx.now()) return authFailure('session expired; pair this device again', 'session_expired')
 
-  return { ok: true, session: renewSession(ctx, session) }
+  return { ok: true, session: renewSession(ctx, session), via }
 }
 
 /**
@@ -1081,6 +1185,8 @@ async function serveStatic(res: ServerResponse, path: string): Promise<boolean> 
 
 interface RoomRouteContext extends HandlerContext {
   runtimeToken?: string
+  authRoutes?: AuthRoutesContext
+  installRoutes?: MarketplaceInstallRouteContext
   /** SSE 轮询间隔（测试可调小）。 */
   streamPollMs: number
 }
@@ -1535,6 +1641,16 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // cookie 会话的写操作要 CSRF 双提交（Bearer 不需要，浏览器读不到 Authorization）。
+  if (method !== 'GET' && method !== 'HEAD' && !hasBearer(req) && readCookie(req, 'roost_session') !== null) {
+    const exempt =
+      /^\/api\/(auth\/(login|register|verify-email(\/resend)?|password\/reset(-request)?|oidc\/(start|callback))|pairing\/(code|claim))$/.test(path)
+    if (!exempt && cookieCsrfInvalid(req)) {
+      sendError(res, 403, 'csrf.invalid', 'cookie 会话的写请求需要 x-csrf-token')
+      return
+    }
+  }
+
   if (isDshPath) {
     await handleDshRequest(ctx.dsh, req, res, url)
     return
@@ -1891,15 +2007,6 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
-  if (/^\/api\/marketplace\/plugins\/[^/]+\/install$/.test(path)) {
-    if (method !== 'POST') {
-      notFound(req, res, method, path)
-      return
-    }
-    await handleMarketplaceInstall(ctx, req, res, url)
-    return
-  }
-
   if (/^\/api\/marketplace\/plugins\/[^/]+$/.test(path)) {
     if (method !== 'GET') {
       notFound(req, res, method, path)
@@ -1909,16 +2016,11 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
-  if (path === '/api/plugin-installs') {
-    if (method !== 'GET') {
-      notFound(req, res, method, path)
+  if (/^\/api\/plugin-installs\/[^/]+$/.test(path)) {
+    if (method === 'GET') {
+      await handlePluginInstallGet(ctx.installRoutes as never, req, res, url)
       return
     }
-    await handleListPluginInstalls(ctx, req, res, url)
-    return
-  }
-
-  if (/^\/api\/plugin-installs\/[^/]+$/.test(path)) {
     if (method === 'PATCH') {
       await handlePatchPluginInstall(ctx, req, res, url)
       return
@@ -2005,7 +2107,16 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       notFound(req, res, method, path)
       return
     }
+    const approvalId = safeDecode(/^\/api\/approvals\/([^/]+)$/.exec(path)?.[1] ?? '')
+    const auth = await authenticate(ctx, req)
     await handleDecideApproval(ctx as RoomRouteContext, req, res, url)
+    // 插件安装审批：决策落库后把 job 推进到 installing（或 rejected → failed）。
+    if (auth.ok && ctx.rawStore !== undefined && approvalId !== null) {
+      const approval = getApproval(ctx.rawStore, approvalId)
+      if (approval !== null && approval.kind === 'plugin_install' && (approval.status === 'approved' || approval.status === 'rejected')) {
+        onInstallApproved(ctx.rawStore, { approvalId, decision: approval.status, by: auth.session.accountId })
+      }
+    }
     return
   }
 
@@ -2315,6 +2426,46 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (/^\/api\/workspaces\/[^/]+\/panels\/wake$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/panels\/wake$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null || workspaceId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace panels wake path')
+      return
+    }
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
+      return
+    }
+    const workspaces = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
+    if (!workspaces.some((workspace) => workspace.id === workspaceId)) {
+      sendError(res, 404, 'not_found', 'unknown workspace')
+      return
+    }
+    if (ctx.rawStore === undefined || ctx.runtimeManager === undefined || ctx.panelForward === undefined) {
+      sendError(res, 503, 'runtime.not_configured', '面板容器需要 SQLite 存储与运行时')
+      return
+    }
+    const existing = ctx.panelForward.resolvePort(workspaceId)
+    if (existing !== undefined) {
+      sendJson(res, 200, { port: existing, url: `/w/${workspaceId}/dsh/` })
+      return
+    }
+    try {
+      const { runtime } = await startWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+      const endpoint = await ctx.panelForward.ensure(workspaceId, { sandboxName: runtime.sandbox })
+      sendJson(res, 200, { port: endpoint.port, url: `/w/${workspaceId}/dsh/` })
+    } catch (error) {
+      sendError(res, 503, 'panel.unavailable', `面板容器不可用：${error instanceof Error ? error.message : String(error)}`)
+    }
+    return
+  }
+
   if (/^\/api\/workspaces\/[^/]+\/(start|runtime)$/.test(path)) {
     const match = /^\/api\/workspaces\/([^/]+)\/(start|runtime)$/.exec(path)
     const workspaceId = match === null ? null : safeDecode(match[1]!)
@@ -2438,6 +2589,88 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  const authTable: Record<string, [string, (c: never, q: IncomingMessage, r: ServerResponse) => Promise<void>]> = {
+    '/api/auth/register': ['POST', AUTH_LOGIN_ROUTES.register],
+    '/api/auth/verify-email': ['POST', AUTH_LOGIN_ROUTES.verifyEmail],
+    '/api/auth/verify-email/resend': ['POST', AUTH_LOGIN_ROUTES.resendVerification],
+    '/api/auth/login': ['POST', AUTH_LOGIN_ROUTES.login],
+    '/api/auth/logout': ['POST', AUTH_LOGIN_ROUTES.logout],
+    '/api/auth/me': ['GET', AUTH_LOGIN_ROUTES.me],
+    '/api/auth/password/reset-request': ['POST', AUTH_LOGIN_ROUTES.passwordResetRequest],
+    '/api/auth/password/reset': ['POST', AUTH_LOGIN_ROUTES.passwordReset],
+    '/api/auth/providers': ['GET', AUTH_LOGIN_ROUTES.providers],
+    '/api/auth/oidc/start': ['POST', AUTH_LOGIN_ROUTES.oidcStart]
+  }
+  const authRoute = authTable[path]
+  if (authRoute !== undefined) {
+    if (method !== authRoute[0]) {
+      notFound(req, res, method, path)
+      return
+    }
+    await authRoute[1](ctx.authRoutes as never, req, res)
+    return
+  }
+
+  if (path === '/api/auth/oidc/callback') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await AUTH_LOGIN_ROUTES.oidcCallback(ctx.authRoutes as never, req, res, url)
+    return
+  }
+
+  // 插件安装流水线（wave1 §B）：市场安装 → 审批 → 沙箱 sync → 回滚。
+  if (/^\/api\/marketplace\/plugins\/[^/]+\/install$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleMarketplaceInstallStart(ctx.installRoutes as never, req, res, url)
+    return
+  }
+
+  if (path === '/api/plugin-installs') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handlePluginInstallList(ctx.installRoutes as never, req, res, url)
+    return
+  }
+
+  if (/^\/api\/plugin-installs\/[^/]+$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handlePluginInstallGet(ctx.installRoutes as never, req, res, url)
+    return
+  }
+
+  if (/^\/api\/plugin-installs\/[^/]+\/(update|disable|enable|uninstall|rollback)$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    const action = /^\/api\/plugin-installs\/[^/]+\/(update|disable|enable|uninstall|rollback)$/.exec(path)?.[1]
+    if (action === 'update') await handlePluginInstallUpdate(ctx.installRoutes as never, req, res, url)
+    else if (action === 'disable') await handlePluginInstallDisable(ctx.installRoutes as never, req, res, url)
+    else if (action === 'enable') await handlePluginInstallEnable(ctx.installRoutes as never, req, res, url)
+    else if (action === 'uninstall') await handlePluginInstallUninstall(ctx.installRoutes as never, req, res, url)
+    else await handlePluginInstallRollback(ctx.installRoutes as never, req, res, url)
+    return
+  }
+
+  if (/^\/api\/internal\/plugin-installs\/[^/]+\/synced$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handlePluginInstallSynced(ctx.installRoutes as never, req, res, url)
+    return
+  }
+
   if (path === '/api/bots') {
     if (method === 'GET') {
       await handleListBots(ctx, req, res, url)
@@ -2489,10 +2722,12 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
   // 反代端口 0 表示随机端口，实际值要 listen 后写回 state；主控制面的 /api/config 从这里读。
   const state: ServerState = sharedState ?? { dshProxyPort: options.dshProxyPort }
   if (state.dshProxyPort === undefined) state.dshProxyPort = options.dshProxyPort
+  const panelForward = options.panelForward ?? defaultPanelForwardHooks()
   const dsh: DshRouteContext = {
     store: options.store,
     now,
     dshWebPort: resolveDshWebPort(options.dshWebPort),
+    resolvePort: panelForward.resolvePort,
     // cookie 签名密钥与附件共用 ROOST_SIGNING_SECRET；都没配置则本进程随机（重启后旧 cookie 失效）。
     signingSecret:
       options.signingSecret ?? process.env.ROOST_SIGNING_SECRET ?? randomBytes(32).toString('hex'),
@@ -2501,9 +2736,30 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
   state.dsh = dsh
   const schedulerEnabled =
     (options.schedulerLoop === true || process.env.ROOST_SCHEDULER === '1') && options.rawStore !== undefined
+  const authRoutes: AuthRoutesContext = {
+    store: options.store,
+    now,
+    secureCookies: process.env['ROOST_SECURE_COOKIES'] === '1',
+    oidc: options.oidc ?? buildOidcConfig(),
+    ...(options.authMailer === undefined ? {} : { mailer: options.authMailer }),
+    ...(options.authSessionTtlMs === undefined ? {} : { sessionTtlMs: options.authSessionTtlMs }),
+    ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
+  }
+  const installRoutes: MarketplaceInstallRouteContext = {
+    store: options.store,
+    now,
+    ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
+    ...(options.runtimeToken === undefined && process.env['ROOST_RUNTIME_TOKEN'] === undefined
+      ? {}
+      : { runtimeToken: options.runtimeToken ?? process.env['ROOST_RUNTIME_TOKEN'] }),
+    ...(process.env['ROOST_DSH_VERSION'] === undefined ? {} : { dshVersion: process.env['ROOST_DSH_VERSION'] }),
+    ...(process.env['ROOST_PLUGIN_ALLOWLIST'] === undefined ? {} : { allowlist: process.env['ROOST_PLUGIN_ALLOWLIST'] })
+  }
   const ctx: RoomRouteContext = {
     store: options.store,
     now,
+    authRoutes,
+    installRoutes,
     startedAt: now(),
     claimFailures: [],
     sessionAccounts: new Set<string>(),
@@ -2519,6 +2775,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     allowedOrigins: parseAllowedOrigins(process.env.ROOST_ALLOWED_ORIGINS),
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
+    panelForward,
     ...(options.rawStore === undefined
       ? {}
       : {
@@ -2530,6 +2787,9 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
           }),
         })
   }
+
+  // 插件安装复用控制面的限流桶（10/小时/账号，rate-limit.test.ts 覆盖）。
+  installRoutes.rateLimiter = ctx.rateLimiter
 
   const server = http.createServer((req, res) => {
     const requestId = resolveRequestId(req.headers['x-request-id'])
@@ -2688,6 +2948,7 @@ export async function startServer(
     ...(dshProxyUrl === undefined ? {} : { dshProxyUrl }),
     close: async () => {
       stopScheduler?.()
+      await (options.panelForward ?? defaultPanelForwardHooks()).stopAll().catch(() => {})
       const proxy = dshProxyServer
       await Promise.all([closeServer(server), ...(proxy === undefined ? [] : [closeServer(proxy)])])
     }

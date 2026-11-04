@@ -109,3 +109,16 @@ POST /api/internal/plugin-installs/:id/synced          → runtime token；{ok,t
 node --experimental-strip-types --test packages/*/test/*.test.ts apps/*/test/*.test.ts
 sh scripts/verify.sh
 ```
+
+## 实现进度（2026-11-04）
+
+| 块 | 状态 | 证据 |
+|---|---|---|
+| A. 账号登录 | ✅ 接线 | `0019_auth.sql`、`accounts-auth.ts`、`auth-login-routes.ts`；27 测试；cookie 登录 + CSRF 在 server 生效 |
+| B. 插件安装 | ✅ 接线 | `0020_marketplace_jobs.sql`、`install.ts`/`trust.ts`、`marketplace-install-routes.ts`；49 测试；审批副作用接在 `/api/approvals/:id` |
+| C. 面板运行时 | ✅ 接线 | `dsh-web.mjs`、`panel-forward.ts`、dsh-proxy 按 workspace 解析端口；37 测试；`POST /api/workspaces/:id/panels/wake` |
+| D. 前端 | ✅ | 登录/注册/验证/重置、安装流程、已安装页、面板壳、工具来源；221 web 测试 |
+| 冒烟 | ✅ | `/tmp/wave1-smoke.mjs`：cookie 登录 → CSRF → 建 workspace → 安装申请 → 审批 → sync → installed → 面板 wake，10/10 |
+
+偏差：Argon2id → scrypt（零依赖）；安装命令 `--frozen-lockfile --ignore-scripts`；
+allowlist 内未验证发布者只 warning；工具来源写 `plugin_installs.tools_json`。

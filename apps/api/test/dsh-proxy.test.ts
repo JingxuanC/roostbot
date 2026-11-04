@@ -238,8 +238,10 @@ test('鉴权：cookie 签发/校验、过期/篡改、Bearer、非成员 404', a
   const viaBearer = await harness.call('GET', path, { token })
   assert.equal(viaBearer.status, 200)
 
-  // 篡改签名：把 cookie 值最后一个字符换掉。
-  const tampered = cookie.slice(0, -1) + (cookie.endsWith('A') ? 'B' : 'A')
+  // 篡改签名：改中间字符。改最后一个字符会踩 base64url 尾部 padding bit，
+  // 约 1/64 概率解出同一个字节，变成偶发 200。
+  const at = Math.floor(cookie.length / 2)
+  const tampered = cookie.slice(0, at) + (cookie[at] === 'A' ? 'B' : 'A') + cookie.slice(at + 1)
   const tamperedResult = await harness.call('GET', path, { headers: { cookie: tampered } })
   assert.equal(tamperedResult.status, 401)
 
