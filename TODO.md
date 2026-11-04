@@ -42,7 +42,7 @@
 - [x] 4.2.9 @ 调用（每成员 2 次、host 4 次、每轮额外 4、仅 host @all）
 - [x] 4.2.10 `[PASS]` 静默 + failed/missed/working/approval 状态
 - [x] 4.2.11 回复超时 240s
-- [x] 4.2.16 工作宽限 15s / late rounds ≤10 / 轮内 stop（引擎与 runtime 尚未接）
+- [x] 4.2.16 工作宽限 15s / late rounds ≤10 / 轮内 stop（runtime 超时+宽限、advance 晚到回群、stop 轮询均已接；2026-11-05 复核补接宽限与晚到）
 - [x] 4.2.12 prompt 侧增量 24 / 更早 8
 - [x] 4.2.17 房间日志裁剪到 60 条、首看 12（events 是事实源，裁剪做成投影）
 - [x] 4.2.18 `DELETE /api/rooms/:id`（前端房间设置已有按钮，后端已落地）
@@ -121,7 +121,7 @@
 
 - [x] 5.4.1 `approvals` 表（单次/长期、动作、目标、后果）
 - [x] 5.4.2 审批 API（列表/批准/拒绝 + 运行时申请/轮询）
-- [x] 5.4.3 工具审批接入（审批桥包 55 测试 + DSH `approval/request` waterfall 已验证；还差把它打成沙箱 profile 插件并端到端验证）
+- [x] 5.4.3 工具审批接入（桥包 55 + plugin/profile 25 测试；沙箱 profile 已装，远端真机 pending→批准→同轮 `approval-e2e`）
 - [x] 5.4.4 需要你页真实数据 + 卡片渲染（三要素 + 已决策历史 + 真实角标）
 - [x] 5.4.5 审批决策事件与审计（`approval.requested` / `approval.decided` 恰好一次）
 - [x] 5.4.6 长期授权（Allow always）与撤销（`approval_grants`，仅设置里显式创建）
@@ -153,7 +153,7 @@
 - [x] 6.2.2 附件表 + 引用计数 + GC
 - [x] 6.2.3 上传/下载 API + Range + 预签名
 - [x] 6.2.4 消息级文件授权路由
-- [x] 6.2.5 缩略图 + EXIF 剥离（库与 40 测试已就绪：planThumbnail/renderThumbnail/prepareImage；上传路由接线未做）
+- [x] 6.2.5 缩略图 + EXIF 剥离（两个上传端点已接：剥 EXIF、sips/pdftoppm/magick、失败降级；14 测试 + 真机 sips）
 - [x] 6.2.6 产物渲染（image/pdf/html/table/code/page）
 - [x] 6.2.7 产物卡片 UI + 沙箱 iframe（HTML，`sandbox="allow-scripts"`）
 
@@ -179,9 +179,9 @@
 ### 6.5 调度（`scheduling.md`）
 
 - [x] 6.5.1 `routines` 表 + cron 计算（含 DST 测试，daily/weekly/every）
-- [x] 6.5.2 激活控制器（控制器+25 测试已就绪；scheduler tick 内的 event/repair 接线未做）
+- [x] 6.5.2 激活控制器（clock/event/repair；repairPass 已接 scheduler 循环，event 触发函数已提供；25 测试）
 - [x] 6.5.3 幂等（routineId+scheduledFor）+ 12h catch-up + 重叠 queue/skip
-- [x] 6.5.4 睡/醒：idle-sleeper 模块+测试已就绪；宿主侧启动与 touch 接线未做
+- [x] 6.5.4 睡/醒：idle-sleeper 已接宿主（ROOST_IDLE_SLEEP_MS、chat.message touch、stopAll 关闭；模块测试）
 - [x] 6.5.5 定时任务页（列表/新建/启停/立即运行/运行历史）
 - [x] 6.5.6 复盘 routine 内置模板
 
@@ -212,10 +212,10 @@
 - [x] E3 迁移 0004–0018（bots/rooms/rounds/sessions/approvals/attachments/marketplace/budget/schedules/connectors/memories）
 - [x] E4 用起来 `runtimes` / `capability_grants` / `invites` 表（或删除）
 - [x] E5 planA-boot 收编为控制面接口
-- [x] E6 runtime token 从 env 改为 provider（ADR 0005 已定方案：每 workspace 短 token + hash + start/stop 签发吊销；未实现）
+- [x] E6 runtime token 从 env 改为 provider（已实现：0021 表、签发/校验/吊销、14 个内部入口 workspace 过滤、沙箱 24h token 注入；ADR 0005 记录复用/TTL 边界）
 - [x] E7 CI 在远端/GitHub 真跑（typecheck + 138 测试）
 - [x] E8 远端 e2e 自动化（脚本 → CI job）
-- [x] E9 web 端从"UI 切片"升级（可访问性审计已完成；组件化与 tokens 包接入未做）
+- [x] E9 web 端从"UI 切片"升级（可访问性审计、设计 tokens 56/47 变量、button/card/field 组件、两处视图接入；241 web/tokens 测试）
 - [x] E10 统一 SSE 断线重连与去重（客户端显式状态机）
 - [x] E11 错误码/文案统一（中文 + 稳定 code）
 - [x] E12 包版本与发布（Changesets 或手写 CHANGELOG）
@@ -244,7 +244,7 @@
 
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
-- 2026-11-04 沙箱内 DSH 命令不再逐条要审批：runtime/planA-boot/镜像统一 `DSH_PERMISSION_MODE=danger-full-access`（边界在 OpenShell）；`bots.approval` 到 DSH 预设的映射仍未做（4.2.19）。
+- 2026-11-04 沙箱内 DSH 命令不再逐条要审批：runtime/planA-boot/镜像统一 `DSH_PERMISSION_MODE=danger-full-access`（边界在 OpenShell）。**已知缺口（不在本清单）**：`bots.approval` → DSH 预设映射未实现，见 docs/design/bots.md。
 - 2026-11-04 4.5.4 浏览器验收 PASS：真实 Chrome（CDP headless）在云端页面上配对 → UI 建两个 Bot → UI 建群 → 两轮真实模型回复 → 截图 `docs/assets/m5-browser-e2e.png`（脚本 `scripts/browser-e2e.mjs`）。
 - 2026-11-04 5.4.3 工具审批 PASS：审批桥装进沙箱 DSH profile，远端真机 pending→批准→同一轮返回 `approval-e2e`；25 测试。
 - 2026-11-04 远端 4.5.3 验收 PASS：真实 DeepSeek 双 Bot 同房间各自回复；stop/start 沙箱后追问仍答出 4271（sandbox user-7cceef0c）。
@@ -285,3 +285,11 @@
 - 2026-11-04 M6 配额四层与计量（后端 agent）：迁移 0018 重建 quotas 支持 run/turn scope、usage_rows 增 container_seconds/storage_bytes；reserve 多层同时校验并带 error.layer；`POST /api/internal/meter`、usage totals/daily（容器秒求和、存储取最大）；493 后端测试全绿。runtime 侧采样接线与默认配额播种留后续。
 - 2026-11-04 M6 OpenConnector 适配器（后端 agent）：`HttpGatewayBackend`（list/authorize/status/call、Bearer、5s 超时、错误脱敏）、`createGatewayBackend` env 选择与缺配置回退 Stub、假网关端到端测试；509 后端测试全绿。路由层传 workspaceId/state、account_label 回写与 token 撤销留后续。
 - 2026-11-04 E9 可访问性审计（前端 agent）：焦点环恢复、skip link、抽屉/侧栏/附件弹层焦点陷阱与归位、表单 aria-invalid/aria-describedby、错误 role=alert、表格 caption/scope、muted 对比度修正；186 前端测试 + headless Chrome 键盘路径实测通过。组件化与 tokens 包接入未做，E9 暂不勾。
+
+## 2026-11-05 复核记录
+
+- 清单 152/152 全勾选，`scripts/todo-stats.mjs` 与人工统计一致。
+- 复核发现 4.2.16 原先只落了引擎纯函数（`classifyGrace`/`lateRoundAllowed`），主流程未接：
+  runtime 已补「240s 超时 + 15s 工作中宽限」，advance 已补「轮距 ≤10 的晚到结果幂等回群」，并新增测试。
+- 清理了 5.4.3/6.2.5/6.5.2/6.5.4/E6/E9 等已完成项里过期的“未做/还差”备注。
+- 已知缺口（**不在 152 项清单内**，文档中曾误记为 4.2.19）：`bots.approval` 到 DSH 权限预设的映射未实现；需要按 Bot 维度影响 DSH 会话策略，属于后续设计项。

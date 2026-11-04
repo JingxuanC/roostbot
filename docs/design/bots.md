@@ -92,7 +92,7 @@ POST   /api/bots/:id/kickoff    ← 可选：重新生成开场（调试用）
 
 DSH 默认给新会话 pin `workspace-write + ask`（base profile 的 `permission-presets`），所以每条
 bash 都要审批。沙箱里我们的边界是 OpenShell，因此沙箱 env 固定 `DSH_PERMISSION_MODE=danger-full-access`，
-DSH 自己的审批关闭；`bots.approval` 字段到 DSH 预设的映射还没做（TODO 4.2.19）。
+DSH 自己的审批关闭；`bots.approval` 字段到 DSH 预设的映射还没做（已知缺口，不在 152 项 TODO 清单内；需要按 Bot 维度影响 DSH 会话策略）。
 
 ## 9. 实现状态（2026-11-04）
 

@@ -13,6 +13,7 @@
 // 协议见 @deepseek-ai/dsh-sdk-protocol：initialize / session/prompt / session/wait，
 // 通知是 session.event 与 session.status。
 
+import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
 import { spawn } from 'node:child_process'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 
@@ -170,6 +171,18 @@ function sleep(ms) {
 }
 
 /** 等一个 abort 信号；resolve 'stopped'。返回的 cancel 负责摘掉监听。 */
+/** 可取消的定时器：用于超时/宽限 race。 */
+function delay(ms) {
+  let timer
+  let resolve
+  const promise = new Promise((done) => {
+    resolve = done
+    timer = setTimeout(done, ms)
+  })
+  timer?.unref?.()
+  return { promise, cancel: () => clearTimeout(timer) }
+}
+
 function stopSignalPromise(signal) {
   if (signal === undefined || typeof signal.addEventListener !== 'function') {
     return { promise: null, cancel() {} }
@@ -396,6 +409,9 @@ export async function startRoomAgent(options) {
     assistant.delete(sessionId)
     const idle = idleSignal(sessionId)
     const stop = stopSignalPromise(signal)
+    const limits = graceLimitsFromEnv()
+    const deadline = delay(limits.replyTimeoutMs ?? 240_000)
+    let grace = null
     try {
       await rpc.request('session/prompt', {
         sessionId,
@@ -408,13 +424,35 @@ export async function startRoomAgent(options) {
         .then(() => sleep(50))
         .then(() => true)
         .catch(() => new Promise(() => {}))
-      const racers = [idle.promise, fallback]
-      if (stop.promise !== null) racers.push(stop.promise)
-      const outcome = await Promise.race(racers)
-      return { answer: assistant.get(sessionId), idle: outcome === true, stopped: outcome === 'stopped' }
+      const race = (timer) => {
+        const racers = [idle.promise, fallback, timer.promise.then(() => 'deadline')]
+        if (stop.promise !== null) racers.push(stop.promise)
+        return Promise.race(racers)
+      }
+      let outcome = await race(deadline)
+      // 4.2.16：到点仍在 DSH 里工作 → 再给 15s 收尾；宽限用完仍工作则按 working 收尾。
+      if (outcome === 'deadline') {
+        const verdict = graceVerdict({
+          elapsedMs: limits.replyTimeoutMs ?? 240_000,
+          working: lastStatus.get(sessionId) === 'working',
+          ...limits
+        })
+        if (verdict === 'continue') {
+          grace = delay(limits.workGraceMs ?? 15_000)
+          outcome = await race(grace)
+        }
+      }
+      return {
+        answer: assistant.get(sessionId),
+        idle: outcome === true,
+        stopped: outcome === 'stopped',
+        timedOut: outcome === 'deadline'
+      }
     } finally {
       stop.cancel()
       idle.cancel()
+      deadline.cancel()
+      grace?.cancel?.()
     }
   }
 

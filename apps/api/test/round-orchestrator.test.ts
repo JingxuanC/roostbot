@@ -11,7 +11,7 @@ import { openStore } from '../../../packages/store/src/index.ts'
 import { createBot } from '../../../packages/store/src/bots.ts'
 import { createRoomExt } from '../../../packages/store/src/rooms-ext.ts'
 import { createWorkspace } from '../../../packages/store/src/workspaces.ts'
-import { getRoom, sendMessage } from '../../../packages/store/src/rooms.ts'
+import { getRoom, readMessages, sendMessage } from '../../../packages/store/src/rooms.ts'
 import { applyAdvance, assignmentsForRound, openRoundForMessage, sessionIdForMember } from '../src/round-orchestrator.ts'
 
 const AT = 1_760_000_000_000
@@ -124,6 +124,42 @@ test('没有成员时不开轮', () => {
     assert.ok(base !== null)
     const sent = sendMessage(ctx.store, { roomId: created.room.id, text: '在吗', actor: { kind: 'user', id: 'acc_1' } })
     assert.equal(openRoundForMessage({ store: ctx.store, room: base, seq: sent.seq, text: '在吗', at: AT }), null)
+  } finally {
+    cleanup(ctx)
+  }
+})
+
+test('晚到结果：轮次已收，轮距 ≤10 时仍回群且幂等（4.2.16）', () => {
+  const ctx = setup()
+  try {
+    const created = room(ctx.store, {
+      workspaceId: ctx.workspace.id,
+      memberBotIds: [ctx.host.id, ctx.peer.id],
+      hostBotId: ctx.host.id,
+      responder: { kind: 'member', botId: ctx.host.id },
+      createdBy: 'acc_1'
+    })
+    const base = getRoom(ctx.store, created.room.id)
+    assert.ok(base !== null)
+    const first = sendMessage(ctx.store, { roomId: created.room.id, text: '第一轮', actor: { kind: 'user', id: 'acc_1' } })
+    const round1 = openRoundForMessage({ store: ctx.store, room: base, seq: first.seq, text: '第一轮', at: AT })
+    assert.ok(round1 !== null)
+    applyAdvance({ store: ctx.store, roundId: round1.id, slotIndex: 0, result: { kind: 'posted', text: '第一轮答复' }, now: AT + 1 })
+
+    // 新的一轮已经开了，旧轮的结果晚到。
+    const second = sendMessage(ctx.store, { roomId: created.room.id, text: '第二轮', actor: { kind: 'user', id: 'acc_1' } })
+    const round2 = openRoundForMessage({ store: ctx.store, room: base, seq: second.seq, text: '第二轮', at: AT + 2 })
+    assert.ok(round2 !== null)
+
+    const outcome = applyAdvance({ store: ctx.store, roundId: round1.id, slotIndex: 0, result: { kind: 'posted', text: '晚到答复' }, now: AT + 3 })
+    assert.equal(outcome.next, null)
+    const texts = readMessages(ctx.store, { roomId: created.room.id, limit: 50 }).map((message) => message.text)
+    assert.equal(texts.filter((text) => text === '晚到答复').length, 1)
+
+    // 重投同一 slot：idem 去重，不重复回群。
+    applyAdvance({ store: ctx.store, roundId: round1.id, slotIndex: 0, result: { kind: 'posted', text: '晚到答复' }, now: AT + 4 })
+    const after = readMessages(ctx.store, { roomId: created.room.id, limit: 50 }).map((message) => message.text)
+    assert.equal(after.filter((text) => text === '晚到答复').length, 1)
   } finally {
     cleanup(ctx)
   }

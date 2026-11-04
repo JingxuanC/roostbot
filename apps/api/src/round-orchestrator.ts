@@ -5,7 +5,7 @@
 // 派发决策在控制面（可审计、可回放）；沙箱里的 room-agent 只是执行器。
 
 import type { RoomRound, RoundAssignment, SlotResult } from '../../../contract/src/index.ts'
-import { activeRound, botSession, getRound, markSeen, saveRound, seenSeq, setBotSession } from '../../../packages/store/src/rounds.ts'
+import { activeRound, botSession, getRound, listRounds, markSeen, saveRound, seenSeq, setBotSession } from '../../../packages/store/src/rounds.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { kickoffPromptFor } from './kickoff.ts'
 import { readMessages, sendMessage } from '../../../packages/store/src/rooms.ts'
@@ -15,6 +15,7 @@ import {
   buildMemberPrompt,
   createRound,
   finishRound,
+  lateRoundAllowed,
   nextSlot,
   openingSpeakers
 } from '../../../packages/rooms/src/index.ts'
@@ -185,7 +186,31 @@ export interface AdvanceInput {
 export function applyAdvance(input: AdvanceInput): { round: RoomRound; next: number | null } {
   const current = getRound(input.store, input.roundId)
   if (current === null) throw new Error(`unknown round ${input.roundId}`)
-  if (current.state !== 'running') return { round: current, next: null }
+  if (current.state !== 'running') {
+    // 4.2.16：轮次已结束/被停后晚到的结果，轮距 ≤ lateRounds 时仍回群（幂等）。
+    // 轮次列表是倒序（新的在前），lateRoundAllowed 需要升序。
+    const posted = input.result.kind === 'posted' && input.result.text.trim() !== ''
+    if (posted) {
+      const roomRounds = listRounds(input.store, current.roomId, 200)
+        .slice()
+        .reverse()
+        .map((round) => ({ id: round.id }))
+      if (lateRoundAllowed({ id: current.roomId, rounds: roomRounds }, current)) {
+        const speaker = current.slots[input.slotIndex]
+        if (speaker !== undefined) {
+          sendMessage(input.store, {
+            roomId: current.roomId,
+            text: input.result.text,
+            actor: { kind: 'bot', id: speaker.botId },
+            idem: `late-${current.id}-slot-${input.slotIndex}`
+          })
+          const latest = readMessages(input.store, { roomId: current.roomId, limit: 200 }).at(-1)
+          if (latest !== undefined) markSeen(input.store, current.roomId, speaker.botId, latest.seq)
+        }
+      }
+    }
+    return { round: current, next: null }
+  }
   const detail = detailOrThrow(input.store, current.roomId)
   const engine = engineRoom(detail)
   const speaker = current.slots[input.slotIndex]
