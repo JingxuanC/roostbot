@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta name="description" content="Roost 网页端第一版 UI 切片：配对页与房间页。" />
+    <meta name="description" content="Roost 网页端：配对、房间、Bot 与建群设置。" />
     <title>Roost · 配对</title>
     <!-- 图标内联成 data URI：不额外加文件，也不让浏览器为 /favicon.ico 404 一次 -->
     <link
@@ -84,6 +84,7 @@
         </fieldset>
 
         <p id="pair-error" class="pair-error" role="alert" hidden></p>
+        <p id="pair-note" class="pair-note muted" role="status" hidden></p>
 
         <button id="pair-submit" class="btn btn-primary btn-block pair-submit" type="submit">
           配对
@@ -119,29 +120,30 @@
         </button>
 
         <h2 class="nav-title" id="rooms-title">房间</h2>
-        <ul class="room-list" id="room-list" aria-labelledby="rooms-title">
-          <li class="room-row" aria-current="true">
-            <span class="room-mark" aria-hidden="true"></span>量化研究组
-          </li>
-          <li class="room-row">
-            <span class="room-mark" aria-hidden="true"></span>复盘组
-          </li>
-        </ul>
+        <ul class="room-list" id="room-list" aria-labelledby="rooms-title"></ul>
+        <p class="nav-add"><a href="#/rooms/new">＋ 新建房间</a></p>
 
-        <h2 class="nav-title" id="bots-title">Bot</h2>
+        <h2 class="nav-title" id="bots-title">
+          <a class="nav-title-link" href="#/bots">Bot</a>
+        </h2>
         <ul class="bot-list" id="bot-list" aria-labelledby="bots-title"></ul>
+        <p class="nav-add"><a href="#/bots/new">＋ 新建 Bot</a></p>
 
-        <p class="sidebar-foot muted">UI 切片 · 未接 API</p>
+        <p class="sidebar-foot muted" id="sidebar-foot">未连接控制面</p>
       </aside>
 
       <main class="main">
         <header class="room-head">
-          <h1 class="room-name" id="room-name">量化研究组</h1>
+          <div class="room-head-main">
+            <h1 class="room-name" id="room-name">量化研究组</h1>
+            <a id="room-settings-link" class="room-settings-link" href="#" hidden>设置</a>
+          </div>
           <div class="head-right">
-            <p class="working">
+            <p class="working" id="working">
               <span class="dot" aria-hidden="true"></span>
               <span id="working-text">选股师 正在工作</span>
             </p>
+            <a class="head-link" href="#/bots">Bot</a>
             <button
               id="needs-btn-sm"
               class="btn btn-ghost btn-sm needs-btn-sm"
@@ -158,9 +160,12 @@
           假数据预览：房间内容为固定样例，发送不会请求服务端。
         </p>
 
+        <div id="round-status" class="round-status" role="status" aria-label="本轮状态" hidden></div>
+
         <div id="messages" class="messages" role="log" aria-label="消息"></div>
 
         <form id="composer-form" class="composer">
+          <div id="mention-menu" class="mention-menu" role="listbox" aria-label="成员" hidden></div>
           <label class="sr-only" for="composer">消息</label>
           <textarea
             id="composer"
@@ -168,18 +173,27 @@
             rows="1"
             placeholder="说点什么…"
             autocomplete="off"
+            aria-expanded="false"
+            aria-controls="mention-menu"
           ></textarea>
-          <div class="composer-row">
-            <span class="composer-hint muted">Enter 换行</span>
-            <button
-              id="send"
-              class="btn btn-primary"
-              type="submit"
-              title="⌘↵ / Ctrl+↵ 发送"
-              aria-keyshortcuts="Meta+Enter Control+Enter"
-            >
-              <kbd aria-hidden="true">⌘↵</kbd> 发送
-            </button>
+          <p id="composer-error" class="composer-error" role="alert" hidden></p>
+          <div class="composer-foot">
+            <p class="who-row">
+              <span id="who-answers" class="who-answers">还没有成员会回答</span>
+              <span class="composer-hint muted">· @ 可点名 · ⌘↵ 发送</span>
+            </p>
+            <div class="composer-row">
+              <span class="composer-hint muted">Enter 换行</span>
+              <button
+                id="send"
+                class="btn btn-primary"
+                type="submit"
+                title="⌘↵ / Ctrl+↵ 发送"
+                aria-keyshortcuts="Meta+Enter Control+Enter"
+              >
+                <kbd aria-hidden="true">⌘↵</kbd> 发送
+              </button>
+            </div>
           </div>
         </form>
       </main>
@@ -191,6 +205,20 @@
         </div>
         <div class="needs-body" id="needs-body"></div>
       </aside>
+    </div>
+
+    <!-- ------------------------------------------------------------ 页面三至六：Bot 与房间设置 -->
+    <div id="page-view" class="page" hidden>
+      <header class="page-head">
+        <a class="brand-link" href="#/">Roost</a>
+        <nav class="page-nav" aria-label="导航">
+          <a href="#/bots">Bot</a>
+          <a href="#/rooms/new">新建房间</a>
+          <a href="#/">配对</a>
+        </nav>
+      </header>
+      <p id="page-note" class="page-note" role="status" hidden></p>
+      <main id="page-main" class="page-main" tabindex="-1"></main>
     </div>
 
     <!--

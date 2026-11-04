@@ -75,8 +75,9 @@ test('两条消息走同一个 session，回复带 idem（多轮）', async () =
     const deadline = Date.now() + 5000
     while (Date.now() < deadline && cp.said.length < 2) await new Promise((r) => setTimeout(r, 20))
     assert.equal(cp.said.length, 2)
-    assert.equal(cp.said[0].idem, 'reply-rm_test-1')
-    assert.equal(cp.said[1].idem, 'reply-rm_test-3')
+    // idem 带 botId：同一 seq 多个 Bot 不会互相覆盖
+    assert.equal(cp.said[0].idem, 'reply-rm_test-1-selector')
+    assert.equal(cp.said[1].idem, 'reply-rm_test-3-selector')
     // 第二轮由同一 session 产生（假 DSH 用轮数证明）
     assert.match(cp.said[1].text, /第 2 轮/)
   } finally {

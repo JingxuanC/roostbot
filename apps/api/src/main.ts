@@ -3,13 +3,16 @@
 //
 //   PORT=8787 node --experimental-strip-types apps/api/src/main.ts
 //
-// v0 用内存 store：进程退出即丢状态，这是有意的（真实存储在 packages/store，
-// 由 Lead 写适配器接上 port.ts 的 StorePort）。监听地址固定回环 127.0.0.1。
+// 默认用 SQLite（`ROOST_DB`，缺省 `./data/roost.db`）：Bot/房间/轮次等 M4 能力需要它。
+// `ROOST_DB=memory` 显式选择内存实现（重启即丢，仅演示用）。监听地址默认回环。
+import { mkdirSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { DEFAULT_HOST, DEFAULT_PORT, startServer } from './server.ts'
 import type { StartedServer } from './server.ts'
 import { createMemoryStore } from './memory-store.ts'
 import { createStorePort } from './store-adapter.ts'
 import { openStore } from '../../../packages/store/src/index.ts'
+import { openShellRuntimeManager } from './runtime-manager-openshell.ts'
 
 function readPort(): number {
   const raw = process.env['PORT']
@@ -52,20 +55,44 @@ async function main(): Promise<void> {
   const port = readPort()
   // 沙箱要通过 host.openshell.internal 访问控制面，所以默认仍是回环，但允许显式放开。
   const host = process.env.ROOST_HOST ?? DEFAULT_HOST
-  // ROOST_DB 给了路径 = 用真实 SQLite 卷；否则内存实现（重启即丢，界面上会说明）。
-  const dbPath = process.env.ROOST_DB
-  const store = dbPath === undefined || dbPath === '' ? createMemoryStore() : createStorePort(openStore(dbPath))
+  const raw = process.env.ROOST_DB
+  const memory = raw === 'memory'
+  const dbPath = memory ? undefined : resolve(raw === undefined || raw === '' ? join(process.cwd(), 'data', 'roost.db') : raw)
+  if (dbPath !== undefined) mkdirSync(dirname(dbPath), { recursive: true })
+  const sqlite = dbPath === undefined ? undefined : openStore(dbPath)
+  const store = sqlite === undefined ? createMemoryStore() : createStorePort(sqlite)
+
+  // 沙箱管理只在显式配置时启用；没有 OpenShell 的机器上 /start 返回 runtime.not_configured。
+  const runtimeManager =
+    process.env.ROOST_SANDBOX === 'openshell'
+      ? openShellRuntimeManager({
+          image: process.env.ROOST_SANDBOX_IMAGE ?? 'roost/agent:dev',
+          cpHost: process.env.ROOST_CP_HOST ?? 'host.openshell.internal',
+          cpPort: Number(process.env.ROOST_CP_PORT ?? port),
+          runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
+          ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
+          log: (line: string) => console.log(`[sandbox] ${line}`)
+        })
+      : undefined
 
   let started: StartedServer
   try {
-    started = await startServer({ store, port, host })
+    started = await startServer({
+      store,
+      port,
+      host,
+      ...(sqlite === undefined ? {} : { rawStore: sqlite }),
+      ...(runtimeManager === undefined ? {} : { runtimeManager })
+    })
   } catch (err) {
     console.error(`roost api: failed to listen on ${host}:${port}`, err)
     process.exitCode = 1
     return
   }
 
-  console.log(`roost api listening on ${started.url} (${dbPath ?? "?"}${dbPath === undefined ? "memory store; state is lost on exit" : "sqlite store"})`)
+  console.log(
+    `roost api listening on ${started.url} (${sqlite === undefined ? 'memory store; state is lost on exit' : `sqlite ${dbPath}`}${runtimeManager === undefined ? '' : ', sandbox manager on'})`
+  )
   installShutdown(started)
 }
 

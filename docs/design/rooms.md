@@ -262,3 +262,13 @@ POST /api/internal/rounds/:id/advance        ← 报告 slot 状态（posted/pas
 1. `auto` 的决策模型用哪个（v2 再定）
 2. 轮次的持久化粒度：每 slot 落库（重放更准）还是每轮落库（更省）？倾向每轮 + 关键 slot 状态。
 3. 私聊进群的工具要不要在 v1 就给（还是只给摘要）。
+
+## 13. 实现状态（2026-11-04）
+
+- `packages/rooms`：responder / openingSpeakers / @ 解析 / 轮限 / [PASS] / prompt 装配（52 测试）
+- `packages/store`：bots / room_members / rooms-ext / rounds / workspace_runtime（迁移 0004–0006）
+- `apps/api`：Bot CRUD、建群与成员、`POST /messages` 开轮、内部 assignments/round/advance、workspace start/runtime
+- `apps/runtime`：room-agent 按 assignments 派发、单 Bot 回退、退避、session resume
+- `apps/web`：Bot 列表/新建/设置、建群、房间设置、谁会回答、@ 菜单
+- 本地验收：HTTP 冒烟 14/14、双 Bot 假模型 E2E、全量 297 测试
+- 未接：kickoff、Bot 建群审批、profile sync、工作宽限/late rounds、日志裁剪、远端真实模型双 Bot

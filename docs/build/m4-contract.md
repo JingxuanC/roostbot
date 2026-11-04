@@ -115,3 +115,18 @@ GET  /api/workspaces/:id/runtime   → { runtime: { sandbox, phase, startedAt, l
 node --experimental-strip-types --test packages/*/test/*.test.ts apps/*/test/*.test.ts
 sh scripts/verify.sh
 ```
+
+## 8. 实现进度（2026-11-04）
+
+| 块 | 状态 | 证据 |
+|---|---|---|
+| 迁移 0004–0006 | ✅ | `migrations/` |
+| bots CRUD | ✅ | `apps/api/src/bots-routes.ts`、35 store/api 测试 |
+| 房间成员/responder | ✅ | `rooms-routes-ext.ts`、`room-members.ts` |
+| 轮次引擎 | ✅ | `packages/rooms`，52 测试 |
+| 开轮 + 内部接口 | ✅ | `round-orchestrator.ts`、`rounds-http.ts`、4+3 测试 |
+| workspace start/runtime | ✅ | `workspace-runtime.ts`，3 测试；未配置返回 runtime null |
+| room-agent 多成员 | ✅ | 43 runtime 测试 |
+| 前端四视图 | ✅ | `apps/web/views`，41 测试 |
+| 本地 E2E | ✅ | 双 Bot 假模型跑通；HTTP 冒烟 14/14 |
+| 远端真实模型 | ⏳ | 待做 |

@@ -11,32 +11,52 @@ import { randomUUID } from 'node:crypto'
 
 import {
   StoreError,
+  addRoomMembers as addRoomMembersInStore,
   claimPairingCode as claimInStore,
+  createBot as createBotInStore,
   createRoom as createRoomInStore,
-  getRoom as getRoomInStore,
-  listRooms as listRoomsInStore,
-  readMessages as readMessagesInStore,
-  sendMessage as sendMessageInStore,
+  createRoomExt as createRoomExtInStore,
   createPairingCode as createPairingInStore,
   createSession as createSessionInStore,
   createWorkspace as createWorkspaceInStore,
+  deleteBot as deleteBotInStore,
   findSessionByTokenHash,
+  getBot as getBotInStore,
+  getRoom as getRoomInStore,
+  getRoomDetail as getRoomDetailInStore,
+  listBots as listBotsInStore,
+  latestRound as latestRoundInStore,
+  listRooms as listRoomsInStore,
   listWorkspaces as listWorkspacesInStore,
+  readMessages as readMessagesInStore,
+  removeRoomMember as removeRoomMemberInStore,
+  sendMessage as sendMessageInStore,
   touchSession,
+  updateBot as updateBotInStore,
+  updateRoomExtras as updateRoomExtrasInStore,
 } from '../../../packages/store/src/index.ts'
-import type { Store } from '../../../packages/store/src/index.ts'
+import type { RoomDetail, Store } from '../../../packages/store/src/index.ts'
+import type { Bot } from '../../../packages/contract/src/index.ts'
 import {
   PairingCodeCollisionError,
   type ClaimPairingCodeInput,
   type ClaimPairingCodeResult,
+  type CreateBotPortInput,
   type CreatePairingCodeInput,
+  type CreateRoomExtPortInput,
   type CreateSessionInput,
   type CreateWorkspaceInput,
+  type DeleteBotPortInput,
+  type ListBotsInput,
   type PairingRecord,
+  type RemoveRoomMemberPortInput,
+  type RoomMemberMutationInput,
   type RoomMessageRecord,
   type RoomRecord,
   type SessionRecord,
   type StorePort,
+  type UpdateBotPortInput,
+  type UpdateRoomPortInput,
   type WorkspaceRecord,
   type WorkspaceRole,
 } from './port.ts'
@@ -176,7 +196,7 @@ export function createStorePort(store: Store): StorePort {
             ORDER BY r.created_at, r.id`,
         )
         .all(...(input.workspaceId === undefined ? [input.accountId] : [input.accountId, input.workspaceId])) as RoomRow[]
-      return rows.map(toRoomRecord)
+      return rows.map((row) => toRoomRecord(store, row))
     },
 
     async createRoom(input): Promise<RoomRecord> {
@@ -186,7 +206,11 @@ export function createStorePort(store: Store): StorePort {
         name: input.name,
         createdAt: input.now,
       })
-      return toRoomRecord({
+      // v0 建房路径没有 created_by 列；M4 契约的 Room.createdBy 必填，这里补上。
+      store.db
+        .prepare('UPDATE rooms SET created_by_kind = ?, created_by = ? WHERE id = ?')
+        .run('user', input.accountId, room.id)
+      return toRoomRecord(store, {
         id: room.id,
         workspace_id: room.workspaceId,
         name: room.name,
@@ -220,7 +244,7 @@ export function createStorePort(store: Store): StorePort {
       const rows = store.db
         .prepare('SELECT id, workspace_id, name, notice, reply_mode, created_at FROM rooms ORDER BY created_at, id')
         .all() as RoomRow[]
-      return rows.map(toRoomRecord)
+      return rows.map((row) => toRoomRecord(store, row))
     },
 
     async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
@@ -257,6 +281,129 @@ export function createStorePort(store: Store): StorePort {
         ...(touched.revokedAt === null ? {} : { revokedAt: touched.revokedAt }),
       }
     },
+
+    // ---- M4：Bot 域 ---------------------------------------------------------
+
+    async listBots(input: ListBotsInput): Promise<Bot[]> {
+      if (input.workspaceId !== undefined) {
+        requireMembership(store, input.workspaceId, input.accountId)
+        return listBotsInStore(store, input.workspaceId).map(copyBot)
+      }
+      // 没有指定 workspace：把该账号可见的每个 workspace 的 Bot 合起来（与 listRooms 一致）。
+      const workspaces = listWorkspacesInStore(store, { tenantId: input.accountId })
+      const bots: Bot[] = []
+      for (const workspace of workspaces) {
+        if (!isWorkspaceMember(store, workspace.id, input.accountId)) continue
+        bots.push(...listBotsInStore(store, workspace.id))
+      }
+      bots.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      return bots.map(copyBot)
+    },
+
+    async getBot(input: { accountId: string; botId: string }): Promise<Bot | null> {
+      const bot = getBotInStore(store, input.botId)
+      if (bot === null) return null
+      // 不是该 workspace 的成员就当作不存在，避免跨租户探测。
+      if (!isWorkspaceMember(store, bot.workspaceId, input.accountId)) return null
+      return copyBot(bot)
+    },
+
+    async createBot(input: CreateBotPortInput): Promise<Bot> {
+      requireMembership(store, input.workspaceId, input.accountId)
+      return copyBot(
+        createBotInStore(store, {
+          workspaceId: input.workspaceId,
+          name: input.name,
+          ...(input.role === undefined ? {} : { role: input.role }),
+          ...(input.persona === undefined ? {} : { persona: input.persona }),
+          ...(input.provider === undefined ? {} : { provider: input.provider }),
+          ...(input.model === undefined ? {} : { model: input.model }),
+          ...(input.avatar === undefined ? {} : { avatar: input.avatar }),
+          createdBy: input.accountId,
+          createdAt: input.now,
+        }),
+      )
+    },
+
+    async updateBot(input: UpdateBotPortInput): Promise<Bot> {
+      const bot = getBotInStore(store, input.botId)
+      if (bot === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${input.botId}`)
+      requireMembership(store, bot.workspaceId, input.accountId)
+      return copyBot(updateBotInStore(store, { botId: input.botId, actor: input.accountId, patch: input.patch }))
+    },
+
+    async deleteBot(input: DeleteBotPortInput): Promise<void> {
+      const bot = getBotInStore(store, input.botId)
+      if (bot === null) throw new StoreError('BOT_NOT_FOUND', `unknown bot ${input.botId}`)
+      requireMembership(store, bot.workspaceId, input.accountId)
+      deleteBotInStore(store, input.botId)
+    },
+
+    // ---- M4：房间扩展 -------------------------------------------------------
+
+    async getRoomRound(roomId: string) {
+      return latestRoundInStore(store, roomId)
+    },
+
+    async getRoom(input: { accountId: string; roomId: string }): Promise<RoomRecord | null> {
+      const detail = getRoomDetailInStore(store, input.roomId)
+      if (detail === null) return null
+      if (!isWorkspaceMember(store, detail.room.workspaceId, input.accountId)) return null
+      return detailToRecord(detail)
+    },
+
+    async createRoomExt(input: CreateRoomExtPortInput): Promise<RoomRecord> {
+      requireMembership(store, input.workspaceId, input.accountId)
+      const detail = createRoomExtInStore(store, {
+        workspaceId: input.workspaceId,
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.notice === undefined ? {} : { notice: input.notice }),
+        ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
+        memberBotIds: input.memberBotIds,
+        ...(input.hostBotId === undefined ? {} : { hostBotId: input.hostBotId }),
+        ...(input.responder === undefined ? {} : { responder: input.responder }),
+        createdBy: input.accountId,
+        createdByKind: 'user',
+        createdAt: input.now,
+      })
+      return detailToRecord(detail)
+    },
+
+    async updateRoom(input: UpdateRoomPortInput): Promise<RoomRecord> {
+      const detail = getRoomDetailInStore(store, input.roomId)
+      if (detail === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
+      requireMembership(store, detail.room.workspaceId, input.accountId)
+      const responder =
+        input.responder ??
+        (input.responderBot === undefined ? undefined : { kind: 'member' as const, botId: input.responderBot })
+      const updated = updateRoomExtrasInStore(store, {
+        roomId: input.roomId,
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.notice === undefined ? {} : { notice: input.notice }),
+        ...(responder === undefined ? {} : { responder }),
+      })
+      return detailToRecord(updated)
+    },
+
+    async addRoomMembers(input: RoomMemberMutationInput): Promise<RoomRecord> {
+      const detail = getRoomDetailInStore(store, input.roomId)
+      if (detail === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
+      requireMembership(store, detail.room.workspaceId, input.accountId)
+      addRoomMembersInStore(store, { roomId: input.roomId, botIds: input.botIds })
+      const updated = getRoomDetailInStore(store, input.roomId)
+      if (updated === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
+      return detailToRecord(updated)
+    },
+
+    async removeRoomMember(input: RemoveRoomMemberPortInput): Promise<RoomRecord> {
+      const detail = getRoomDetailInStore(store, input.roomId)
+      if (detail === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
+      requireMembership(store, detail.room.workspaceId, input.accountId)
+      removeRoomMemberInStore(store, { roomId: input.roomId, botId: input.botId })
+      const updated = getRoomDetailInStore(store, input.roomId)
+      if (updated === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
+      return detailToRecord(updated)
+    },
   }
 }
 
@@ -269,7 +416,10 @@ interface RoomRow {
   created_at: number | bigint
 }
 
-function toRoomRecord(row: RoomRow): RoomRecord {
+function toRoomRecord(store: Store, row: RoomRow): RoomRecord {
+  // 详情把 M4 的扩展列和成员一起带出来；读不到就退回 0003 的基础形状。
+  const detail = getRoomDetailInStore(store, row.id)
+  if (detail !== null) return detailToRecord(detail)
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -277,7 +427,46 @@ function toRoomRecord(row: RoomRow): RoomRecord {
     ...(row.notice === null ? {} : { notice: row.notice }),
     replyMode: row.reply_mode as RoomRecord['replyMode'],
     createdAt: Number(row.created_at),
+    responder: { kind: 'mentions' },
+    members: [],
   }
+}
+
+function detailToRecord(detail: RoomDetail): RoomRecord {
+  const notice = detail.extras.notice ?? detail.room.notice
+  return {
+    id: detail.room.id,
+    workspaceId: detail.room.workspaceId,
+    name: detail.room.name,
+    ...(notice === null ? {} : { notice }),
+    replyMode: detail.room.replyMode as RoomRecord['replyMode'],
+    createdAt: detail.room.createdAt,
+    responder: { ...detail.extras.responder },
+    ...(detail.extras.hostBotId === null ? {} : { hostBotId: detail.extras.hostBotId }),
+    ...(detail.extras.purpose === null ? {} : { purpose: detail.extras.purpose }),
+    createdByKind: detail.extras.createdByKind,
+    ...(detail.extras.createdBy === null ? {} : { createdBy: detail.extras.createdBy }),
+    members: detail.members.map((member) => ({ ...member })),
+  }
+}
+
+/** 端口契约第 5 条：返回拷贝，调用方改数组/对象不影响 store。 */
+function copyBot(bot: Bot): Bot {
+  return {
+    ...bot,
+    ...(bot.avatar === undefined ? {} : { avatar: { ...bot.avatar } }),
+    skills: [...bot.skills],
+    toolsAllow: [...bot.toolsAllow],
+    toolsDeny: [...bot.toolsDeny],
+    memoryScopes: [...bot.memoryScopes],
+  }
+}
+
+function isWorkspaceMember(store: Store, workspaceId: string, accountId: string): boolean {
+  const row = store.db
+    .prepare('SELECT 1 AS ok FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+    .get(workspaceId, accountId)
+  return row !== undefined && row !== null
 }
 
 function toMessageRecord(message: {

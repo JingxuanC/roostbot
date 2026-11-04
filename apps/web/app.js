@@ -11,115 +11,21 @@
 // 发送消息只追加本地气泡，不发请求（见 README「哪些是真的、哪些是假的」）。
 // token 只在内存变量里（sessionToken），不写 localStorage / sessionStorage，刷新即丢。
 
-// ---------------------------------------------------------------------------
-// 一、程序化图标：packages/identity/src/glyph.ts 的等价重写
-// ---------------------------------------------------------------------------
-// 不改算法，只改运行环境：fnv1a → 6 族 × 8 调色板 × 4 旋转 × 4 装饰点。
-// 同一个 bot id 永远得到同一个图标；改名不改形象（bot-identity.md §13.2）。
-// 与 .ts 的一致性靠 apps/web 之外的对照检查保证（见 README）；这里不 import ts。
-
-const GLYPH_FAMILIES = ['egg', 'feather', 'wing', 'eye', 'nest', 'beak']
-const PALETTES = [
-  { name: 'amber', dark: '#D8AB52', light: '#B8862F' },
-  { name: 'teal', dark: '#5FB3B3', light: '#2E7D7D' },
-  { name: 'blue', dark: '#7AA2E0', light: '#3A5EA8' },
-  { name: 'violet', dark: '#A78BDB', light: '#6C4FB0' },
-  { name: 'rose', dark: '#D98CA0', light: '#A8556A' },
-  { name: 'moss', dark: '#8FBF7A', light: '#4F7A3F' },
-  { name: 'clay', dark: '#D09A78', light: '#9A6446' },
-  { name: 'slate', dark: '#9AA6B8', light: '#5A6678' },
-]
-const ROTATIONS = [0, 90, 180, 270]
-const DOT_COUNTS = [0, 1, 2, 3]
-
-/** fnv1a：小而稳，不依赖平台随机数。 */
-function hashId(id) {
-  let hash = 0x811c9dc5
-  for (let i = 0; i < id.length; i += 1) {
-    hash ^= id.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return hash >>> 0
-}
-
-function specFor(id) {
-  const hash = hashId(id)
-  return {
-    family: GLYPH_FAMILIES[hash % 6],
-    palette: PALETTES[Math.floor(hash / 6) % 8],
-    rotate: ROTATIONS[Math.floor(hash / 48) % 4],
-    dots: DOT_COUNTS[Math.floor(hash / 192) % 4],
-    seed: hash,
-  }
-}
-
-/** 各族的几何：都画在 96×96 画布里，描线 5，中心附近。 */
-function familyPath(family) {
-  switch (family) {
-    case 'egg':
-      return 'M48 20 C62 20 72 34 72 50 C72 66 61 76 48 76 C35 76 24 66 24 50 C24 34 34 20 48 20 Z'
-    case 'feather':
-      return 'M30 72 C34 46 46 28 68 22 C66 44 54 62 30 72 Z M38 62 L60 30'
-    case 'wing':
-      return 'M22 58 C36 40 52 30 74 26 C70 46 56 62 34 70 Z'
-    case 'eye':
-      return 'M22 48 C34 34 62 34 74 48 C62 62 34 62 22 48 Z'
-    case 'nest':
-      return 'M24 56 C34 68 62 68 72 56 M28 62 C38 72 58 72 68 62 M34 44 C40 38 56 38 62 44'
-    case 'beak':
-      return 'M28 40 C44 32 64 34 74 44 C64 52 46 58 32 54 Z'
-    default:
-      return ''
-  }
-}
-
-function dotsMarks(count, color) {
-  const spots = [
-    [70, 26],
-    [26, 70],
-    [72, 70],
-  ]
-  return spots
-    .slice(0, count)
-    .map(([cx, cy]) => `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${color}"/>`)
-    .join('')
-}
-
-function escapeAttr(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-/**
- * 产出可直接内联的 SVG。
- * @param {string} id Bot 的稳定 id（不是名字——改名不改形象）
- * @param {{theme?: 'dark'|'light', size?: number, label?: string}} [options]
- *   不给 label 时输出装饰性图标（名字就在旁边，别让读屏念两遍）。
- */
-function glyphSvg(id, options = {}) {
-  const theme = options.theme || 'dark'
-  const size = options.size || 24
-  const label = options.label || ''
-  const spec = specFor(id)
-  const ink = theme === 'dark' ? spec.palette.dark : spec.palette.light
-  const base = theme === 'dark' ? '#141619' : '#FFFFFF'
-  const line = theme === 'dark' ? '#2A2E35' : '#E6E3DC'
-  const a11y = label
-    ? ` role="img" aria-label="${escapeAttr(label)}"`
-    : ' role="presentation" aria-hidden="true"'
-  return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 96 96"${a11y}>`,
-    `<rect width="96" height="96" rx="24" fill="${base}" stroke="${line}" stroke-width="1.5"/>`,
-    `<g transform="rotate(${spec.rotate} 48 48)" fill="none" stroke="${ink}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">`,
-    `<path d="${familyPath(spec.family)}"/>`,
-    '</g>',
-    dotsMarks(spec.dots, ink),
-    '</svg>',
-  ].join('')
-}
+import { $, avatar, el } from './lib/dom.js'
+import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
+import { createApiClient, isAuthError } from './lib/api-client.js'
+import { routeMatch } from './lib/routing.js'
+import { insertMention, parseMentionQuery } from './lib/mentions.js'
+import {
+  roomMembers,
+  roundStateLabel,
+  roundStatusItems,
+  speakingSlot,
+  whoAnswersLabel,
+} from './lib/rooms.js'
+import * as ui from './lib/ui.js'
+import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
+import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
 
 // ---------------------------------------------------------------------------
 // 二、固定样例
@@ -398,59 +304,77 @@ function markdownFragment(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 三、DOM 小工具
-// ---------------------------------------------------------------------------
-
-const $ = (selector, root = document) => root.querySelector(selector)
-
-/** 建元素：props 里的 class/text 走属性语义，其余当 attribute（含 aria-*）。 */
-function el(tag, props = {}, children = []) {
-  const node = document.createElement(tag)
-  for (const [key, value] of Object.entries(props)) {
-    if (value === null || value === undefined || value === false) continue
-    if (key === 'class') node.className = value
-    else if (key === 'text') node.textContent = value
-    else if (key === 'hidden') node.hidden = Boolean(value)
-    else if (key.startsWith('on')) node.addEventListener(key.slice(2).toLowerCase(), value)
-    else node.setAttribute(key, value === true ? '' : String(value))
-  }
-  for (const child of Array.isArray(children) ? children : [children]) {
-    if (child === null || child === undefined) continue
-    node.append(child instanceof Node ? child : document.createTextNode(String(child)))
-  }
-  return node
-}
-
-function svgNode(markup) {
-  const template = document.createElement('template')
-  template.innerHTML = markup.trim()
-  return template.content.firstElementChild
-}
-
-function avatar(botId, size) {
-  const wrap = el('span', { class: `avatar avatar-${size}` })
-  wrap.append(svgNode(glyphSvg(botId, { size })))
-  return wrap
-}
-
-// ---------------------------------------------------------------------------
 // 四、渲染
 // ---------------------------------------------------------------------------
 
+/** 侧栏 Bot：预览用样例，连上控制面后用真实列表；点开是设置页（不是聊天）。 */
 function renderSidebarBots() {
   const list = $('#bot-list')
+  if (!list) return
   list.replaceChildren()
-  for (const bot of Object.values(BOTS)) {
+  const bots = LIVE.active ? STORE.bots : Object.values(BOTS)
+  if (bots.length === 0) {
+    const row = el('li', { class: 'bot-row bot-row-empty' })
+    row.append(el('span', { class: 'muted', text: '还没有 Bot' }))
+    row.append(el('a', { class: 'nav-add-link', href: '#/bots/new', text: '新建' }))
+    list.append(row)
+    return
+  }
+  for (const bot of bots) {
     const row = el('li', { class: 'bot-row' })
-    row.append(avatar(bot.id, 24))
-    row.append(el('span', { class: 'bot-name', text: bot.name }))
-    row.append(el('span', { class: 'bot-role', text: bot.role }))
-    if (bot.id === ROOM.working.botId) {
-      row.append(el('span', { class: 'dot', 'aria-hidden': 'true' }))
-      row.append(el('span', { class: 'sr-only', text: '正在工作' }))
+    const link = el('a', { class: 'bot-link', href: `#/bots/${encodeURIComponent(bot.id)}` })
+    link.append(avatar(bot.id, 24))
+    link.append(el('span', { class: 'bot-name', text: bot.name }))
+    if (bot.role) link.append(el('span', { class: 'bot-role', text: bot.role }))
+    if (bot.status === 'paused') link.append(el('span', { class: 'bot-paused', text: '暂停' }))
+    if (!LIVE.active && bot.id === ROOM.working.botId) {
+      link.append(el('span', { class: 'dot', 'aria-hidden': 'true' }))
+      link.append(el('span', { class: 'sr-only', text: '正在工作' }))
     }
+    row.append(link)
     list.append(row)
   }
+}
+
+/** 侧栏房间：预览用样例，连上控制面后用真实列表；当前房间 aria-current。 */
+function renderSidebarRooms() {
+  const list = $('#room-list')
+  if (!list) return
+  list.replaceChildren()
+  if (LIVE.active && STORE.rooms.length > 0) {
+    for (const room of STORE.rooms) {
+      const current = room.id === LIVE.roomId
+      const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
+      const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
+      link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
+      link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
+      row.append(link)
+      list.append(row)
+    }
+    return
+  }
+  for (const name of ['量化研究组', '复盘组']) {
+    const row = el('li', { class: 'room-row', 'aria-current': name === '量化研究组' ? 'true' : null })
+    const link = el('a', { class: 'room-link', href: '#room' })
+    link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
+    link.append(el('span', { class: 'room-name-text', text: name }))
+    row.append(link)
+    list.append(row)
+  }
+}
+
+/** Bot 名字/角色：真实列表优先，样例兜底，最后才是成员名；绝不显示内部 id。 */
+function botIdentity(id) {
+  const stored = STORE.bots.find((bot) => bot.id === id)
+  if (stored) return { name: stored.name || 'Bot', role: stored.role || '' }
+  const sample = BOTS[id]
+  if (sample) return { name: sample.name, role: sample.role }
+  const member = LIVE.room ? roomMembers(LIVE.room).find((item) => item.botId === id) : null
+  return { name: (member && member.name) || 'Bot', role: '' }
+}
+
+function botLabel(id) {
+  return botIdentity(id).name
 }
 
 /** 用户气泡：主色、右对齐，绝不和 Bot 消息混淆（messaging.md §14）。 */
@@ -465,12 +389,12 @@ function renderUserMessage(text) {
 
 /** 房间里的 Bot 消息：中性底，气泡上方「头像 名字 · 角色」，没有标签行。 */
 function renderRoomMessage(event) {
-  const bot = BOTS[event.actor.id]
+  const bot = botIdentity(event.actor.id)
   const article = el('article', { class: 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
   head.append(avatar(event.actor.id, 24))
   head.append(el('span', { class: 'msg-name', text: bot.name }))
-  head.append(el('span', { class: 'msg-role', text: bot.role }))
+  if (bot.role) head.append(el('span', { class: 'msg-role', text: bot.role }))
   article.append(head)
   const bubble = el('div', { class: 'bubble bubble-bot' })
   bubble.append(markdownFragment(event.payload.text))
@@ -488,7 +412,7 @@ function collapsedByDefault(delivery) {
 
 /** Bot 私聊：默认只显示一行标签，点击就地展开（不跳转、不弹窗）。 */
 function renderPeerMessage(event, delivery) {
-  const bot = BOTS[event.actor.id]
+  const bot = botIdentity(event.actor.id)
   const text = event.payload.text
   const summary = text.length > PEER_SUMMARY_CHARS ? `${text.slice(0, PEER_SUMMARY_CHARS)}…` : text
   const bodyId = `peer-${event.seq}`
@@ -603,7 +527,11 @@ function renderEvent(event) {
 function renderMessages() {
   const list = $('#messages')
   list.replaceChildren()
-  for (const event of ROOM.events) list.append(renderEvent(event))
+  if (ROOM.events.length === 0) {
+    list.append(el('p', { class: 'messages-empty muted', text: '还没有消息。说一句，开启一轮。' }))
+  } else {
+    for (const event of ROOM.events) list.append(renderEvent(event))
+  }
   // 初始渲染完再开 live region，避免读屏一次念完整个房间。
   list.setAttribute('aria-live', 'polite')
 }
@@ -805,8 +733,7 @@ function setupPairing() {
         await enterLiveRoom(token)
       } catch (cause) {
         const reason = cause instanceof Error ? cause.message : String(cause)
-        enterRoom('paired')
-        showError(`配对成功，但房间没载入（${reason}）。可以稍后刷新重试。`)
+        showError(`配对成功，但房间没载入（${reason}）。可以点「预览房间」，或稍后刷新重试。`)
       }
     } catch (cause) {
       // fetch 本身失败（没服务、file://、CORS）——把原因摊开说，不假装成功。
@@ -818,25 +745,299 @@ function setupPairing() {
   })
 
   const preview = $('#preview-btn')
-  preview.addEventListener('click', () => enterRoom('preview'))
+  preview.addEventListener('click', () => {
+    if (location.hash === '#room') renderRoute()
+    else navigate('#room')
+  })
 }
 
 
 // ---------------------------------------------------------------------------
-// 六之二、真实房间（控制面 API + SSE）
+// 六、状态、API 客户端与会话
 // ---------------------------------------------------------------------------
-// 配对成功后才走这里：房间、消息都来自控制面；预览模式仍然用固定样例。
-// 消息形状保持与 events.md 一致（chat.message 事件），只是由服务端消息投影出来。
+// 会话 token 仍只在内存（auth.md §7）：刷新即丢。受保护页面在 401 时回到配对页，
+// 配对成功后回到刚才的地址（pendingRoute）。不写 localStorage / sessionStorage。
 
 const LIVE = {
   active: false,
   token: '',
   roomId: '',
-  rooms: [],
+  room: null,
   lastSeq: 0,
   seen: new Set(),
   stream: null,
 }
+
+const STORE = {
+  workspaceId: '',
+  bots: [],
+  botsLoaded: false,
+  botsLoading: null,
+  rooms: [],
+  roomsLoaded: false,
+  roomsLoading: null,
+}
+
+/** 固定样例：预览模式（未配对）只读，发送不会请求服务端。 */
+const SAMPLE_EVENTS = ROOM.events.slice()
+
+const PREVIEW_ROOM = {
+  id: 'r_quant',
+  name: '量化研究组',
+  replyMode: 'everyone',
+  hostBotId: 'chief',
+  responder: { kind: 'member', botId: 'selector' },
+  members: [
+    { botId: 'chief', role: 'host', name: 'Chief' },
+    { botId: 'data-officer', role: 'member', name: '数据官' },
+    { botId: 'selector', role: 'member', name: '选股师' },
+    { botId: 'risk-officer', role: 'member', name: '风控官' },
+  ],
+}
+
+const api = createApiClient({
+  base: API_BASE,
+  getToken: () => sessionToken || '',
+})
+
+let pendingRoute = ''
+let pageFlash = ''
+let routeSeq = 0
+
+function hasToken() {
+  return typeof sessionToken === 'string' && sessionToken !== ''
+}
+
+function setTitle(title) {
+  document.title = title ? `${title} · Roost` : 'Roost'
+}
+
+function navigate(hash) {
+  if (location.hash === hash) {
+    void renderRoute()
+    return
+  }
+  location.hash = hash
+}
+
+/** 受保护页面发现会话失效：回配对页，并记住原地址。 */
+function requirePair() {
+  if (location.hash !== '#/' && location.hash !== '') pendingRoute = location.hash
+  navigate('#/')
+  const note = $('#pair-note')
+  if (note) {
+    note.textContent = '会话已失效或还没配对（token 只在内存里，刷新后要重新配对）。配对成功后会回到刚才的页面。'
+    note.hidden = false
+  }
+  setTitle('配对')
+}
+
+function flash(message) {
+  pageFlash = message
+}
+
+function showPageFlash() {
+  const note = $('#page-note')
+  if (!note) return
+  note.textContent = pageFlash
+  note.hidden = pageFlash === ''
+  pageFlash = ''
+}
+
+async function ensureWorkspaceId() {
+  if (STORE.workspaceId) return STORE.workspaceId
+  const data = await api.get('/api/workspaces')
+  let workspaces = Array.isArray(data?.workspaces) ? data.workspaces : []
+  if (workspaces.length === 0) {
+    const created = await api.post('/api/workspaces', { name: '我的工作区' })
+    workspaces = created && created.workspace ? [created.workspace] : []
+  }
+  if (workspaces.length === 0) throw new Error('没有可用的 workspace')
+  STORE.workspaceId = workspaces[0].id
+  return STORE.workspaceId
+}
+
+async function loadBots(options = {}) {
+  if (STORE.botsLoaded && !options.force) return STORE.bots
+  if (STORE.botsLoading && !options.force) return STORE.botsLoading
+  const task = (async () => {
+    const workspaceId = await ensureWorkspaceId()
+    const data = await api.get(`/api/bots?workspaceId=${encodeURIComponent(workspaceId)}`)
+    const list = Array.isArray(data?.bots) ? data.bots : Array.isArray(data) ? data : []
+    STORE.bots = list
+    STORE.botsLoaded = true
+    renderSidebarBots()
+    return STORE.bots
+  })()
+  STORE.botsLoading = task
+  try {
+    return await task
+  } finally {
+    if (STORE.botsLoading === task) STORE.botsLoading = null
+  }
+}
+
+function normalizeRoom(payload) {
+  const room = payload && typeof payload === 'object' && payload.room ? payload.room : payload
+  if (!room || typeof room !== 'object') return null
+  const round = room.round || (payload && typeof payload === 'object' ? payload.round || payload.currentRound : null) || null
+  return {
+    ...room,
+    members: Array.isArray(room.members) ? room.members : [],
+    round,
+  }
+}
+
+async function loadRooms(options = {}) {
+  if (STORE.roomsLoaded && !options.force) return STORE.rooms
+  if (STORE.roomsLoading && !options.force) return STORE.roomsLoading
+  const task = (async () => {
+    const query = STORE.workspaceId ? `?workspaceId=${encodeURIComponent(STORE.workspaceId)}` : ''
+    const data = await api.get(`/api/rooms${query}`)
+    const list = Array.isArray(data?.rooms) ? data.rooms : []
+    STORE.rooms = list.map(normalizeRoom).filter(Boolean)
+    STORE.roomsLoaded = true
+    if (!STORE.workspaceId && STORE.rooms[0]?.workspaceId) STORE.workspaceId = STORE.rooms[0].workspaceId
+    renderSidebarRooms()
+    return STORE.rooms
+  })()
+  STORE.roomsLoading = task
+  try {
+    return await task
+  } finally {
+    if (STORE.roomsLoading === task) STORE.roomsLoading = null
+  }
+}
+
+async function loadRoom(id, options = {}) {
+  if (!id) return null
+  try {
+    return normalizeRoom(await api.get(`/api/rooms/${encodeURIComponent(id)}`))
+  } catch (error) {
+    // 契约还没实现单房间路由时，用列表里的同一间兜底（没有 members/round）。
+    if (!(error && error.status === 404)) throw error
+    const rooms = options.force ? await loadRooms({ force: true }) : await loadRooms()
+    const fallback = rooms.find((room) => room.id === id)
+    if (fallback) return normalizeRoom(fallback)
+    throw error
+  }
+}
+
+/** 配对后没有房间时不强行建：M4 的房间至少 2 个 Bot，先让用户去建 Bot 再建群。 */
+async function ensureRoom() {
+  return loadRooms({ force: true })
+}
+
+function pageContext() {
+  return {
+    api,
+    store: STORE,
+    navigate,
+    ensureWorkspaceId,
+    loadBots,
+    loadRooms,
+    loadRoom,
+    requirePair,
+    hasToken,
+    refreshSidebar() {
+      renderSidebarRooms()
+      renderSidebarBots()
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 七、路由与页面切换
+// ---------------------------------------------------------------------------
+
+function showView(name) {
+  const pair = $('#pair-view')
+  const room = $('#room-view')
+  const page = $('#page-view')
+  if (pair) pair.hidden = name !== 'pair'
+  if (room) room.hidden = name !== 'room'
+  if (page) page.hidden = name !== 'page'
+  document.body.dataset.view = name
+}
+
+function focusPairCode() {
+  const pair = $('#pair-view')
+  if (!pair) return
+  if (pair.contains(document.activeElement)) return
+  const firstEmpty = Array.from(document.querySelectorAll('.code-digit')).find((box) => box.value === '') || $('.code-digit')
+  if (firstEmpty) firstEmpty.focus()
+}
+
+function renderNotFound(main) {
+  const hash = location.hash || '#/'
+  main.replaceChildren(
+    ui.pageHeader('找不到这个页面'),
+    ui.emptyState({
+      title: '地址不对',
+      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/rooms/new、#/rooms/:id/settings。`,
+      action: ui.linkButton('回首页', '#/', { variant: 'primary' }),
+      secondary: ui.linkButton('Bot 列表', '#/bots', { variant: 'ghost' }),
+    })
+  )
+}
+
+async function renderRoute() {
+  const seq = ++routeSeq
+  closeMentionMenu()
+  const route = routeMatch(location.hash)
+
+  if (route.name === 'pair') {
+    showView('pair')
+    setTitle('配对')
+    focusPairCode()
+    return
+  }
+  if (route.name === 'room') {
+    showView('room')
+    setTitle('房间')
+    await openRoomRoute(route.params.id, seq)
+    return
+  }
+
+  showView('page')
+  const main = $('#page-main')
+  if (!main) return
+  const ctx = pageContext()
+
+  switch (route.name) {
+    case 'bots':
+      setTitle('Bot')
+      await mountBotsPage(main, ctx)
+      break
+    case 'botNew':
+      setTitle('新建 Bot')
+      await mountBotsPage(main, ctx, { create: true })
+      break
+    case 'bot':
+      setTitle('Bot 设置')
+      await mountBotSettingsPage(main, ctx, route.params.id)
+      break
+    case 'roomNew':
+      setTitle('新建房间')
+      await mountNewRoomPage(main, ctx)
+      break
+    case 'roomSettings':
+      setTitle('房间设置')
+      await mountRoomSettingsPage(main, ctx, route.params.id)
+      break
+    default:
+      setTitle('找不到页面')
+      renderNotFound(main)
+  }
+
+  if (seq !== routeSeq) return
+  showPageFlash()
+  window.scrollTo(0, 0)
+}
+
+// ---------------------------------------------------------------------------
+// 八、房间页：加载、成员、轮次状态、SSE
+// ---------------------------------------------------------------------------
 
 function toEvent(message, roomId) {
   const isUser = message.actor && message.actor.kind === 'user'
@@ -854,61 +1055,314 @@ function toEvent(message, roomId) {
   }
 }
 
-async function apiFetch(path, options = {}, token = LIVE.token) {
-  const base = API_BASE ? `${API_BASE}${path}` : path
-  const response = await fetch(base, {
-    ...options,
-    headers: {
-      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  })
-  return response
+/** 「需要你」目前是固定样例：预览时显示，连上控制面后隐藏（没有接口就不假装有待办）。 */
+function setNeedsMode(live) {
+  const btn = $('#needs-btn')
+  const btnSm = $('#needs-btn-sm')
+  const panel = $('#needs')
+  if (btn) btn.hidden = live
+  if (btnSm) btnSm.hidden = live
+  if (panel && live) {
+    panel.hidden = true
+    for (const button of [btn, btnSm]) if (button) button.setAttribute('aria-expanded', 'false')
+  }
 }
 
-async function ensureRoom() {
-  let rooms = []
-  const roomsRes = await apiFetch('/api/rooms')
-  if (roomsRes.ok) rooms = (await roomsRes.json()).rooms || []
-
-  if (rooms.length === 0) {
-    // 新账号还没有 workspace：先建一个，再建房间（失败就把原因说出来）。
-    let wsRes = await apiFetch('/api/workspaces')
-    let workspaces = wsRes.ok ? (await wsRes.json()).workspaces || [] : []
-    if (workspaces.length === 0) {
-      const created = await apiFetch('/api/workspaces', {
-        method: 'POST',
-        body: JSON.stringify({ name: '我的工作区' }),
-      })
-      if (!created.ok) throw new Error(await serverMessage(created))
-      workspaces = [(await created.json()).workspace]
-    }
-    const roomRes = await apiFetch('/api/rooms', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: workspaces[0].id, name: '量化研究组' }),
-    })
-    if (!roomRes.ok) throw new Error(await serverMessage(roomRes))
-    rooms = [(await roomRes.json()).room]
+function resetRoomChrome() {
+  LIVE.active = false
+  LIVE.room = null
+  LIVE.roomId = ''
+  LIVE.lastSeq = 0
+  LIVE.seen = new Set()
+  if (LIVE.stream) {
+    LIVE.stream.close()
+    LIVE.stream = null
   }
-  return rooms
+  const settings = $('#room-settings-link')
+  if (settings) {
+    settings.hidden = true
+    settings.removeAttribute('href')
+  }
+  const working = $('#working')
+  if (working) working.hidden = true
+  const round = $('#round-status')
+  if (round) {
+    round.hidden = true
+    round.replaceChildren()
+  }
+  const strip = $('#demo-strip-text')
+  if (strip) strip.hidden = true
+  const foot = $('#sidebar-foot')
+  if (foot) foot.textContent = '未连接控制面'
+  clearComposerError()
+}
+
+function applyLiveRoomChrome(room) {
+  const name = room.name || '房间'
+  ROOM.name = name
+  const heading = $('#room-name')
+  if (heading) heading.textContent = name
+  setTitle(name)
+  const strip = $('#demo-strip-text')
+  if (strip) strip.hidden = true
+  const foot = $('#sidebar-foot')
+  if (foot) foot.textContent = '已连接控制面 · 实时'
+  const settings = $('#room-settings-link')
+  if (settings) {
+    settings.href = `#/rooms/${encodeURIComponent(room.id)}/settings`
+    settings.hidden = false
+  }
+  renderSidebarRooms()
+  renderSidebarBots()
+  setNeedsMode(true)
+  updateWhoAnswers()
+  renderRoundStatus()
+  renderWorking()
+}
+
+function enterPreviewRoom() {
+  resetRoomChrome()
+  LIVE.room = PREVIEW_ROOM
+  LIVE.roomId = ROOM.id
+  ROOM.name = PREVIEW_ROOM.name
+  ROOM.events = SAMPLE_EVENTS.slice()
+  const heading = $('#room-name')
+  if (heading) heading.textContent = ROOM.name
+  setTitle(ROOM.name)
+  const strip = $('#demo-strip-text')
+  if (strip) {
+    strip.hidden = false
+    strip.textContent = '假数据预览：未配对，房间内容为固定样例；发送不会请求服务端。'
+  }
+  const foot = $('#sidebar-foot')
+  if (foot) foot.textContent = '未配对 · 假数据'
+  const workingText = $('#working-text')
+  if (workingText) workingText.textContent = ROOM.working.text
+  renderSidebarRooms()
+  renderSidebarBots()
+  renderMessages()
+  setNeedsMode(false)
+  updateWhoAnswers()
+  renderRoundStatus()
+  renderWorking()
+  setComposerEnabled(true)
+  const composer = $('#composer')
+  if (composer) composer.focus()
+}
+
+async function openRoomRoute(id, seq) {
+  resetRoomChrome()
+  if (!id) {
+    enterPreviewRoom()
+    return
+  }
+  const messages = $('#messages')
+  if (messages) messages.replaceChildren(ui.loading('正在载入房间…'))
+  setComposerEnabled(false, '正在载入房间…')
+  const who = $('#who-answers')
+  if (who) who.textContent = '正在载入成员…'
+
+  try {
+    const room = await loadRoom(id)
+    if (seq !== routeSeq) return
+    if (!room) throw new Error('找不到这个房间')
+    const data = await api.get(`/api/rooms/${encodeURIComponent(room.id)}/messages`)
+    if (seq !== routeSeq) return
+    const list = Array.isArray(data?.messages) ? data.messages : []
+
+    LIVE.active = true
+    LIVE.token = sessionToken || ''
+    LIVE.roomId = room.id
+    LIVE.room = room
+    LIVE.lastSeq = 0
+    LIVE.seen = new Set()
+    ROOM.events = list.map((message) => toEvent(message, room.id))
+    for (const message of list) {
+      LIVE.seen.add(message.seq)
+      LIVE.lastSeq = Math.max(LIVE.lastSeq, Number(message.seq) || 0)
+    }
+
+    applyLiveRoomChrome(room)
+    renderMessages()
+    setComposerEnabled(true)
+    openStream()
+    const composer = $('#composer')
+    if (composer) composer.focus()
+  } catch (error) {
+    if (seq !== routeSeq) return
+    if (isAuthError(error)) {
+      requirePair()
+      return
+    }
+    renderRoomLoadError(error)
+  }
+}
+
+function renderRoomLoadError(error) {
+  const messages = $('#messages')
+  if (messages) {
+    messages.replaceChildren(
+      ui.errorState({
+        error,
+        message: `房间没能打开：${error instanceof Error ? error.message : String(error)}`,
+        onRetry: () => {
+          void renderRoute()
+        },
+        onPair: hasToken() ? undefined : true,
+      })
+    )
+  }
+  setComposerEnabled(false, '房间没能载入')
+  const who = $('#who-answers')
+  if (who) who.textContent = ''
+  const working = $('#working')
+  if (working) working.hidden = true
+  const round = $('#round-status')
+  if (round) round.hidden = true
+}
+
+function updateWhoAnswers() {
+  const who = $('#who-answers')
+  if (!who) return
+  const label = whoAnswersLabel(LIVE.active ? LIVE.room : PREVIEW_ROOM)
+  who.textContent = label || '还没有成员会回答'
+}
+
+function renderRoundStatus() {
+  const bar = $('#round-status')
+  if (!bar) return
+  const round = LIVE.active && LIVE.room ? LIVE.room.round : null
+  const items = roundStatusItems(round, (botId) => botLabel(botId))
+  if (items.length === 0) {
+    bar.hidden = true
+    bar.replaceChildren()
+    return
+  }
+  bar.replaceChildren()
+  const stateLabel = roundStateLabel(round.state)
+  if (stateLabel) bar.append(el('span', { class: 'round-state', text: stateLabel }))
+  for (const item of items) {
+    const chip = el('span', { class: `round-chip round-${item.kind}` })
+    chip.append(el('span', { class: 'round-name', text: item.name }))
+    chip.append(el('span', { class: 'round-label', text: item.label }))
+    if (item.note) chip.append(el('span', { class: 'round-note', text: `· ${item.note}` }))
+    const title = [item.label]
+    if (item.note) title.push(item.note)
+    if (item.by) title.push(`由 ${botLabel(item.by)} 叫到`)
+    chip.title = title.join(' · ')
+    bar.append(chip)
+  }
+  bar.hidden = false
+}
+
+function renderWorking() {
+  const working = $('#working')
+  const text = $('#working-text')
+  if (!working || !text) return
+  if (!LIVE.active) {
+    working.hidden = false
+    text.textContent = ROOM.working.text
+    return
+  }
+  const round = LIVE.room && LIVE.room.round
+  if (!round) {
+    working.hidden = true
+    return
+  }
+  const slot = speakingSlot(round)
+  if (slot) {
+    working.hidden = false
+    text.textContent = `${botLabel(slot.botId)} 正在说`
+    return
+  }
+  if (round.state === 'running') {
+    const waiting = roundStatusItems(round, (botId) => botLabel(botId)).find((item) => item.status === 'waiting')
+    working.hidden = false
+    text.textContent = waiting ? `轮到 ${waiting.name}…` : '本轮进行中'
+    return
+  }
+  working.hidden = true
 }
 
 function appendLiveEvent(message) {
-  if (LIVE.seen.has(message.seq)) return
+  if (message.seq === undefined || LIVE.seen.has(message.seq)) return
   LIVE.seen.add(message.seq)
-  LIVE.lastSeq = Math.max(LIVE.lastSeq, message.seq)
+  LIVE.lastSeq = Math.max(LIVE.lastSeq, Number(message.seq) || 0)
   const list = $('#messages')
+  if (!list) return
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
-  list.append(renderEvent(toEvent(message, LIVE.roomId)))
+  const event = toEvent(message, LIVE.roomId)
+  ROOM.events.push(event)
+  list.append(renderEvent(event))
   if (nearBottom) list.scrollTop = list.scrollHeight
 }
 
+async function refreshMessages() {
+  if (!LIVE.active || !LIVE.roomId) return
+  try {
+    const query = LIVE.lastSeq > 0 ? `?after=${encodeURIComponent(String(LIVE.lastSeq))}` : ''
+    const data = await api.get(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages${query}`)
+    const list = Array.isArray(data?.messages) ? data.messages : []
+    for (const message of list) appendLiveEvent(message)
+  } catch (error) {
+    if (isAuthError(error)) requirePair()
+  }
+}
+
+async function refreshRoomState() {
+  if (!LIVE.active || !LIVE.roomId) return
+  try {
+    const room = await loadRoom(LIVE.roomId, { force: true })
+    if (!room || room.id !== LIVE.roomId) return
+    LIVE.room = room
+    updateWhoAnswers()
+    renderRoundStatus()
+    renderWorking()
+    renderSidebarRooms()
+  } catch (error) {
+    if (isAuthError(error)) requirePair()
+  }
+}
+
+function handleRoundEvent(event) {
+  try {
+    const payload = JSON.parse(event.data)
+    const round = payload && (payload.round || payload)
+    if (!round || !LIVE.room) return
+    LIVE.room.round = round
+    renderRoundStatus()
+    renderWorking()
+  } catch {
+    // 坏帧不打断整条流。
+  }
+}
+
+function handleSpeakingEvent(event) {
+  try {
+    const payload = JSON.parse(event.data)
+    const botId = payload && (payload.speaking || payload.botId)
+    if (!LIVE.room) return
+    if (typeof botId === 'string' && botId !== '') LIVE.room.speaking = botId
+    else delete LIVE.room.speaking
+    renderWorking()
+  } catch {
+    // 同上。
+  }
+}
+
 function openStream() {
-  if (!STREAM_ENABLED) return
-  if (LIVE.stream !== null) LIVE.stream.close()
-  const url = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?access_token=${encodeURIComponent(LIVE.token)}&after=${LIVE.lastSeq}`
-  const stream = new EventSource(API_BASE ? `${API_BASE}${url}` : url)
+  if (!STREAM_ENABLED || !LIVE.active || !LIVE.roomId) return
+  if (LIVE.stream) {
+    LIVE.stream.close()
+    LIVE.stream = null
+  }
+  const path = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?access_token=${encodeURIComponent(LIVE.token)}&after=${LIVE.lastSeq}`
+  let stream
+  try {
+    stream = new EventSource(API_BASE ? `${API_BASE}${path}` : path)
+  } catch {
+    return
+  }
   stream.addEventListener('message', (event) => {
     try {
       appendLiveEvent(JSON.parse(event.data))
@@ -916,91 +1370,250 @@ function openStream() {
       // 坏帧不该打断整条流；服务端会重连补拉。
     }
   })
+  stream.addEventListener('round', handleRoundEvent)
+  stream.addEventListener('status', handleRoundEvent)
+  stream.addEventListener('speaking', handleSpeakingEvent)
   stream.addEventListener('error', () => {
-    // EventSource 自己会重连；这里只把状态说出来。
-    $('#working-text').textContent = '连接断开，正在重连…'
+    const text = $('#working-text')
+    if (text && LIVE.active) text.textContent = '连接断开，正在重连…'
   })
   LIVE.stream = stream
 }
 
-/** 配对成功后进入真实房间；失败就退回样例并说明原因。 */
+/** 配对成功后进入：有房间去房间，没房间先去建 Bot。 */
 async function enterLiveRoom(token) {
-  LIVE.token = token
+  if (typeof token === 'string' && token !== '') sessionToken = token
+  LIVE.token = sessionToken || ''
   const rooms = await ensureRoom()
-  const room = rooms[0]
-  LIVE.rooms = rooms
-  LIVE.roomId = room.id
-  ROOM.name = room.name
-  ROOM.events = []
-
-  const messagesRes = await apiFetch(`/api/rooms/${encodeURIComponent(room.id)}/messages`)
-  if (!messagesRes.ok) throw new Error(await serverMessage(messagesRes))
-  const { messages } = await messagesRes.json()
-  ROOM.events = messages.map((message) => toEvent(message, room.id))
-  for (const message of messages) {
-    LIVE.seen.add(message.seq)
-    LIVE.lastSeq = Math.max(LIVE.lastSeq, message.seq)
-  }
-
+  STORE.rooms = rooms
+  STORE.roomsLoaded = true
   LIVE.active = true
-  renderMessages()
-  $('#room-name').textContent = ROOM.name
-  document.title = `${ROOM.name} · Roost`
-  openStream()
-
-  enterRoom('live')
-}
-
-// ---------------------------------------------------------------------------
-// 六、房间交互
-// ---------------------------------------------------------------------------
-
-function enterRoom(mode) {
-  $('#pair-view').hidden = true
-  const room = $('#room-view')
-  room.hidden = false
-  $('#room-name').textContent = ROOM.name
-  $('#working-text').textContent = ROOM.working.text
-  const stripText = $('#demo-strip-text')
-  if (mode === 'live') {
-    if (stripText) stripText.hidden = true
-    const foot = document.querySelector('.side-foot')
-    if (foot) foot.textContent = '已连接控制面 · 实时'
-  } else if (stripText) {
-    stripText.hidden = false
-    stripText.textContent =
-      mode === 'paired'
-        ? '已配对，但房间仍是固定样例（房间接口未接上）；发送不会请求服务端。'
-        : '假数据预览：未配对，房间内容为固定样例；发送不会请求服务端。'
+  renderSidebarRooms()
+  try {
+    await loadBots()
+  } catch {
+    // 侧栏空着也比假装有 Bot 好。
   }
-  document.title = `${ROOM.name} · Roost`
-  $('#composer').focus()
+  const note = $('#pair-note')
+  if (note) note.hidden = true
+  const target = pendingRoute || (rooms.length > 0 ? `#/rooms/${encodeURIComponent(rooms[0].id)}` : '#/bots')
+  pendingRoute = ''
+  if (rooms.length === 0) flash('还没有房间：先建两个 Bot，再建群。')
+  navigate(target)
 }
 
+// ---------------------------------------------------------------------------
+// 九、输入区：谁会回答、@ 菜单、发送
+// ---------------------------------------------------------------------------
+
+function syncSend() {
+  const input = $('#composer')
+  const send = $('#send')
+  if (!input || !send) return
+  send.disabled = input.disabled || input.value.trim() === ''
+}
+
+function growComposer() {
+  const input = $('#composer')
+  if (!input) return
+  input.style.height = 'auto'
+  input.style.height = `${Math.min(input.scrollHeight, 160)}px`
+}
+
+function setComposerEnabled(enabled, placeholder) {
+  const input = $('#composer')
+  const send = $('#send')
+  if (!input || !send) return
+  input.disabled = !enabled
+  input.placeholder = placeholder || '说点什么…'
+  if (!enabled) {
+    send.disabled = true
+    send.title = '房间还没载入'
+  } else {
+    send.title = '⌘↵ / Ctrl+↵ 发送'
+    syncSend()
+  }
+}
+
+function showComposerError(message) {
+  const node = $('#composer-error')
+  if (!node) return
+  node.textContent = message
+  node.hidden = false
+}
+
+function clearComposerError() {
+  const node = $('#composer-error')
+  if (!node) return
+  node.textContent = ''
+  node.hidden = true
+}
+
+const mentionState = {
+  open: false,
+  index: 0,
+  items: [],
+  mention: null,
+  signature: '',
+}
+
+function closeMentionMenu() {
+  const menu = $('#mention-menu')
+  const input = $('#composer')
+  mentionState.open = false
+  mentionState.index = 0
+  mentionState.items = []
+  mentionState.mention = null
+  mentionState.signature = ''
+  if (menu) {
+    menu.hidden = true
+    menu.replaceChildren()
+  }
+  if (input) {
+    input.setAttribute('aria-expanded', 'false')
+    input.removeAttribute('aria-activedescendant')
+  }
+}
+
+function mentionMembers() {
+  const room = LIVE.active ? LIVE.room : PREVIEW_ROOM
+  return roomMembers(room).map((member) => ({
+    botId: member.botId,
+    name: member.name || botLabel(member.botId),
+    role: botIdentity(member.botId).role,
+  }))
+}
+
+function setupMentionMenu() {
+  const input = $('#composer')
+  const menu = $('#mention-menu')
+  if (!input || !menu) return
+
+  const pick = (item) => {
+    const result = insertMention(input.value, mentionState.mention, item.name)
+    input.value = result.text
+    input.setSelectionRange(result.caret, result.caret)
+    closeMentionMenu()
+    syncSend()
+    growComposer()
+    input.focus()
+  }
+
+  const render = (mention) => {
+    const items = mention.matches.slice(0, 8).map((member) => ({
+      ...member,
+      role: botIdentity(member.botId).role,
+    }))
+    if (items.length === 0) {
+      closeMentionMenu()
+      return
+    }
+    mentionState.open = true
+    mentionState.items = items
+    mentionState.mention = mention
+    if (mentionState.index >= items.length) mentionState.index = 0
+    menu.replaceChildren()
+    items.forEach((item, index) => {
+      const button = el('button', {
+        class: `mention-item${index === mentionState.index ? ' is-active' : ''}`,
+        type: 'button',
+        role: 'option',
+        id: `mention-option-${index}`,
+        'aria-selected': String(index === mentionState.index),
+      })
+      button.append(avatar(item.botId, 20))
+      const text = el('span', { class: 'mention-text' })
+      text.append(el('span', { class: 'mention-name', text: item.name }))
+      if (item.role) text.append(el('span', { class: 'mention-role', text: item.role }))
+      button.append(text)
+      button.addEventListener('click', () => pick(item))
+      menu.append(button)
+    })
+    menu.hidden = false
+    input.setAttribute('aria-expanded', 'true')
+    input.setAttribute('aria-controls', 'mention-menu')
+    input.setAttribute('aria-activedescendant', `mention-option-${mentionState.index}`)
+  }
+
+  const update = () => {
+    if (input.disabled) {
+      closeMentionMenu()
+      return
+    }
+    const mention = parseMentionQuery(input.value, mentionMembers())
+    if (!mention || mention.matches.length === 0) {
+      closeMentionMenu()
+      return
+    }
+    const signature = `${mention.query}|${mention.matches.map((member) => member.botId || member.name).join(',')}`
+    if (mentionState.open && mentionState.signature === signature) return
+    mentionState.signature = signature
+    mentionState.index = 0
+    render(mention)
+  }
+
+  input.addEventListener('input', update)
+  input.addEventListener('click', update)
+  input.addEventListener('keydown', (event) => {
+    if (!mentionState.open) return
+    if (event.isComposing) return
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const total = mentionState.items.length
+      if (total === 0) return
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      mentionState.index = (mentionState.index + delta + total) % total
+      render(mentionState.mention)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      const item = mentionState.items[mentionState.index]
+      if (item) pick(item)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMentionMenu()
+      return
+    }
+    if (event.key === 'Tab') closeMentionMenu()
+  })
+  // 点菜单项时不要先让输入框失焦。
+  menu.addEventListener('mousedown', (event) => event.preventDefault())
+  document.addEventListener('click', (event) => {
+    if (!mentionState.open) return
+    if (menu.contains(event.target) || event.target === input) return
+    closeMentionMenu()
+  })
+}
+
+/** 「需要你」抽屉：焦点移入/归位、Esc 关闭（沿用 v0 的实现）。 */
 function setupNeedsPanel() {
   const panel = $('#needs')
   const buttons = [$('#needs-btn'), $('#needs-btn-sm')]
+  if (!panel) return
   let lastFocus = null
 
   const setOpen = (open, opener) => {
     if (open) {
       lastFocus = opener || document.activeElement
       panel.hidden = false
-      for (const button of buttons) button.setAttribute('aria-expanded', 'true')
+      for (const button of buttons) if (button) button.setAttribute('aria-expanded', 'true')
       panel.focus()
       return
     }
-    // 先把焦点交回去再隐藏：面板里还有焦点时隐藏它，浏览器会把焦点甩到 body。
     if (lastFocus && document.contains(lastFocus)) lastFocus.focus()
     panel.hidden = true
-    for (const button of buttons) button.setAttribute('aria-expanded', 'false')
+    for (const button of buttons) if (button) button.setAttribute('aria-expanded', 'false')
   }
 
   for (const button of buttons) {
-    // 记住是哪个入口打开的，关闭时焦点回到它（Esc 也一样）。
+    if (!button) continue
     button.addEventListener('click', () => setOpen(panel.hidden, button))
   }
-  $('#needs-close').addEventListener('click', () => setOpen(false))
+  const close = $('#needs-close')
+  if (close) close.addEventListener('click', () => setOpen(false))
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !panel.hidden) {
       event.preventDefault()
@@ -1013,18 +1626,12 @@ function setupComposer() {
   const form = $('#composer-form')
   const input = $('#composer')
   const send = $('#send')
-
-  const sync = () => {
-    send.disabled = input.value.trim().length === 0
-  }
-  const grow = () => {
-    input.style.height = 'auto'
-    input.style.height = `${Math.min(input.scrollHeight, 160)}px`
-  }
+  if (!form || !input || !send) return
 
   input.addEventListener('input', () => {
-    sync()
-    grow()
+    clearComposerError()
+    syncSend()
+    growComposer()
   })
   input.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -1033,45 +1640,59 @@ function setupComposer() {
     }
   })
 
-  form.addEventListener('submit', (event) => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault()
     const text = input.value.trim()
-    if (!text) return
-    input.value = ''
-    sync()
-    grow()
-    input.focus()
+    if (!text || input.disabled) return
+    clearComposerError()
 
-    if (LIVE.active) {
-      // 真实房间：写服务端，消息由 SSE 推回来（自己先不画，避免重复）。
-      apiFetch(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({ text, idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }),
-      })
-        .then(async (response) => {
-          if (response.ok) return
-          const reason = await serverMessage(response)
-          showError(`发送失败：${reason}`)
+    if (LIVE.active && LIVE.roomId) {
+      input.value = ''
+      syncSend()
+      growComposer()
+      input.focus()
+      try {
+        const posted = await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
+          text,
+          idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         })
-        .catch((cause) => showError(`发送失败：${cause instanceof Error ? cause.message : String(cause)}`))
+        if (posted && posted.message) appendLiveEvent(posted.message)
+        else await refreshMessages()
+        void refreshRoomState()
+      } catch (error) {
+        if (isAuthError(error)) {
+          requirePair()
+          return
+        }
+        showComposerError(`发送失败：${error instanceof Error ? error.message : String(error)}`)
+        // 没发出去就把文字还给用户，别让它凭空消失。
+        if (input.value === '') input.value = text
+        syncSend()
+        growComposer()
+      }
       return
     }
 
+    input.value = ''
+    syncSend()
+    growComposer()
+    input.focus()
     appendUserMessage(text)
   })
 
-  sync()
+  syncSend()
 }
 
 function appendUserMessage(text) {
   const list = $('#messages')
+  if (!list) return
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
   list.append(renderUserMessage(text))
   if (nearBottom) list.scrollTop = list.scrollHeight
 }
 
 // ---------------------------------------------------------------------------
-// 七、启动
+// 十、启动
 // ---------------------------------------------------------------------------
 
 function boot() {
@@ -1081,18 +1702,16 @@ function boot() {
   if (warning) warning.hidden = true
 
   renderSidebarBots()
-  renderMessages()
+  renderSidebarRooms()
   renderNeeds()
   setupPairing()
   setupNeedsPanel()
   setupComposer()
-
-  if (location.hash === '#room') {
-    enterRoom('preview')
-  } else {
-    const first = $('.code-digit')
-    if (first) first.focus()
-  }
+  setupMentionMenu()
+  window.addEventListener('hashchange', () => {
+    void renderRoute()
+  })
+  void renderRoute()
 }
 
 if (typeof document !== 'undefined') {
@@ -1100,5 +1719,5 @@ if (typeof document !== 'undefined') {
   else boot()
 }
 
-// 供离线自检用（浏览器里不会被调用；不 import 任何 .ts）。
+// 供离线自检用；lib/glyph.js 是唯一实现，这里保持旧导出名不变。
 export { hashId, specFor, glyphSvg, GLYPH_FAMILIES, PALETTES }

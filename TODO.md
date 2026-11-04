@@ -6,7 +6,9 @@
 
 ## 进度
 
-- 完成：8 / 149（8 项为清单建立前完成，见末尾「已完成」）
+- 完成：8 / 149 · 进行中：41（M4 全部在实现中）
+- 8 项为清单建立前完成，见末尾「已完成」
+- TODO 总数从 149 增至 151（新增 4.2.16 / 4.2.17 收尾项）
 - 当前里程碑：**M4 产品闭环**
 - 统计：`node scripts/todo-stats.mjs`
 
@@ -16,65 +18,67 @@
 
 ### 4.1 Bot 域（`docs/design/bots.md`）
 
-- [ ] 4.1.1 `bots` 表 + `bot_versions` 表（迁移 0004）
-- [ ] 4.1.2 `POST /api/bots`（名字锁、重名/非法名校验、模型固定）
-- [ ] 4.1.3 `GET /api/bots` / `GET /api/bots/:id`
-- [ ] 4.1.4 `PATCH /api/bots/:id`（人设版本留痕、能力区仅 admin）
-- [ ] 4.1.5 `DELETE /api/bots/:id`（软删 7 天）
-- [ ] 4.1.6 创建后 kickoff（模型生成自我介绍 + 问用途）
-- [ ] 4.1.7 头像：程序化 glyph 默认 + 上传（≥256 WebP，剥 EXIF）
-- [ ] 4.1.8 `bot.created/updated/deleted` 事件
+- [x] 4.1.1 `bots` 表 + `bot_versions` 表（迁移 0004）
+- [x] 4.1.2 `POST /api/bots`（名字锁、重名/非法名校验、模型固定）
+- [x] 4.1.3 `GET /api/bots` / `GET /api/bots/:id`
+- [x] 4.1.4 `PATCH /api/bots/:id`（人设版本留痕、能力区仅 admin）
+- [~] 4.1.5 `DELETE /api/bots/:id`（软删 7 天）
+- [~] 4.1.6 创建后 kickoff（模型生成自我介绍 + 问用途）
+- [~] 4.1.7 头像：程序化 glyph 默认 + 上传（≥256 WebP，剥 EXIF）
+- [~] 4.1.8 `bot.created/updated/deleted` 事件
 
 **验收**：见 4.5.1。
 
 ### 4.2 房间与轮次（`docs/design/rooms.md`）
 
-- [ ] 4.2.1 迁移 0005：`rooms` 扩展列（host/responder/bulletin/created_by/purpose）
-- [ ] 4.2.2 迁移 0005：`room_rounds` / `room_seen` / `bot_sessions`
-- [ ] 4.2.3 启用 `room_members`：建房写成员、host 唯一
-- [ ] 4.2.4 `POST /api/rooms` 扩参（name?/bulletin?/memberBotIds/hostBotId?/responder）
-- [ ] 4.2.5 `PATCH /api/rooms/:id`（name/bulletin/responder/responderBot）
-- [ ] 4.2.6 `POST/DELETE /api/rooms/:id/members`
-- [ ] 4.2.7 responder 四模式 + fallback 链（member/everyone/mentions/auto 占位）
-- [ ] 4.2.8 轮次开启：用户消息 → `room_rounds` + slots
-- [ ] 4.2.9 @ 调用（每成员 2 次、host 4 次、每轮额外 4、仅 host @all）
-- [ ] 4.2.10 `[PASS]` 静默 + failed/missed/working/approval 状态
-- [ ] 4.2.11 超时 240s、工作宽限 15s、late rounds ≤10
-- [ ] 4.2.12 房间日志保留 60 条 / 首看 12 / 增量 24 / 更早 8
-- [ ] 4.2.13 内部接口：`GET /internal/rooms/:id/round`、`POST /internal/rounds/:id/advance`
-- [ ] 4.2.14 建群 kickoff（无首句时 host 问"这个群要做什么"）
-- [ ] 4.2.15 Bot 建群：`POST /internal/rooms` + 一次人工确认 + 每日上限 3
+- [x] 4.2.1 迁移 0005：`rooms` 扩展列（host/responder/bulletin/created_by/purpose）
+- [x] 4.2.2 迁移 0005：`room_rounds` / `room_seen` / `bot_sessions`
+- [x] 4.2.3 启用 `room_members`：建房写成员、host 唯一
+- [x] 4.2.4 `POST /api/rooms` 扩参（name?/bulletin?/memberBotIds/hostBotId?/responder）
+- [x] 4.2.5 `PATCH /api/rooms/:id`（name/bulletin/responder/responderBot）
+- [x] 4.2.6 `POST/DELETE /api/rooms/:id/members`
+- [x] 4.2.7 responder 四模式 + fallback 链（member/everyone/mentions/auto 占位）
+- [x] 4.2.8 轮次开启：用户消息 → `room_rounds` + slots
+- [x] 4.2.9 @ 调用（每成员 2 次、host 4 次、每轮额外 4、仅 host @all）
+- [x] 4.2.10 `[PASS]` 静默 + failed/missed/working/approval 状态
+- [x] 4.2.11 回复超时 240s
+- [ ] 4.2.16 工作宽限 15s / late rounds ≤10 / 轮内 stop（引擎与 runtime 尚未接）
+- [x] 4.2.12 prompt 侧增量 24 / 更早 8
+- [ ] 4.2.17 房间日志裁剪到 60 条、首看 12（events 是事实源，裁剪做成投影）
+- [x] 4.2.13 内部接口：`GET /internal/rooms/:id/round`、`POST /internal/rounds/:id/advance`
+- [~] 4.2.14 建群 kickoff（无首句时 host 问"这个群要做什么"）
+- [~] 4.2.15 Bot 建群：`POST /internal/rooms` + 一次人工确认 + 每日上限 3
 
 **验收**：见 4.5.2。
 
 ### 4.3 会话与编排
 
-- [ ] 4.3.1 控制面 `POST /api/workspaces/:id/start`（替代 `planA-boot.mjs`）
-- [ ] 4.3.2 `runtimes` 表落库（沙箱名/阶段/最近心跳）
-- [ ] 4.3.3 `GET /api/workspaces/:id/runtime`（面板显示状态）
-- [ ] 4.3.4 沙箱启动前 profile sync 拉锁（占位：空锁）
-- [ ] 4.3.5 room-agent 按 `room_members` prepare 会话（多 Bot）
-- [ ] 4.3.6 room-agent 断线重连/控制面不可达时的退避
+- [x] 4.3.1 控制面 `POST /api/workspaces/:id/start`（替代 `planA-boot.mjs`）
+- [x] 4.3.2 `runtimes` 表落库（沙箱名/阶段/最近心跳）
+- [x] 4.3.3 `GET /api/workspaces/:id/runtime`（面板显示状态）
+- [~] 4.3.4 沙箱启动前 profile sync 拉锁（占位：空锁）
+- [x] 4.3.5 room-agent 按 `room_members` prepare 会话（多 Bot）
+- [x] 4.3.6 room-agent 断线重连/控制面不可达时的退避
 
 **验收**：见 4.5.3。
 
 ### 4.4 前端页面
 
-- [ ] 4.4.1 侧栏「新建 Bot」入口 + 创建页（图标/名字/角色/模型）
-- [ ] 4.4.2 Bot 设置页（身份/人设/技能/工具/记忆/模型/定时/危险区）
-- [ ] 4.4.3 建群对话框（名称/公告/成员多选/host/responder）
-- [ ] 4.4.4 房间设置页（成员/谁回应/公告/删除）
-- [ ] 4.4.5 输入框"谁会回答"提示 + @ 菜单（中文名前缀消歧）
-- [ ] 4.4.6 房间内轮次状态（谁在说/排队/失败/静默）
-- [ ] 4.4.7 Bot 列表与状态（active/paused/删除）
-- [ ] 4.4.8 空状态、错误态、加载态
+- [x] 4.4.1 侧栏「新建 Bot」入口 + 创建页（图标/名字/角色/模型）
+- [x] 4.4.2 Bot 设置页（身份/人设/技能/工具/记忆/模型/定时/危险区）
+- [x] 4.4.3 建群对话框（名称/公告/成员多选/host/responder）
+- [x] 4.4.4 房间设置页（成员/谁回应/公告/删除）
+- [x] 4.4.5 输入框"谁会回答"提示 + @ 菜单（中文名前缀消歧）
+- [x] 4.4.6 房间内轮次状态（谁在说/排队/失败/静默）
+- [x] 4.4.7 Bot 列表与状态（active/paused/删除）
+- [x] 4.4.8 空状态、错误态、加载态
 
 **验收**：见 4.5.4。
 
 ### 4.5 M4 验收
 
 - [ ] 4.5.1 新建 Bot → 出现"自我介绍 + 问用途"的 kickoff 消息
-- [ ] 4.5.2 建群拉 2 个 Bot → 两个 Bot 都能按 responder 回答
+- [x] 4.5.2 建群拉 2 个 Bot → 两个 Bot 都能按 responder 回答
 - [ ] 4.5.3 远端真实模型两轮对话（记得上一句）→ 沙箱重启后仍记得
 - [ ] 4.5.4 以上全部在浏览器里完成（不靠 curl / 手工脚本）
 
@@ -238,3 +242,5 @@
 ## 变更日志
 
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
+- 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
+- 2026-11-04 M4 主体完成：bots CRUD/建群/成员/responder/轮次引擎/内部接口/workspace start-local/前端四视图；本地 HTTP 冒烟 14/14、本地双 Bot E2E 通过。剩：kickoff、软删、Bot 建群、profile sync、远端真实模型双 Bot、浏览器全流程（见 4.1.5/4.1.6/4.2.14/4.2.15/4.3.4/4.5.1/4.5.3/4.5.4）。

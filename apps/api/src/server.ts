@@ -22,6 +22,26 @@ import type {
   StorePort,
   WorkspaceRecord
 } from './port.ts'
+import {
+  handleCreateBot,
+  handleDeleteBot,
+  handleGetBot,
+  handleListBots,
+  handlePatchBot
+} from './bots-routes.ts'
+import {
+  handleAddRoomMembers,
+  handleCreateRoomExtended,
+  handleGetRoom,
+  handlePatchRoom,
+  handleRemoveRoomMember
+} from './rooms-routes-ext.ts'
+import { openRoundForMessage } from './round-orchestrator.ts'
+import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
+import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
+import type { RuntimeManager } from './workspace-runtime.ts'
+import type { Store } from '../../../packages/store/src/types.ts'
+import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 8787
@@ -56,6 +76,10 @@ export interface ServerOptions {
   store: StorePort
   /** 注入时钟（测试用）。默认 Date.now。 */
   now?: () => number
+  /** 原始 SQLite store：轮次持久化与工作区运行时状态需要它（memory port 没有）。 */
+  rawStore?: Store
+  /** 工作区沙箱管理器；不配置时 /start 返回 runtime.not_configured。 */
+  runtimeManager?: RuntimeManager
 }
 
 export interface StartedServer {
@@ -64,12 +88,18 @@ export interface StartedServer {
   close: () => Promise<void>
 }
 
-interface HandlerContext {
+/** 鉴权只需要 store 与时钟；新的路由模块用这个最小形状，不依赖 server 内部状态。 */
+export interface AuthContext {
   store: StorePort
   now: () => number
+}
+
+interface HandlerContext extends AuthContext {
   startedAt: number
   /** 全局失败时间戳，用于 429；放在闭包里，每个 server 一份。 */
   claimFailures: number[]
+  rawStore?: Store
+  runtimeManager?: RuntimeManager
 }
 
 type Clock = () => number
@@ -89,7 +119,12 @@ function generatePairingCode(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, '0')
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+export function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {}
+): void {
   if (res.writableEnded) return
   const payload = Buffer.from(JSON.stringify(body), 'utf8')
   res.writeHead(status, {
@@ -120,10 +155,18 @@ const ERROR_TEXT: Record<string, string> = {
   too_many_attempts: '尝试次数过多，请稍后再试',
   workspace_name_invalid: 'workspace 名字不能为空，且不超过 60 字',
   workspace_not_found: '找不到这个 workspace',
+  'bot.invalid': 'Bot 信息不合法',
+  'bot.name_taken': '这个 workspace 里已经有同名 Bot',
+  'bot.no_model': '创建 Bot 时必须指定模型',
+  'bot.not_found': '找不到这个 Bot',
+  'room.invalid': '房间信息不合法',
+  'room.members': '房间成员不合法',
+  'room.responder': '「谁回答」必须指向房间成员',
+  room_not_found: '找不到这个房间',
   internal_error: '服务出错了，请稍后重试'
 }
 
-function sendError(
+export function sendError(
   res: ServerResponse,
   status: number,
   code: string,
@@ -135,12 +178,12 @@ function sendError(
   sendJson(res, status, { ok: false, error: { code, message: human } }, headers)
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** 去空白后必须是 1..maxLength 个字符，且不含控制字符。 */
-function readText(value: unknown, maxLength: number): string | null {
+export function readText(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null
   const text = value.trim()
   if (text === '' || text.length > maxLength) return null
@@ -179,12 +222,12 @@ function isAllowedOrigin(origin: string | undefined): boolean {
   return LOOPBACK_HOSTS.has(parsed.hostname)
 }
 
-interface ParsedBody {
+export interface ParsedBody {
   ok: true
   value: unknown
 }
 
-interface BodyError {
+export interface BodyError {
   ok: false
   status: number
   code: string
@@ -195,7 +238,7 @@ interface BodyError {
  * 读完整个 body 再判断大小：超限的部分直接丢弃但继续 drain，
  * 这样客户端能稳定收到 413，而不是被半路 reset。
  */
-async function readJsonBody(req: IncomingMessage): Promise<ParsedBody | BodyError> {
+export async function readJsonBody(req: IncomingMessage): Promise<ParsedBody | BodyError> {
   const chunks: Buffer[] = []
   let size = 0
   let tooLarge = false
@@ -234,7 +277,7 @@ async function readJsonBody(req: IncomingMessage): Promise<ParsedBody | BodyErro
   }
 }
 
-type AuthResult = { ok: true; session: SessionRecord } | { ok: false; status: number; code: string; message: string }
+export type AuthResult = { ok: true; session: SessionRecord } | { ok: false; status: number; code: string; message: string }
 
 function authFailure(message: string, code = 'unauthenticated'): AuthResult {
   return { ok: false, status: 401, code, message }
@@ -243,7 +286,7 @@ function authFailure(message: string, code = 'unauthenticated'): AuthResult {
 const BEARER_HEADER = 'Authorization: Bearer <sessionToken> is required'
 
 /** 校验 Bearer token：只做一次 sha256，然后按 hash 查库。 */
-async function authenticate(ctx: HandlerContext, req: IncomingMessage): Promise<AuthResult> {
+export async function authenticate(ctx: AuthContext, req: IncomingMessage): Promise<AuthResult> {
   const header = req.headers.authorization
   if (typeof header !== 'string') return authFailure(BEARER_HEADER)
 
@@ -563,14 +606,21 @@ interface RoomRouteContext extends HandlerContext {
   streamPollMs: number
 }
 
-function roomJson(room: RoomRecord): Record<string, unknown> {
+export function roomJson(room: RoomRecord): Record<string, unknown> {
   return {
     id: room.id,
     workspaceId: room.workspaceId,
     name: room.name,
     replyMode: room.replyMode,
+    responder: room.responder ?? { kind: 'mentions' },
     createdAt: room.createdAt,
-    ...(room.notice === undefined ? {} : { notice: room.notice })
+    // 旧的内存 store 不带 members；默认 [] 让房间列表在两种实现下形状一致。
+    members: room.members ?? [],
+    ...(room.notice === undefined ? {} : { notice: room.notice }),
+    ...(room.hostBotId === undefined ? {} : { hostBotId: room.hostBotId }),
+    ...(room.purpose === undefined ? {} : { purpose: room.purpose }),
+    ...(room.createdByKind === undefined ? {} : { createdByKind: room.createdByKind }),
+    ...(room.createdBy === undefined ? {} : { createdBy: room.createdBy })
   }
 }
 
@@ -614,10 +664,14 @@ function authorizeRuntime(ctx: RoomRouteContext, req: IncomingMessage, res: Serv
   return true
 }
 
-async function handleInternalRooms(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleInternalRooms(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url?: URL): Promise<void> {
   if (!authorizeRuntime(ctx, req, res)) return
   try {
-    sendJson(res, 200, { rooms: (await ctx.store.listAllRooms()).map(roomJson) })
+    // 一沙箱一 workspace：带 workspaceId 时只返回这个 workspace 的房间，避免串房间。
+    const requested = url?.searchParams.get('workspaceId') ?? process.env.ROOST_WORKSPACE_ID ?? null
+    const all = await ctx.store.listAllRooms()
+    const filtered = requested === null ? all : all.filter((room) => room.workspaceId === requested)
+    sendJson(res, 200, { rooms: filtered.map(roomJson) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -700,35 +754,6 @@ async function handleListRooms(ctx: RoomRouteContext, req: IncomingMessage, res:
   }
 }
 
-async function handleCreateRoom(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const auth = await authenticate(ctx, req)
-  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
-  const parsed = await readJsonBody(req)
-  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
-  const body = parsed.value as Record<string, unknown>
-  const name = typeof body.name === 'string' ? body.name.trim() : ''
-  if (name === '' || name.length > 60) {
-    return sendError(res, 400, 'invalid_body', 'body.name must be 1..60 characters')
-  }
-  // workspaceId 省略时，用这个账号的第一个 workspace；一个都没有就 409（先建 workspace）。
-  const owned = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
-  const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : owned[0]?.id
-  if (workspaceId === undefined || !owned.some((workspace) => workspace.id === workspaceId)) {
-    return sendError(res, 409, 'no_workspace', 'create a workspace before a room')
-  }
-  try {
-    const room = await ctx.store.createRoom({
-      accountId: auth.session.accountId,
-      workspaceId,
-      name,
-      now: ctx.now()
-    })
-    sendJson(res, 201, { room: roomJson(room) })
-  } catch (err) {
-    sendStoreFailure(res, err)
-  }
-}
-
 async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const auth = await authenticate(ctx, req)
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
@@ -771,6 +796,17 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
       text,
       ...(idem === undefined ? {} : { idem })
     })
+    // 一条用户消息开启一轮；失败不影响消息本身（消息已经落库）。
+    if (ctx.rawStore !== undefined) {
+      try {
+        const detail = getRoomDetail(ctx.rawStore, roomId)
+        if (detail !== null) {
+          openRoundForMessage({ store: ctx.rawStore, room: detail.room, seq: message.seq, text: message.text })
+        }
+      } catch (error) {
+        console.error('roost api: failed to open round', error)
+      }
+    }
     sendJson(res, 201, { message: messageJson(message) })
   } catch (err) {
     sendStoreFailure(res, err)
@@ -874,6 +910,14 @@ function internalRoomIdFromPath(pathname: string): string | null {
   }
 }
 
+function safeDecode(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
 function notFound(req: IncomingMessage, res: ServerResponse, method: string, path: string): void {
   req.resume()
   sendError(res, 404, 'not_found', `no route for ${method} ${path}`)
@@ -937,10 +981,41 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     if (method === 'POST') {
-      await handleCreateRoom(ctx as RoomRouteContext, req, res)
+      await handleCreateRoomExtended(ctx, req, res)
       return
     }
     notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+$/.test(path)) {
+    if (method === 'GET') {
+      await handleGetRoom(ctx, req, res, url)
+      return
+    }
+    if (method === 'PATCH') {
+      await handlePatchRoom(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/members$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleAddRoomMembers(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/members\/[^/]+$/.test(path)) {
+    if (method !== 'DELETE') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleRemoveRoomMember(ctx, req, res, url)
     return
   }
 
@@ -971,7 +1046,112 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       notFound(req, res, method, path)
       return
     }
-    await handleInternalRooms(ctx as RoomRouteContext, req, res)
+    await handleInternalRooms(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  if (/^\/api\/internal\/rooms\/[^/]+\/assignments$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.rawStore === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'round engine needs the SQLite store')
+      return
+    }
+    const match = /^\/api\/internal\/rooms\/([^/]+)\/assignments$/.exec(path)
+    const roomId = match === null ? null : safeDecode(match[1]!)
+    if (roomId === null) {
+      sendError(res, 404, 'not_found', 'malformed room path')
+      return
+    }
+    await handleInternalAssignments({ store: ctx.rawStore, runtimeToken: ctx.runtimeToken, ...(ctx.now === undefined ? {} : { now: ctx.now }) }, req, res, roomId)
+    return
+  }
+
+  if (/^\/api\/internal\/rooms\/[^/]+\/round$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.rawStore === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'round engine needs the SQLite store')
+      return
+    }
+    const match = /^\/api\/internal\/rooms\/([^/]+)\/round$/.exec(path)
+    const roomId = match === null ? null : safeDecode(match[1]!)
+    if (roomId === null) {
+      sendError(res, 404, 'not_found', 'malformed room path')
+      return
+    }
+    await handleInternalRound({ store: ctx.rawStore, runtimeToken: ctx.runtimeToken }, req, res, roomId)
+    return
+  }
+
+  if (/^\/api\/internal\/rounds\/[^/]+\/advance$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.rawStore === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'round engine needs the SQLite store')
+      return
+    }
+    const match = /^\/api\/internal\/rounds\/([^/]+)\/advance$/.exec(path)
+    const roundId = match === null ? null : safeDecode(match[1]!)
+    if (roundId === null) {
+      sendError(res, 404, 'not_found', 'malformed round path')
+      return
+    }
+    await handleInternalAdvance({ store: ctx.rawStore, runtimeToken: ctx.runtimeToken, ...(ctx.now === undefined ? {} : { now: ctx.now }) }, req, res, roundId)
+    return
+  }
+
+  if (/^\/api\/workspaces\/[^/]+\/(start|runtime)$/.test(path)) {
+    const match = /^\/api\/workspaces\/([^/]+)\/(start|runtime)$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    const action = match?.[2]
+    if (workspaceId === null || action === undefined) {
+      sendError(res, 404, 'not_found', 'malformed workspace path')
+      return
+    }
+    if (action === 'start' && method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (action === 'runtime' && method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message)
+      return
+    }
+    const workspaces = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
+    if (!workspaces.some((workspace) => workspace.id === workspaceId)) {
+      sendError(res, 404, 'not_found', 'unknown workspace')
+      return
+    }
+    if (action === 'runtime') {
+      if (ctx.rawStore === undefined) {
+        sendError(res, 503, 'runtime.not_configured', 'runtime state needs the SQLite store')
+        return
+      }
+      const runtime = await readWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+      sendJson(res, 200, { runtime })
+      return
+    }
+    if (ctx.rawStore === undefined || ctx.runtimeManager === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'no runtime manager configured')
+      return
+    }
+    try {
+      const result = await startWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+      sendJson(res, result.created ? 201 : 200, { runtime: result.runtime })
+    } catch (error) {
+      sendError(res, 502, 'runtime.start_failed', error instanceof Error ? error.message : String(error))
+    }
     return
   }
 
@@ -993,6 +1173,36 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (path === '/api/bots') {
+    if (method === 'GET') {
+      await handleListBots(ctx, req, res, url)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateBot(ctx, req, res)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/bots\/[^/]+$/.test(path)) {
+    if (method === 'GET') {
+      await handleGetBot(ctx, req, res, url)
+      return
+    }
+    if (method === 'PATCH') {
+      await handlePatchBot(ctx, req, res, url)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteBot(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
   // 同源网页：GET 未命中 API 路由时，尝试 apps/web 里的静态文件。
   if ((method === 'GET' || method === 'HEAD') && (await serveStatic(res, path))) return
 
@@ -1008,7 +1218,9 @@ export function createServer(options: ServerOptions): http.Server {
     startedAt: now(),
     claimFailures: [],
     streamPollMs: options.streamPollMs ?? 700,
-    runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN
+    runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
+    ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
+    ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager })
   }
 
   const server = http.createServer((req, res) => {

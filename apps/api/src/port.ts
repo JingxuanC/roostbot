@@ -12,6 +12,15 @@
 //   4. 所有 now / expiresAt 都是毫秒时间戳，由调用方传入，store 自己不看时钟。
 //   5. 返回给调用方的对象必须是拷贝：调用方改字段不能改到 store 内部状态。
 
+// M4 的 Bot / 房间扩展类型直接来自共享契约（packages/contract），避免第二份定义漂移。
+import type {
+  Bot,
+  RoomMember,
+  RoomResponder,
+  RoomRound,
+  UpdateBotInput
+} from '../../../packages/contract/src/index.ts'
+
 export type HomeMode = 'cloud' | 'local'
 
 export type WorkspaceState = 'absent' | 'stopped' | 'starting' | 'running' | 'stopping' | 'migrating'
@@ -121,6 +130,13 @@ export interface RoomRecord {
   notice?: string
   replyMode: 'admin' | 'everyone' | 'mentions'
   createdAt: number
+  /** M4：谁回答、host、公告/目的、创建者；成员是 Bot 成员列表。 */
+  responder: RoomResponder
+  hostBotId?: string
+  purpose?: string
+  createdByKind?: 'user' | 'bot'
+  createdBy?: string
+  members: RoomMember[]
 }
 
 export interface RoomMessageRecord {
@@ -158,6 +174,69 @@ export interface PostMessageInput {
   idem?: string
 }
 
+export interface ListBotsInput {
+  accountId: string
+  /** 省略时列出该账号所有 workspace 的 Bot（按 createdAt 升序）。 */
+  workspaceId?: string
+}
+
+export interface CreateBotPortInput {
+  accountId: string
+  workspaceId: string
+  name: string
+  role?: string
+  persona?: string
+  provider?: string
+  model?: string
+  avatar?: Bot['avatar']
+  now: number
+}
+
+export interface UpdateBotPortInput {
+  accountId: string
+  botId: string
+  patch: UpdateBotInput
+}
+
+export interface DeleteBotPortInput {
+  accountId: string
+  botId: string
+}
+
+export interface CreateRoomExtPortInput {
+  accountId: string
+  workspaceId: string
+  name?: string
+  notice?: string
+  purpose?: string
+  memberBotIds: string[]
+  hostBotId?: string
+  responder?: RoomResponder
+  now: number
+}
+
+export interface UpdateRoomPortInput {
+  accountId: string
+  roomId: string
+  name?: string
+  notice?: string | null
+  responder?: RoomResponder
+  /** 简写：等价于 responder={kind:'member',botId:responderBot}。 */
+  responderBot?: string
+}
+
+export interface RoomMemberMutationInput {
+  accountId: string
+  roomId: string
+  botIds: string[]
+}
+
+export interface RemoveRoomMemberPortInput {
+  accountId: string
+  roomId: string
+  botId: string
+}
+
 export interface StorePort {
   createPairingCode(input: CreatePairingCodeInput): Promise<PairingRecord>
   claimPairingCode(input: ClaimPairingCodeInput): Promise<ClaimPairingCodeResult>
@@ -182,6 +261,28 @@ export interface StorePort {
   postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord>
   /** 内部读：不走成员校验，调用方已经用 runtime token 证明过身份。 */
   readMessagesInternal(input: { roomId: string; afterSeq?: number; limit?: number }): Promise<RoomMessageRecord[]>
+
+  // ---- M4：Bot 域 -------------------------------------------------------------
+  /** 只列该账号是成员的 workspace 里的 Bot；workspaceId 必须属于该账号。 */
+  listBots(input: ListBotsInput): Promise<Bot[]>
+  /** 找不到、或该账号不是 Bot 所在 workspace 的成员，都返回 null（不泄露存在性）。 */
+  getBot(input: { accountId: string; botId: string }): Promise<Bot | null>
+  createBot(input: CreateBotPortInput): Promise<Bot>
+  updateBot(input: UpdateBotPortInput): Promise<Bot>
+  /** DELETE /api/bots/:id：软/硬删由适配器决定（当前实现是硬删，见 packages/store/src/bots.ts）。 */
+  deleteBot(input: DeleteBotPortInput): Promise<void>
+
+  // ---- M4：房间扩展 -----------------------------------------------------------
+  /** 单房间详情（含成员）；该账号必须是房间所在 workspace 的成员。 */
+  getRoom(input: { accountId: string; roomId: string }): Promise<RoomRecord | null>
+  /** 建房 + 成员 + host + responder + notice/purpose，一次事务。 */
+  createRoomExt(input: CreateRoomExtPortInput): Promise<RoomRecord>
+  /** 改 name/notice/responder；responder 必须指向当前成员，否则适配器抛 ROOM_RESPONDER_INVALID。 */
+  updateRoom(input: UpdateRoomPortInput): Promise<RoomRecord>
+  addRoomMembers(input: RoomMemberMutationInput): Promise<RoomRecord>
+  removeRoomMember(input: RemoveRoomMemberPortInput): Promise<RoomRecord>
+  /** 房间最近一轮（running 或已结束）；没有轮次时 null。 */
+  getRoomRound(roomId: string): Promise<RoomRound | null>
 }
 
 /** 6 位码空间很小：签发时必须能发现「同一个码还活着」，由 API 换一个重试。 */

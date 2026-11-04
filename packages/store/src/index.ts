@@ -54,3 +54,54 @@ export type { CreateSessionInput, Session } from './types.ts'
 
 export { createRoom, getRoom, listRooms, readMessages, sendMessage, REPLY_MODES } from './rooms.ts'
 export type { Room, RoomMessage, SendMessageInput } from './types.ts'
+
+// ---- M4：Bot 域 ---------------------------------------------------------------
+export {
+  BOT_APPROVALS,
+  BOT_STATUSES,
+  createBot,
+  deleteBot,
+  getBot,
+  listBots,
+  listBotVersions,
+  updateBot,
+} from './bots.ts'
+export type { BotVersion, CreateBotStoreInput, UpdateBotStoreInput } from './bots.ts'
+
+// ---- M4：房间成员与扩展列 ------------------------------------------------------
+export {
+  addRoomMembers,
+  detachBotFromRooms,
+  listRoomMembers,
+  removeRoomMember,
+  setRoomHost,
+} from './room-members.ts'
+export type { AddRoomMembersInput, RemoveRoomMemberInput } from './room-members.ts'
+
+export {
+  createRoomExt,
+  getRoomDetail,
+  getRoomExtras,
+  updateRoomExtras,
+} from './rooms-ext.ts'
+export type {
+  CreateRoomExtInput,
+  RoomDetail,
+  RoomExtras,
+  UpdateRoomExtrasInput,
+} from './rooms-ext.ts'
+
+export {
+  activeRound,
+  botSession,
+  getRound,
+  latestRound,
+  listRounds,
+  markSeen,
+  saveRound,
+  seenSeq,
+  setBotSession,
+} from './rounds.ts'
+
+export { getWorkspaceRuntime, saveWorkspaceRuntime } from './workspace-runtime.ts'
+export type { RuntimePhase, WorkspaceRuntime } from './workspace-runtime.ts'

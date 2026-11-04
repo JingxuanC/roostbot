@@ -1,0 +1,11 @@
+{
+  "name": "@roost/rooms",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Room rounds as pure functions: who answers, @ insertions, turn limits and per-member prompt assembly.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --experimental-strip-types --test test/*.test.ts" }
+}

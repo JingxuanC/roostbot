@@ -7,7 +7,7 @@
 - **记忆**：由 [causal-memory](../causal-memory) 提供，不是聊天记录，是可检索、可追溯的判断
 - **模型**：用户自带 token（BYO），平台不转售推理
 
-状态：**骨架阶段**。这里是仓库根，代码在 `apps/`、`packages/`，设计与决策在 `docs/`。
+状态：**M4 主体完成**（Bot 域、建群、成员、responder、轮次引擎、内部接口、前端四视图）。远端真实模型的浏览器全流程还差最后一步，进度见 [TODO.md](TODO.md)。
 
 ## 文档
 
@@ -17,7 +17,7 @@
 | [docs/vision.md](docs/vision.md) | 做什么、不做什么、为谁做 |
 | [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户模型 |
 | [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时必须提供的七条契约 |
-| [docs/design/](docs/design/) | 设计文档（16 份）：事件、认证、记忆、预算、loop 与上下文、消息、协作、调度、工作区、沙箱、连接器、存储、界面、插件、产物、Bot 图标、房间运行时、插件市场 |
+| [docs/design/](docs/design/) | 设计文档（19 份）：事件、认证、记忆、预算、loop 与上下文、消息、协作、调度、工作区、沙箱、连接器、存储、界面、插件、产物、Bot 图标、房间运行时、Bot 身份、插件市场 |
 | [docs/spikes/](docs/spikes/) | 可复现的实验与结论（含环境限制） |
 | [docs/decisions/](docs/decisions/) | 命名、记忆、许可、插件面板等决策记录 |
 
