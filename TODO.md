@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：112 / 152 · 进行中：1
+- 完成：113 / 152 · 进行中：0
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -170,7 +170,7 @@
 
 - [x] 6.4.1 usage 表（按 run/turn/bot 记账，`turnId:source` 幂等）
 - [x] 6.4.2 预留-结算（准入预留，结束结算，actual>amount 也记）
-- [ ] 6.4.3 配额四层（tenant/workspace/run/turn）
+- [x] 6.4.3 配额四层（tenant/workspace/run/turn，多层同时校验）
 - [x] 6.4.4 429 与软限 80% 提醒（`billing.cap` 每周期一次）
 - [ ] 6.4.5 模型代理（token 记账、限流）
 - [x] 6.4.6 用量页（时间范围/汇总/配额进度/按 Bot/模型）
@@ -274,3 +274,4 @@
 - 2026-11-04 M6 记忆系统（后端 agent）：迁移 0017（memories/memory_evidence/memory_reads）、falsifier 必填、scope 可见性、supersede 原子替换、关键词×置信度×新鲜度检索与 1200 token/8 条预算、50/日写入上限、软删与导出、`memory.*` 事件。458 后端测试全绿。LLM 抽取器、BM25/向量、复盘清理留后续。
 - 2026-11-04 M5 多端收尾（前端 agent）：深链 `#/w/:ws/...` 规范化与不一致空态；≤720px 抽屉式侧栏、表格横向滚动、44px 触控目标；设置页通知开关（仅「需要你」，页面隐藏时按 approval id 去重提醒）。全仓 644 测试全绿（前端 186）。
 - 2026-11-04 工程债 E2（后端 agent）：`event-schema`/`bot-manifest` 补 `src/` 类型与纯校验、两个校验 CLI（`roost-event-validate` / `roost-bot-validate`）、26 个测试；`panels` 作为可选字段补进 manifest schema。
+- 2026-11-04 M6 配额四层与计量（后端 agent）：迁移 0018 重建 quotas 支持 run/turn scope、usage_rows 增 container_seconds/storage_bytes；reserve 多层同时校验并带 error.layer；`POST /api/internal/meter`、usage totals/daily（容器秒求和、存储取最大）；493 后端测试全绿。runtime 侧采样接线与默认配额播种留后续。

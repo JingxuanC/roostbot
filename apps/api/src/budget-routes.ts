@@ -6,6 +6,7 @@
 //   POST  /api/internal/budget/reserve  handleInternalBudgetReserve  runtime token
 //   POST  /api/internal/budget/settle   handleInternalBudgetSettle   runtime token
 //   POST  /api/internal/usage           handleInternalUsage          runtime token
+//   POST  /api/internal/meter           handleInternalMeter          runtime token（容器秒/存储采样）
 //   GET   /api/quotas                   handleListQuotas             Bearer（成员只读）
 //   PATCH /api/quotas/:id               handlePatchQuota             Bearer（仅 owner）
 //   GET   /api/usage                    handleGetUsage               Bearer（owner/admin）
@@ -18,6 +19,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   QUOTA_METRICS,
   QUOTA_PERIODS,
+  QUOTA_SCOPES,
   StoreError,
   getQuota,
   getWorkspaceRole,
@@ -35,10 +37,12 @@ import type {
   Quota,
   QuotaMetric,
   QuotaPeriod,
+  QuotaScope,
   Reservation,
   UsageRow,
 } from '../../../packages/store/src/index.ts'
 import { BUDGET_ERROR_CODES } from '../../../packages/store/src/index.ts'
+import { USAGE_DAILY_MAX_DAYS, usageDaily } from '../../../packages/store/src/budget.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { SessionRecord, StorePort, WorkspaceRole } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
@@ -74,6 +78,17 @@ export async function handleInternalBudgetReserve(
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
   const runId = readId(body['runId'])
   if (runId === null) return sendError(res, 400, 'invalid_body', 'runId is required')
+  const turnId = readOptionalId(body['turnId'])
+  if (turnId === INVALID) return sendError(res, 400, 'invalid_body', 'turnId must be a string')
+  const scope = readScope(body['scope'])
+  if (scope === 'invalid') {
+    return sendError(res, 400, 'invalid_body', `scope must be one of ${QUOTA_SCOPES.join(', ')}`)
+  }
+  const scopeId = readOptionalId(body['scopeId'])
+  if (scopeId === INVALID) return sendError(res, 400, 'invalid_body', 'scopeId must be a string')
+  if (scope === 'turn' && turnId === null && scopeId === null) {
+    return sendError(res, 400, 'invalid_body', 'turnId or scopeId is required for turn scope')
+  }
   const metric = readMetric(body['metric'])
   if (metric === null) {
     return sendError(res, 400, 'invalid_body', `metric must be one of ${QUOTA_METRICS.join(', ')}`)
@@ -87,16 +102,28 @@ export async function handleInternalBudgetReserve(
 
   try {
     const result = reserve(store, {
-      scope: 'workspace',
-      scopeId: workspaceId,
+      ...(scope === null ? {} : { scope }),
+      ...(scopeId === null ? {} : { scopeId }),
       period,
       metric,
       runId,
       workspaceId,
+      ...(turnId === null ? {} : { turnId }),
       amount,
       at: ctx.now(),
     })
-    sendJson(res, 201, { reservation: reservationJson(result.reservation), remaining: result.remaining })
+    sendJson(res, 201, {
+      reservation: reservationJson(result.reservation),
+      remaining: result.remaining,
+      reservations: result.reservations.map(reservationJson),
+      layers: result.layers.map((layer) => ({
+        scope: layer.scope,
+        quotaId: layer.quota.id,
+        reservationId: layer.reservation.id,
+        amount: layer.reservation.amount,
+        remaining: layer.remaining,
+      })),
+    })
   } catch (err) {
     sendBudgetFailure(res, err)
   }
@@ -148,8 +175,13 @@ export async function handleInternalUsage(
 
   const workspaceId = readId(body['workspaceId'])
   if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
-  const turnId = readId(body['turnId'])
-  if (turnId === null) return sendError(res, 400, 'invalid_body', 'turnId is required')
+  const turnId = readOptionalId(body['turnId'])
+  if (turnId === INVALID) return sendError(res, 400, 'invalid_body', 'turnId must be a string')
+  const idem = readOptionalId(body['idem'])
+  if (idem === INVALID) return sendError(res, 400, 'invalid_body', 'idem must be a string')
+  if (turnId === null && idem === null) {
+    return sendError(res, 400, 'invalid_body', 'turnId is required (or idem when there is no turn)')
+  }
   const source = readId(body['source'])
   if (source === null) return sendError(res, 400, 'invalid_body', 'source is required')
 
@@ -178,12 +210,21 @@ export async function handleInternalUsage(
   }
   const costUsd = readOptionalCost(body['costUsd'])
   if (costUsd === INVALID) return sendError(res, 400, 'invalid_body', 'costUsd must be a number >= 0')
+  const containerSeconds = readOptionalNumber(body['containerSeconds'])
+  if (containerSeconds === INVALID) {
+    return sendError(res, 400, 'invalid_body', 'containerSeconds must be a number >= 0')
+  }
+  const storageBytes = readOptionalCount(body['storageBytes'])
+  if (storageBytes === INVALID) {
+    return sendError(res, 400, 'invalid_body', 'storageBytes must be an integer >= 0')
+  }
 
   try {
     const result = recordUsage(store, {
       workspaceId,
       runId,
       turnId,
+      idem,
       botId,
       model,
       inputTokens,
@@ -191,6 +232,8 @@ export async function handleInternalUsage(
       cachedTokens,
       toolCalls,
       costUsd,
+      containerSeconds,
+      storageBytes,
       source,
       at: ctx.now(),
     })
@@ -198,6 +241,61 @@ export async function handleInternalUsage(
       usage: usageJson(result.row),
       deduped: result.deduped,
     })
+  } catch (err) {
+    sendBudgetFailure(res, err)
+  }
+}
+
+const METER_KINDS = ['container_seconds', 'storage_bytes'] as const
+type MeterKind = (typeof METER_KINDS)[number]
+
+/**
+ * 控制面采样：容器秒 / 存储字节（budget.md §2、§6「控制面采样」）。
+ * 没有 turnId，用调用方给的 idem 幂等；没给 idem 时每次采样都是新行。
+ */
+export async function handleInternalMeter(
+  ctx: Ctx,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const store = requireRuntimeStore(ctx, req, res)
+  if (store === null) return
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  if (!isPlainObject(parsed.value)) {
+    return sendError(res, 400, 'invalid_body', 'request body must be a JSON object')
+  }
+  const body = parsed.value
+
+  const workspaceId = readId(body['workspaceId'])
+  if (workspaceId === null) return sendError(res, 400, 'invalid_body', 'workspaceId is required')
+  const kind = readMeterKind(body['kind'])
+  if (kind === null) {
+    return sendError(res, 400, 'invalid_body', `kind must be one of ${METER_KINDS.join(', ')}`)
+  }
+  const idem = readOptionalId(body['idem'])
+  if (idem === INVALID) return sendError(res, 400, 'invalid_body', 'idem must be a string')
+  const at = readOptionalEpoch(body['at'])
+  if (at === INVALID) return sendError(res, 400, 'invalid_body', 'at must be epoch ms >= 0')
+
+  const amount = readOptionalNumber(body['amount'])
+  if (amount === INVALID || amount === null) {
+    return sendError(res, 400, 'invalid_body', 'amount must be a number >= 0')
+  }
+  if (kind === 'storage_bytes' && !Number.isSafeInteger(amount)) {
+    return sendError(res, 400, 'invalid_body', 'storage_bytes amount must be an integer >= 0')
+  }
+
+  try {
+    const result = recordUsage(store, {
+      workspaceId,
+      source: kind,
+      idem: idem ?? `${kind}:${ctx.now()}:${Math.random().toString(36).slice(2)}`,
+      ...(kind === 'container_seconds' ? { containerSeconds: amount } : { storageBytes: amount }),
+      at: at ?? ctx.now(),
+    })
+    // 202：采样已接收；重放同 idem 也返回 202 + deduped=true。
+    sendJson(res, 202, { usage: usageJson(result.row), deduped: result.deduped })
   } catch (err) {
     sendBudgetFailure(res, err)
   }
@@ -251,7 +349,7 @@ export async function handlePatchQuota(
   const quota = getQuota(store, quotaId)
   if (quota === null) return sendError(res, 404, 'quota_not_found', `unknown quota ${quotaId}`)
 
-  const workspaceId = quota.scope === 'workspace' ? quota.scopeId : tenantWorkspaceId(store, quota.scopeId)
+  const workspaceId = quotaWorkspaceId(store, quota)
   const role = workspaceId === null ? null : workspaceRole(store, auth.accountId, workspaceId)
   if (role !== 'owner') {
     return sendError(res, 403, 'forbidden', 'only the workspace owner can change quota limits')
@@ -290,10 +388,23 @@ export async function handleGetUsage(
 
   try {
     const summary = sumUsage(store, { workspaceId, from, to })
-    sendJson(res, 200, summary)
+    const daily = usageDaily(store, {
+      workspaceId,
+      days: coveredUtcDays(from, to),
+      at: to > 0 ? to - 1 : to,
+    })
+    sendJson(res, 200, { ...summary, daily })
   } catch (err) {
     sendBudgetFailure(res, err)
   }
+}
+
+/** [from, to) 覆盖了多少个 UTC 日；上限 USAGE_DAILY_MAX_DAYS。 */
+function coveredUtcDays(from: number, to: number): number {
+  const DAY = 86_400_000
+  const first = Math.floor(from / DAY)
+  const last = Math.floor((to > from ? to - 1 : from) / DAY)
+  return Math.min(Math.max(last - first + 1, 1), USAGE_DAILY_MAX_DAYS)
 }
 
 // ---- 序列化 -----------------------------------------------------------------
@@ -341,6 +452,8 @@ function usageJson(row: UsageRow): Record<string, unknown> {
     cachedTokens: row.cachedTokens,
     toolCalls: row.toolCalls,
     costUsd: row.costUsd,
+    containerSeconds: row.containerSeconds,
+    storageBytes: row.storageBytes,
     source: row.source,
   }
 }
@@ -400,6 +513,32 @@ function tenantWorkspaceId(store: Store, tenantId: string): string | null {
   return row?.id ?? null
 }
 
+/**
+ * 配额属于哪个 workspace，用于 PATCH 的 owner 判定：
+ *   * workspace：scope_id 就是 workspace id；
+ *   * tenant：取该 tenant 下最早的 workspace；
+ *   * run：runs → activations.workspace_id；
+ *   * turn：没有独立表，从 usage_rows 反查（同一 turn 必属同一 workspace）。
+ */
+function quotaWorkspaceId(store: Store, quota: Quota): string | null {
+  if (quota.scope === 'workspace') return quota.scopeId
+  if (quota.scope === 'tenant') return tenantWorkspaceId(store, quota.scopeId)
+  if (quota.scope === 'run') {
+    const row = store.db
+      .prepare(
+        `SELECT a.workspace_id AS workspace_id
+           FROM runs r JOIN activations a ON a.id = r.activation_id
+          WHERE r.id = ?`,
+      )
+      .get(quota.scopeId) as { workspace_id: string } | undefined
+    return row?.workspace_id ?? null
+  }
+  const row = store.db
+    .prepare('SELECT workspace_id FROM usage_rows WHERE turn_id = ? ORDER BY at, id LIMIT 1')
+    .get(quota.scopeId) as { workspace_id: string } | undefined
+  return row?.workspace_id ?? null
+}
+
 const INVALID = Symbol('invalid')
 type Invalid = typeof INVALID
 
@@ -430,9 +569,34 @@ function readOptionalCost(value: unknown): number | null | Invalid {
   return value
 }
 
+/** 非负有限数（容器秒允许小数）。 */
+function readOptionalNumber(value: unknown): number | null | Invalid {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return INVALID
+  return value
+}
+
+function readOptionalEpoch(value: unknown): number | null | Invalid {
+  if (value === undefined || value === null) return null
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : INVALID
+}
+
 function readMetric(value: unknown): QuotaMetric | null {
   return typeof value === 'string' && (QUOTA_METRICS as readonly string[]).includes(value)
     ? (value as QuotaMetric)
+    : null
+}
+
+function readScope(value: unknown): QuotaScope | null | 'invalid' {
+  if (value === undefined || value === null) return null
+  return typeof value === 'string' && (QUOTA_SCOPES as readonly string[]).includes(value)
+    ? (value as QuotaScope)
+    : 'invalid'
+}
+
+function readMeterKind(value: unknown): MeterKind | null {
+  return typeof value === 'string' && (METER_KINDS as readonly string[]).includes(value)
+    ? (value as MeterKind)
     : null
 }
 
@@ -462,7 +626,13 @@ function quotaIdFromPath(pathname: string): string | null {
 function sendBudgetFailure(res: ServerResponse, err: unknown): void {
   const tag = storeErrorTag(err)
   if (tag === BUDGET_ERROR_CODES.quotaExhausted) {
-    return sendError(res, 429, 'quota_exhausted', err instanceof Error ? err.message : 'quota exhausted')
+    const message = err instanceof Error ? err.message : 'quota exhausted'
+    // 多层预留失败时把命中的层放进 error.layer（message 里同时有 layer=<scope>）。
+    const match = /layer=(tenant|workspace|run|turn)/.exec(message)
+    if (match !== null) {
+      return sendJson(res, 429, { ok: false, error: { code: 'quota_exhausted', message, layer: match[1] } })
+    }
+    return sendError(res, 429, 'quota_exhausted', message)
   }
   if (tag === BUDGET_ERROR_CODES.quotaNotFound) {
     return sendError(res, 404, 'quota_not_found', err instanceof Error ? err.message : 'quota not found')

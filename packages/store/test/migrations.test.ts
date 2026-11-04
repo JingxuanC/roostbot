@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -19,7 +19,7 @@ test('按文件名升序执行迁移；再次打开不重复执行', () => {
     const dbPath = join(dir, 'workspace.db')
 
     const first = openStore(dbPath)
-    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql', '0016_connectors.sql', '0017_memories.sql'])
+    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql', '0016_connectors.sql', '0017_memories.sql', '0018_budget_layers.sql'])
     first.close()
 
     const second = openStore(dbPath)
@@ -212,11 +212,110 @@ test('openStore 会建父目录；空路径直接拒绝', () => {
   }
 })
 
+test('0018 重建 quotas：旧数据保留、scope 扩到 run/turn、usage_rows 新列', () => {
+  const repoMigrations = new URL('../../../migrations/', import.meta.url)
+  const migrations = tempMigrations({
+    '0014_budget.sql': readFileSync(new URL('0014_budget.sql', repoMigrations), 'utf8'),
+  })
+  const dir = tempDir()
+  try {
+    const dbPath = join(dir, 'workspace.db')
+
+    const before = openStore(dbPath, { migrationsDir: migrations })
+    before.db
+      .prepare(
+        `INSERT INTO quotas (id, scope, scope_id, period, metric, limit_value, used_value, reserved, resets_at)
+         VALUES ('qta_old', 'workspace', 'ws_old', 'day', 'tokens', 1000, 200, 50, 111)`,
+      )
+      .run()
+    before.db
+      .prepare(
+        `INSERT INTO usage_rows (id, at, workspace_id, turn_id, input_tokens, source, idem)
+         VALUES ('usg_old', 1, 'ws_old', 'turn_old', 10, 'provider_report', 'turn_old:provider_report')`,
+      )
+      .run()
+    before.close()
+
+    // 同一个迁移目录补上 0018 再打开：只补跑新迁移。
+    writeFileSync(
+      join(migrations, '0018_budget_layers.sql'),
+      readFileSync(new URL('0018_budget_layers.sql', repoMigrations), 'utf8'),
+      'utf8',
+    )
+    const store = openStore(dbPath, { migrationsDir: migrations })
+    try {
+      assert.deepEqual(store.appliedMigrations, ['0018_budget_layers.sql'])
+
+      // 旧行原样保留。
+      const old = store.db.prepare('SELECT * FROM quotas WHERE id = ?').get('qta_old') as Record<string, unknown>
+      assert.equal(old.scope, 'workspace')
+      assert.equal(old.limit_value, 1000)
+      assert.equal(old.used_value, 200)
+      assert.equal(old.reserved, 50)
+      assert.equal(old.resets_at, 111)
+
+      // 新 scope 可写入，非法 scope 仍被 CHECK 拦住。
+      store.db
+        .prepare(
+          `INSERT INTO quotas (id, scope, scope_id, period, metric, limit_value, used_value, reserved)
+           VALUES ('qta_run', 'run', 'run_1', 'day', 'tokens', 100, 0, 0),
+                  ('qta_turn', 'turn', 'turn_1', 'day', 'tokens', 50, 0, 0)`,
+        )
+        .run()
+      assert.throws(() =>
+        store.db
+          .prepare(
+            `INSERT INTO quotas (id, scope, scope_id, period, metric, limit_value, used_value, reserved)
+             VALUES ('qta_bad', 'bogus', 'x', 'day', 'tokens', 1, 0, 0)`,
+          )
+          .run(),
+      )
+      // UNIQUE (scope, scope_id, period, metric) 仍在。
+      assert.throws(() =>
+        store.db
+          .prepare(
+            `INSERT INTO quotas (id, scope, scope_id, period, metric, limit_value, used_value, reserved)
+             VALUES ('qta_dup', 'run', 'run_1', 'day', 'tokens', 1, 0, 0)`,
+          )
+          .run(),
+      )
+
+      // 索引与新增列都在；旧 usage 行的新列为 NULL。
+      const indexes = store.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_quotas_scope'")
+        .all()
+      assert.equal(indexes.length, 1)
+      const columns = store.db
+        .prepare('PRAGMA table_info(usage_rows)')
+        .all()
+        .map((row) => (row as { name: string }).name)
+      assert.ok(columns.includes('container_seconds'))
+      assert.ok(columns.includes('storage_bytes'))
+      const oldUsage = store.db.prepare('SELECT * FROM usage_rows WHERE id = ?').get('usg_old') as Record<string, unknown>
+      assert.equal(oldUsage.input_tokens, 10)
+      assert.equal(oldUsage.container_seconds, null)
+      assert.equal(oldUsage.storage_bytes, null)
+
+      store.db
+        .prepare('UPDATE usage_rows SET container_seconds = 12.5, storage_bytes = 4096 WHERE id = ?')
+        .run('usg_old')
+      const updated = store.db.prepare('SELECT * FROM usage_rows WHERE id = ?').get('usg_old') as Record<string, unknown>
+      assert.equal(updated.container_seconds, 12.5)
+      assert.equal(updated.storage_bytes, 4096)
+    } finally {
+      store.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(migrations, { recursive: true, force: true })
+  }
+})
+
 test(':memory: 也能跑迁移（测试用）', () => {
   const store = openStore(':memory:')
   try {
     assert.equal(store.path, ':memory:')
-    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql', '0016_connectors.sql', '0017_memories.sql'])
+    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql', '0016_connectors.sql', '0017_memories.sql', '0018_budget_layers.sql'])
   } finally {
     store.close()
   }

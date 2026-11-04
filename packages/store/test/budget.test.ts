@@ -16,11 +16,13 @@ import {
   recordUsage,
   reserve,
   setQuotaLimit,
+  StoreError,
   settle,
   storeErrorTag,
   sumUsage,
 } from '../src/index.ts'
 import type { Quota, Store } from '../src/index.ts'
+import { usageDaily } from '../src/budget.ts'
 import { createWorkspace } from '../src/workspaces.ts'
 
 const NOW = Date.UTC(2026, 10, 4, 12, 0, 0)
@@ -231,6 +233,8 @@ test('sumUsage：按 bot/model 聚合 [from, to)', () => {
       tokens: 220,
       toolCalls: 3,
       costUsd: 0.35000000000000003,
+      containerSeconds: 0,
+      storageBytes: 0,
       rows: 3,
     })
     assert.deepEqual(
@@ -276,6 +280,179 @@ test('setQuotaLimit 只改 limit 并写 billing.quota.changed；ensureQuota 不�
     const updated = setQuotaLimit(store, { id: quota.id, limitValue: 500, by: 'acc_owner', at: NOW + 1 })
     assert.equal(updated.limitValue, 500)
     assert.deepEqual(eventKinds(store), ['billing.quota.changed'])
+  })
+})
+
+function quotaFor(
+  store: Store,
+  scope: Quota['scope'],
+  scopeId: string,
+  limitValue: number,
+  metric: 'tokens' | 'runs' = 'tokens',
+): Quota {
+  return ensureQuota(store, { scope, scopeId, period: 'day', metric, limitValue, at: NOW })
+}
+
+test('多层 reserve：workspace + run + turn 同时检查并各自记账', () => {
+  withStore((store) => {
+    const ws = dayQuota(store, 1000)
+    const run = quotaFor(store, 'run', 'run_1', 500)
+    const turn = quotaFor(store, 'turn', 'turn_1', 200)
+
+    const result = reserve(store, {
+      workspaceId: WS,
+      runId: 'run_1',
+      turnId: 'turn_1',
+      period: 'day',
+      metric: 'tokens',
+      amount: 150,
+      at: NOW,
+    })
+
+    assert.deepEqual(result.layers.map((layer) => layer.scope), ['workspace', 'run', 'turn'])
+    assert.deepEqual(result.reservations.map((row) => row.quotaId), [ws.id, run.id, turn.id])
+    assert.equal(result.reservations.length, 3)
+    // 每层都各自 reserved += amount。
+    assert.equal(getQuota(store, ws.id)!.reserved, 150)
+    assert.equal(getQuota(store, run.id)!.reserved, 150)
+    assert.equal(getQuota(store, turn.id)!.reserved, 150)
+    // remaining 取最紧的一层：turn = 200 - 150。
+    assert.equal(result.remaining, 50)
+    assert.deepEqual(result.layers.map((layer) => layer.remaining), [850, 350, 50])
+    assert.equal(eventKinds(store).filter((kind) => kind === 'billing.reserve').length, 3)
+
+    // 显式 scope 只命中一层。
+    const single = reserve(store, {
+      scope: 'run',
+      runId: 'run_1',
+      workspaceId: WS,
+      period: 'day',
+      metric: 'tokens',
+      amount: 10,
+      at: NOW,
+    })
+    assert.equal(single.layers.length, 1)
+    assert.equal(single.layers[0]!.scope, 'run')
+    assert.equal(getQuota(store, ws.id)!.reserved, 150)
+    assert.equal(getQuota(store, run.id)!.reserved, 160)
+  })
+})
+
+test('多层 reserve：run/turn 不足 429 语义，错误里带 layer 且全部回滚', () => {
+  withStore((store) => {
+    const ws = dayQuota(store, 1000)
+    const run = quotaFor(store, 'run', 'run_1', 100)
+    const turn = quotaFor(store, 'turn', 'turn_1', 300)
+
+    // run 层不足：workspace 也不应被扣。
+    const runError = (() => {
+      try {
+        reserve(store, {
+          workspaceId: WS, runId: 'run_1', turnId: 'turn_1', period: 'day', metric: 'tokens', amount: 101, at: NOW,
+        })
+      } catch (err) {
+        return err as Error
+      }
+      return null
+    })()
+    assert.ok(runError !== null)
+    assert.equal(storeErrorTag(runError), BUDGET_ERROR_CODES.quotaExhausted)
+    assert.match(runError!.message, /layer=run/)
+    assert.equal(getQuota(store, ws.id)!.reserved, 0)
+    assert.equal(getQuota(store, run.id)!.reserved, 0)
+    assert.equal(getQuota(store, turn.id)!.reserved, 0)
+
+    // turn 层不足。
+    const turnError = (() => {
+      try {
+        reserve(store, {
+          workspaceId: WS, runId: 'run_1', turnId: 'turn_1', period: 'day', metric: 'tokens', amount: 301, at: NOW,
+        })
+      } catch (err) {
+        return err as Error
+      }
+      return null
+    })()
+    assert.ok(turnError !== null)
+    assert.match(turnError!.message, /layer=run/) // run 层 301 > 100 先失败
+    assert.equal(getQuota(store, ws.id)!.reserved, 0)
+
+    // run 够、turn 不够时命中 turn。
+    ensureQuota(store, { scope: 'run', scopeId: 'run_2', period: 'day', metric: 'tokens', limitValue: 1000, at: NOW })
+    const onlyTurn = (() => {
+      try {
+        reserve(store, {
+          workspaceId: WS, runId: 'run_2', turnId: 'turn_1', period: 'day', metric: 'tokens', amount: 301, at: NOW,
+        })
+      } catch (err) {
+        return err as Error
+      }
+      return null
+    })()
+    assert.ok(onlyTurn !== null)
+    assert.match(onlyTurn!.message, /layer=turn/)
+    assert.equal(getQuota(store, ws.id)!.reserved, 0)
+    assert.equal(getQuota(store, turn.id)!.reserved, 0)
+  })
+})
+
+test('recordUsage/sumUsage：容器秒求和、存储取窗口最大值', () => {
+  withStore((store) => {
+    recordUsage(store, {
+      workspaceId: WS, turnId: 't1', inputTokens: 10, containerSeconds: 12.5, storageBytes: 4096,
+      source: 'provider_report', at: NOW,
+    })
+    recordUsage(store, {
+      workspaceId: WS, turnId: 't2', inputTokens: 20, containerSeconds: 7.5, storageBytes: 8192,
+      source: 'provider_report', at: NOW + 1,
+    })
+    recordUsage(store, {
+      workspaceId: WS, turnId: 't3', inputTokens: 5, containerSeconds: 1, storageBytes: 2048,
+      source: 'estimated', at: NOW + 2,
+    })
+
+    const summary = sumUsage(store, { workspaceId: WS, from: NOW, to: NOW + 100 })
+    assert.equal(summary.totals.containerSeconds, 21)
+    assert.equal(summary.totals.storageBytes, 8192)
+    assert.equal(summary.totals.tokens, 35)
+  })
+})
+
+test('recordUsage：无 turnId 时用调用方 idem 幂等', () => {
+  withStore((store) => {
+    const input = { workspaceId: WS, source: 'container_seconds', idem: 'meter:abc', containerSeconds: 3, at: NOW }
+    const first = recordUsage(store, input)
+    assert.equal(first.deduped, false)
+    const replay = recordUsage(store, { ...input, at: NOW + 1000, containerSeconds: 999 })
+    assert.equal(replay.deduped, true)
+    assert.equal(replay.row.containerSeconds, 3)
+    assert.equal(
+      (store.db.prepare('SELECT COUNT(*) AS n FROM usage_rows').get() as { n: number | bigint }).n as number,
+      1,
+    )
+    // 两者都没有：拒绝。
+    assert.throws(
+      () => recordUsage(store, { workspaceId: WS, source: 'container_seconds' }),
+      (err: unknown) => err instanceof StoreError && err.code === 'INVALID_INPUT',
+    )
+  })
+})
+
+test('usageDaily：按 UTC 日聚合，空日补零，容器秒求和、存储取最大值', () => {
+  withStore((store) => {
+    const day1 = Date.UTC(2026, 10, 2, 10, 0, 0)
+    const day2 = Date.UTC(2026, 10, 3, 10, 0, 0)
+    const day3 = Date.UTC(2026, 10, 4, 10, 0, 0)
+    recordUsage(store, { workspaceId: WS, turnId: 'd1a', inputTokens: 10, containerSeconds: 1.5, storageBytes: 100, source: 'provider_report', at: day1 })
+    recordUsage(store, { workspaceId: WS, turnId: 'd1b', inputTokens: 20, containerSeconds: 2.5, storageBytes: 300, source: 'provider_report', at: day1 + 3600_000 })
+    recordUsage(store, { workspaceId: WS, turnId: 'd3', inputTokens: 5, containerSeconds: 4, storageBytes: 50, source: 'provider_report', at: day3 })
+
+    const daily = usageDaily(store, { workspaceId: WS, days: 4, at: day3 })
+    assert.deepEqual(daily.map((day) => day.date), ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04'])
+    assert.deepEqual(daily.map((day) => day.tokens), [0, 30, 0, 5])
+    assert.deepEqual(daily.map((day) => day.containerSeconds), [0, 4, 0, 4])
+    assert.deepEqual(daily.map((day) => day.storageBytes), [0, 300, 0, 50])
+    assert.deepEqual(daily.map((day) => day.rows), [0, 2, 0, 1])
   })
 })
 

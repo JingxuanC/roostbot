@@ -303,6 +303,113 @@ test('GET quotas：达到 80% 返回 warning 但不阻断', async () => {
   })
 })
 
+test('POST reserve：多命中层一起校验，run 不足 429 且 error.layer=run', async () => {
+  await withApi(async (fx) => {
+    quota(fx.store, fx.ws.id, 1000)
+    ensureQuota(fx.store, {
+      scope: 'run', scopeId: 'run_1', period: 'day', metric: 'tokens', limitValue: 100, at: NOW,
+    })
+    ensureQuota(fx.store, {
+      scope: 'turn', scopeId: 'turn_1', period: 'day', metric: 'tokens', limitValue: 500, at: NOW,
+    })
+
+    const blocked = await fx.call('POST', '/api/internal/budget/reserve', {
+      body: { workspaceId: fx.ws.id, runId: 'run_1', turnId: 'turn_1', metric: 'tokens', amount: 101 },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(blocked.status, 429)
+    assert.equal(blocked.json.error.code, 'quota_exhausted')
+    assert.equal(blocked.json.error.layer, 'run')
+
+    const ok = await fx.call('POST', '/api/internal/budget/reserve', {
+      body: { workspaceId: fx.ws.id, runId: 'run_1', turnId: 'turn_1', metric: 'tokens', amount: 100 },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(ok.status, 201)
+    assert.deepEqual(ok.json.layers.map((layer: any) => layer.scope), ['workspace', 'run', 'turn'])
+    assert.equal(ok.json.reservations.length, 3)
+    assert.equal(ok.json.remaining, 0)
+  })
+})
+
+test('POST /api/internal/meter：容器秒/存储入账，同 idem 幂等', async () => {
+  await withApi(async (fx) => {
+    const first = await fx.call('POST', '/api/internal/meter', {
+      body: { workspaceId: fx.ws.id, kind: 'container_seconds', amount: 12.5, idem: 'meter_1' },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(first.status, 202)
+    assert.equal(first.json.deduped, false)
+    assert.equal(first.json.usage.containerSeconds, 12.5)
+
+    const replay = await fx.call('POST', '/api/internal/meter', {
+      body: { workspaceId: fx.ws.id, kind: 'container_seconds', amount: 999, idem: 'meter_1' },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(replay.status, 202)
+    assert.equal(replay.json.deduped, true)
+    assert.equal(replay.json.usage.containerSeconds, 12.5)
+    assert.equal(eventCount(fx.store, 'billing.usage'), 1)
+
+    const storage = await fx.call('POST', '/api/internal/meter', {
+      body: { workspaceId: fx.ws.id, kind: 'storage_bytes', amount: 4096, idem: 'meter_2' },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(storage.status, 202)
+    assert.equal(storage.json.usage.storageBytes, 4096)
+    assert.equal(storage.json.usage.containerSeconds, null)
+
+    const badKind = await fx.call('POST', '/api/internal/meter', {
+      body: { workspaceId: fx.ws.id, kind: 'tokens', amount: 1 },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(badKind.status, 400)
+
+    const badStorage = await fx.call('POST', '/api/internal/meter', {
+      body: { workspaceId: fx.ws.id, kind: 'storage_bytes', amount: 1.5 },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(badStorage.status, 400)
+  })
+})
+
+test('GET /api/usage：totals 带容器秒/存储，daily 按 UTC 日聚合', async () => {
+  await withApi(async (fx) => {
+    await fx.call('POST', '/api/internal/usage', {
+      body: {
+        workspaceId: fx.ws.id, runId: 'run_1', turnId: 'turn_1', source: 'provider_report',
+        inputTokens: 100, containerSeconds: 12.5, storageBytes: 4096,
+      },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    await fx.call('POST', '/api/internal/usage', {
+      body: {
+        workspaceId: fx.ws.id, idem: 'sample_1', source: 'container_seconds',
+        containerSeconds: 7.5, storageBytes: 8192,
+      },
+      runtimeToken: RUNTIME_TOKEN,
+    })
+
+    const usage = await fx.call(
+      'GET',
+      `/api/usage?workspaceId=${fx.ws.id}&from=${NOW - 3 * 86_400_000}&to=${NOW + 1}`,
+      { token: OWNER_TOKEN },
+    )
+    assert.equal(usage.status, 200)
+    assert.equal(usage.json.totals.containerSeconds, 20)
+    assert.equal(usage.json.totals.storageBytes, 8192)
+    assert.equal(usage.json.totals.tokens, 100)
+    assert.equal(Array.isArray(usage.json.daily), true)
+    assert.equal(usage.json.daily.length, 4)
+    assert.deepEqual(usage.json.daily.map((day: any) => day.date), [
+      '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04',
+    ])
+    assert.equal(usage.json.daily[3].tokens, 100)
+    assert.equal(usage.json.daily[3].containerSeconds, 20)
+    assert.equal(usage.json.daily[3].storageBytes, 8192)
+  })
+})
+
 test('发消息准入：日 runs 配额耗尽 429，消息不落库', async () => {
   await withApi(async (fx) => {
     const first = await fx.call('POST', `/api/rooms/${fx.roomId}/messages`, {

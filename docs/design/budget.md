@@ -48,6 +48,8 @@ tenant（计费主体）
 
 **为什么必须预留**：ACE 的 token 预算在响应完成后才计输出 token，并发请求可能一起越过上限。预留把"越过"变成"排队"。
 
+**多层同时预留**：一次准入同时检查 workspace / run / turn 中已配置的配额，每层各自 `reserved`；全部通过才放行，任一不足则整次回滚（不存在"外层失败、内层已扣"）。
+
 预估函数（先粗后细）：
 
 ```
@@ -120,8 +122,8 @@ BYO 下平台不转售推理，所以**计费 = 容器秒 + 席位 + 存储**；
 ```sql
 CREATE TABLE quotas (
   id           TEXT PRIMARY KEY,
-  scope        TEXT NOT NULL,           -- tenant | workspace
-  scope_id     TEXT NOT NULL,
+  scope        TEXT NOT NULL,           -- tenant | workspace | run | turn
+  scope_id     TEXT NOT NULL,           -- run 层=runId，turn 层=turnId
   period       TEXT NOT NULL,           -- day | month
   metric       TEXT NOT NULL,           -- tokens|runs|container_seconds|storage_bytes|messages
   limit_value  INTEGER NOT NULL,
@@ -153,9 +155,13 @@ CREATE TABLE usage_rows (
   input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER,
   tool_calls   INTEGER,
   cost_usd     REAL,
+  container_seconds REAL,             -- 实现补充：容器秒，聚合求和
+  storage_bytes     INTEGER,          -- 实现补充：卷大小采样，聚合取最大值
   source       TEXT                    -- provider_report | estimated
 );
 ```
+
+**存储口径**：`storage_bytes` 是 gauge（容量不是累计消费），`sumUsage` / `usageDaily` 一律取窗口内**最大值**，不求和；`container_seconds` 是累计量，按行**求和**。
 
 ## 11. 与其它文档的接口
 
@@ -176,14 +182,17 @@ CREATE TABLE usage_rows (
 
 ## 13. 实现状态（M6-6.4 控制面批次）
 
-已实现（`migrations/0014_budget.sql`、`packages/store/src/budget.ts`、`apps/api/src/budget-routes.ts`）：
+已实现（`migrations/0014_budget.sql`、`migrations/0018_budget_layers.sql`、`packages/store/src/budget.ts`、`apps/api/src/budget-routes.ts`）：
 
 | 能力 | 说明 |
 |---|---|
 | 配额读写 | `ensureQuota` / `getQuota` / `listQuotas` / `setQuotaLimit`（只改 `limit_value`） |
+| 四层配额 | `quotas.scope` 支持 `tenant` / `workspace` / `run` / `turn`；UNIQUE 仍为 `(scope, scope_id, period, metric)` |
+| 多层预留 | 一次 `reserve` 命中 workspace / run / turn 中所有已配置的层，**全部通过才预留**；每层各自写一条 `reservations` 并记账 |
 | 预留-结算 | `reserve` 原子检查剩余并写 `reservations`；`settle` 幂等，`reserved -= amount`、`used += actual` |
 | 周期重置 | `reserve`/`settle` 发现 `now >= resets_at` 时清零 `used/reserved` 并推进周期 |
-| 用量 | `recordUsage` 写 `usage_rows` + `billing.usage`；`sumUsage` 汇总总量与按 Bot/Model 分组 |
+| 用量 | `recordUsage` 写 `usage_rows` + `billing.usage`；支持 `containerSeconds` / `storageBytes`；`sumUsage` 汇总总量与按 Bot/Model 分组 |
+| 日聚合 | `usageDaily({ workspaceId, days })` 按 UTC 日返回 tokens / containerSeconds / storageBytes（空日补零） |
 | 软限 | `used / limit >= 0.8` 返回 warning（不阻断），写一次 `billing.cap` |
 | 准入 | `POST /api/rooms/:id/messages` 落库前检查 workspace 的日 `runs`/`tokens` 配额，耗尽 429 `quota_exhausted` |
 
@@ -191,19 +200,24 @@ CREATE TABLE usage_rows (
 
 | 方法 | 路径 | 鉴权 |
 |---|---|---|
-| POST | `/api/internal/budget/reserve` | runtime token；201 `{reservation, remaining}`，不足 429 |
+| POST | `/api/internal/budget/reserve` | runtime token；可选 `turnId` / `scope`；201 `{reservation, remaining, reservations, layers}`，任一命中的层不足 429 `quota_exhausted`（`error.layer`） |
 | POST | `/api/internal/budget/settle` | runtime token；200 `{reservation, remaining}` |
-| POST | `/api/internal/usage` | runtime token；201，`<turnId>:<source>` 重放 200 + `deduped: true` |
+| POST | `/api/internal/usage` | runtime token；201，`<turnId>:<source>` 重放 200 + `deduped: true`；无 `turnId` 时用 `idem` |
+| POST | `/api/internal/meter` | runtime token；`{workspaceId, kind, amount, at?, idem?}` → 202，同 `idem` 幂等 |
 | GET | `/api/quotas?workspaceId=` | Bearer（成员只读） |
 | PATCH | `/api/quotas/:id` | Bearer（仅 owner） |
-| GET | `/api/usage?workspaceId=&from=&to=` | Bearer（owner/admin） |
+| GET | `/api/usage?workspaceId=&from=&to=` | Bearer（owner/admin）；`totals` 含容器秒/存储，另返回 `daily` |
 
 实现补充（与 §10 原文的差异）：
 
-1. **`usage_rows.idem TEXT UNIQUE`**：幂等键 `<turnId>:<source>`，重放不重复计费（§6「幂等」）。
+1. **`usage_rows.idem TEXT UNIQUE`**：幂等键 `<turnId>:<source>`，重放不重复计费（§6「幂等」）；没有 `turnId` 的采样用调用方给的 `idem`。
 2. **`reservations.quota_id`**：§10 的 reservations 没有指向配额的外键，`settle` 无法定位要回落的配额；补一列，不改变预留语义。
 3. **`billing.quota.changed`**：`PATCH /api/quotas/:id` 写该事件（§4 只定义了 usage/reserve/settle/cap，这是实现补充）。
 4. **周期时区**：当前按 **UTC** 推进（日 = UTC 0 点，月 = UTC 1 号 0 点）；工作区时区留后续（§12 待决 1）。
 5. **默认配额**：§8 的默认值尚未自动播种；由调用方通过 `ensureQuota` 显式建立。
+6. **多层预留的返回**：`reservation` / `quota` 仍指最外层（workspace），`remaining` 取所有命中层的最小剩余；每层明细在 `layers[]`。任一不足的层以 `error.layer` 标出（`tenant|workspace|run|turn`），且整次预留回滚。
+7. **`usage_rows.container_seconds REAL` / `storage_bytes INTEGER`**：实现补充列。容器秒是累计量，求和；存储是 gauge，聚合取窗口最大值（§10 已注明）。
+8. **`GET /api/usage` 的 `daily`**：覆盖 `[from, to)` 触及的 UTC 日（最多 366 天），最旧 → 最新；某日存储取该日最大值。
+9. **`POST /api/internal/meter`**：控制面采样入口，`kind` 只有 `container_seconds` / `storage_bytes`；没有 `turnId`，幂等键用 `idem`。
 
-尚未实现（后续批次）：模型代理（token 由调用方上报，不由控制面抓取）、容器秒采集、存储采样、预留超时回收。
+尚未实现（后续批次）：模型代理（token 由调用方上报，不由控制面抓取）、runtime 侧容器秒/存储采样的实际上报、预留超时回收。

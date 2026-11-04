@@ -67,6 +67,7 @@ import {
   handleGetUsage,
   handleInternalBudgetReserve,
   handleInternalBudgetSettle,
+  handleInternalMeter,
   handleInternalUsage,
   handleListQuotas,
   handlePatchQuota,
@@ -2030,6 +2031,16 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleInternalUsage(ctx, req, res)
+    return
+  }
+
+  // 控制面采样：容器秒 / 存储字节（budget.md §2、§6）。
+  if (path === '/api/internal/meter') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalMeter(ctx, req, res)
     return
   }
 

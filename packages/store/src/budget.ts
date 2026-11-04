@@ -5,8 +5,11 @@
 //   * 结束时 settle：reserved -= amount，used += actual；actual 可以大于 amount（负差额也记账）；
 //   * 周期按 UTC 推进（日=UTC 0 点，月=UTC 1 号 0 点）；工作区时区留后续（§12 待决 1）。
 //
+// 分层（§3）：tenant → workspace → run → turn。一次 reserve 可以同时命中 workspace / run / turn
+// 三层中所有已配置的配额，每层各自记账，全部通过才预留；任一不足抛 QUOTA_EXHAUSTED 并标明层。
+//
 // 幂等（§6）：
-//   * usage_rows.idem = `<turnId>:<source>`，重放返回已有行、不重复计费；
+//   * usage_rows.idem = `<turnId>:<source>`；没有 turnId 时用调用方给的 idem；
 //   * settle 只在 settled_at IS NULL 时落定，重复调用原样返回；
 //   * billing.cap 同一配额同一周期只写一次（事件 idem = quota + resets_at）。
 //
@@ -18,7 +21,7 @@ import { newRoostId } from './ids.ts'
 import { asInteger, asNonEmptyString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
 import type { Store } from './types.ts'
 
-export const QUOTA_SCOPES = ['tenant', 'workspace'] as const
+export const QUOTA_SCOPES = ['tenant', 'workspace', 'run', 'turn'] as const
 export type QuotaScope = (typeof QUOTA_SCOPES)[number]
 
 export const QUOTA_PERIODS = ['day', 'month'] as const
@@ -82,6 +85,10 @@ export interface UsageRow {
   cachedTokens: number | null
   toolCalls: number | null
   costUsd: number | null
+  /** runtime 采到的容器秒；聚合按行求和。 */
+  containerSeconds: number | null
+  /** 卷大小采样（字节）；是 gauge，聚合取窗口内最大值。 */
+  storageBytes: number | null
   source: string | null
   idem: string | null
 }
@@ -96,23 +103,40 @@ export interface EnsureQuotaInput {
 }
 
 export interface ReserveInput {
-  /** 已知配额 id 时直接用它；否则用 scope/scopeId/period/metric 定位。 */
+  /** 已知配额 id 时直接用它（只命中这一条）；否则用 scope/scopeId/period/metric 定位。 */
   quotaId?: string
+  /** 显式指定单层；不传时自动命中 workspace / run / turn 中所有已配置的层。 */
   scope?: QuotaScope
   scopeId?: string
   period?: QuotaPeriod
   metric?: QuotaMetric
   runId: string
   workspaceId: string
+  /** turn 层配额的 scope_id；不传则不检查 turn 层。 */
+  turnId?: string
   amount: number
   at?: number
 }
 
-export interface ReserveResult {
-  reservation: Reservation
+export interface ReserveLayerResult {
+  scope: QuotaScope
   quota: Quota
-  /** 扣掉本次预留后的剩余量（limit - used - reserved）。 */
+  reservation: Reservation
+  /** 该层预留后的剩余量（limit - used - reserved）。 */
   remaining: number
+}
+
+export interface ReserveResult {
+  /** 第一层（最外层）的预留，保留旧契约。 */
+  reservation: Reservation
+  /** 第一层（最外层）的配额，保留旧契约。 */
+  quota: Quota
+  /** 所有命中层里最小的剩余量（最紧的一层）；单层时与旧语义一致。 */
+  remaining: number
+  /** 本次命中的每一层，按 workspace → run → turn 顺序。 */
+  layers: ReserveLayerResult[]
+  reservations: Reservation[]
+  quotas: Quota[]
 }
 
 export interface SettleInput {
@@ -130,7 +154,8 @@ export interface SettleResult {
 export interface RecordUsageInput {
   workspaceId: string
   runId?: string | null
-  turnId: string
+  /** 没有 turnId（例如控制面采样）时必须给 idem。 */
+  turnId?: string | null
   botId?: string | null
   model?: string | null
   inputTokens?: number | null
@@ -138,7 +163,11 @@ export interface RecordUsageInput {
   cachedTokens?: number | null
   toolCalls?: number | null
   costUsd?: number | null
+  containerSeconds?: number | null
+  storageBytes?: number | null
   source: string
+  /** 幂等键；turnId 存在时优先用 `<turnId>:<source>`。 */
+  idem?: string | null
   at?: number
 }
 
@@ -150,6 +179,10 @@ export interface UsageTotals {
   tokens: number
   toolCalls: number
   costUsd: number
+  /** 容器秒按行求和。 */
+  containerSeconds: number
+  /** 存储是 gauge：窗口内最大值，不求和。 */
+  storageBytes: number
   rows: number
 }
 
@@ -161,6 +194,8 @@ export interface UsageGroup {
   tokens: number
   toolCalls: number
   costUsd: number
+  containerSeconds: number
+  storageBytes: number
   rows: number
 }
 
@@ -169,6 +204,32 @@ export interface UsageSummary {
   byBot: UsageGroup[]
   byModel: UsageGroup[]
 }
+
+export interface UsageDay {
+  /** UTC 日，YYYY-MM-DD。 */
+  date: string
+  inputTokens: number
+  outputTokens: number
+  cachedTokens: number
+  tokens: number
+  toolCalls: number
+  costUsd: number
+  containerSeconds: number
+  /** 当日最大值（gauge）。 */
+  storageBytes: number
+  rows: number
+}
+
+export interface UsageDailyQuery {
+  workspaceId: string
+  /** 最近多少天（含 at 所在 UTC 日），1..366。 */
+  days: number
+  /** 区间右端所在时刻，默认当前；用于测试与回放。 */
+  at?: number
+}
+
+/** usageDaily 最多回看 366 天。 */
+export const USAGE_DAILY_MAX_DAYS = 366
 
 interface QuotaRow {
   id: string
@@ -207,6 +268,8 @@ interface UsageRowRow {
   cached_tokens: number | bigint | null
   tool_calls: number | bigint | null
   cost_usd: number | null
+  container_seconds: number | null
+  storage_bytes: number | bigint | null
   source: string | null
   idem: string | null
 }
@@ -215,7 +278,9 @@ const QUOTA_COLUMNS = 'id, scope, scope_id, period, metric, limit_value, used_va
 const RESERVATION_COLUMNS =
   'id, run_id, workspace_id, quota_id, metric, amount, created_at, settled_at, actual'
 const USAGE_COLUMNS =
-  'id, at, workspace_id, run_id, turn_id, bot_id, model, input_tokens, output_tokens, cached_tokens, tool_calls, cost_usd, source, idem'
+  'id, at, workspace_id, run_id, turn_id, bot_id, model, input_tokens, output_tokens, cached_tokens, tool_calls, cost_usd, container_seconds, storage_bytes, source, idem'
+
+const DAY_MS = 86_400_000
 
 // ---- 配额 -------------------------------------------------------------------
 
@@ -340,70 +405,87 @@ export function reserve(store: Store, input: ReserveInput): ReserveResult {
   const req = asRecord(input, 'reserve', 'INVALID_INPUT')
   const runId = asNonEmptyString(req.runId, 'reserve.runId')
   const workspaceId = asNonEmptyString(req.workspaceId, 'reserve.workspaceId')
+  const turnId = optionalString(req.turnId, 'reserve.turnId')
   const amount = asInteger(req.amount, 'reserve.amount', 0)
   const at = readAt(req.at)
 
   return withSavepoint(store, 'roost_budget_reserve', () => {
-    const found = resolveQuota(store, req)
-    if (found === null) throw budgetError(BUDGET_ERROR_CODES.quotaNotFound, 'quota not configured')
-    const quota = refreshPeriod(store, found, at)
+    const found = resolveReserveTargets(store, req, { workspaceId, runId, turnId })
+    if (found.length === 0) throw budgetError(BUDGET_ERROR_CODES.quotaNotFound, 'quota not configured')
 
-    const remaining = quota.limitValue - quota.usedValue - quota.reserved
-    if (amount > remaining) {
-      throw budgetError(
-        BUDGET_ERROR_CODES.quotaExhausted,
-        `quota ${quota.id} (${quota.metric}/${quota.period}) has ${remaining} left, requested ${amount}`,
-        'FORBIDDEN',
-      )
+    // 先全部推进周期并检查，全部通过才开始扣账（savepoint 兜底，失败整体回滚）。
+    const targets = found.map((quota) => refreshPeriod(store, quota, at))
+    for (const quota of targets) {
+      const left = remainingOf(quota)!
+      if (amount > left) {
+        throw budgetError(
+          BUDGET_ERROR_CODES.quotaExhausted,
+          `layer=${quota.scope} quota ${quota.id} (${quota.metric}/${quota.period}) has ${left} left, requested ${amount}`,
+          'FORBIDDEN',
+        )
+      }
     }
 
-    const updated = store.db
-      .prepare(
-        'UPDATE quotas SET reserved = reserved + ? WHERE id = ? AND used_value = ? AND reserved = ?',
-      )
-      .run(amount, quota.id, quota.usedValue, quota.reserved)
-    if (toNumber(updated.changes) !== 1) {
-      throw budgetError(BUDGET_ERROR_CODES.invalid, `quota ${quota.id} changed during reservation`)
-    }
+    const layers: ReserveLayerResult[] = []
+    for (const quota of targets) {
+      const updated = store.db
+        .prepare(
+          'UPDATE quotas SET reserved = reserved + ? WHERE id = ? AND used_value = ? AND reserved = ?',
+        )
+        .run(amount, quota.id, quota.usedValue, quota.reserved)
+      if (toNumber(updated.changes) !== 1) {
+        throw budgetError(BUDGET_ERROR_CODES.invalid, `quota ${quota.id} changed during reservation`)
+      }
 
-    const id = newRoostId('rsv', at)
-    store.db
-      .prepare(`INSERT INTO reservations (${RESERVATION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`)
-      .run(id, runId, workspaceId, quota.id, quota.metric, amount, at)
+      const id = newRoostId('rsv', at)
+      store.db
+        .prepare(`INSERT INTO reservations (${RESERVATION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`)
+        .run(id, runId, workspaceId, quota.id, quota.metric, amount, at)
 
-    const next = getQuota(store, quota.id)!
-    appendEvent(store, {
-      at: new Date(at).toISOString(),
-      domain: 'billing',
-      kind: 'billing.reserve',
-      actor: { kind: 'control-plane', id: 'budget' },
-      subject: { kind: 'reservation', id },
-      audience: 'team',
-      idem: `billing.reserve:${id}`,
-      trace: { run: runId, workspace: workspaceId },
-      payload: {
-        reservationId: id,
-        quotaId: quota.id,
-        runId,
-        workspaceId,
+      const next = getQuota(store, quota.id)!
+      appendEvent(store, {
+        at: new Date(at).toISOString(),
+        domain: 'billing',
+        kind: 'billing.reserve',
+        actor: { kind: 'control-plane', id: 'budget' },
+        subject: { kind: 'reservation', id },
+        audience: 'team',
+        idem: `billing.reserve:${id}`,
+        trace: { run: runId, workspace: workspaceId, ...(turnId === null ? {} : { turn: turnId }) },
+        payload: {
+          reservationId: id,
+          quotaId: quota.id,
+          runId,
+          workspaceId,
+          layer: next.scope,
+          scope: next.scope,
+          scopeId: next.scopeId,
+          metric: next.metric,
+          period: next.period,
+          amount,
+          limitValue: next.limitValue,
+          usedValue: next.usedValue,
+          reserved: next.reserved,
+          remaining: remainingOf(next),
+          resetsAt: next.resetsAt,
+        },
+      })
+      maybeWriteCap(store, next, at)
+      layers.push({
         scope: next.scope,
-        scopeId: next.scopeId,
-        metric: next.metric,
-        period: next.period,
-        amount,
-        limitValue: next.limitValue,
-        usedValue: next.usedValue,
-        reserved: next.reserved,
-        remaining: next.limitValue - next.usedValue - next.reserved,
-        resetsAt: next.resetsAt,
-      },
-    })
-    maybeWriteCap(store, next, at)
+        quota: next,
+        reservation: getReservation(store, id)!,
+        remaining: remainingOf(next)!,
+      })
+    }
 
     return {
-      reservation: getReservation(store, id)!,
-      quota: next,
-      remaining: next.limitValue - next.usedValue - next.reserved,
+      reservation: layers[0]!.reservation,
+      quota: layers[0]!.quota,
+      remaining: Math.min(...layers.map((layer) => layer.remaining)),
+      layers,
+      reservations: layers.map((layer) => layer.reservation),
+      quotas: layers.map((layer) => layer.quota),
     }
   })
 }
@@ -481,7 +563,10 @@ export function settle(store: Store, input: SettleInput): SettleResult {
 
 // ---- 用量 -------------------------------------------------------------------
 
-/** 按 idem (`<turnId>:<source>`) 幂等；重放返回已有行且 deduped=true，不写第二条事件。 */
+/**
+ * 按 idem 幂等：有 turnId 时 `<turnId>:<source>`，否则用调用方给的 idem。
+ * 重放返回已有行且 deduped=true，不写第二条事件。
+ */
 export function recordUsage(
   store: Store,
   input: RecordUsageInput,
@@ -489,9 +574,13 @@ export function recordUsage(
   assertOpen(store)
   const req = asRecord(input, 'usage', 'INVALID_INPUT')
   const workspaceId = asNonEmptyString(req.workspaceId, 'usage.workspaceId')
-  const turnId = asNonEmptyString(req.turnId, 'usage.turnId')
   const source = asNonEmptyString(req.source, 'usage.source')
-  const idem = `${turnId}:${source}`
+  const turnId = optionalString(req.turnId, 'usage.turnId')
+  const explicitIdem = optionalString(req.idem, 'usage.idem')
+  if (turnId === null && explicitIdem === null) {
+    throw new StoreError('INVALID_INPUT', 'usage.turnId or usage.idem is required')
+  }
+  const idem = turnId === null ? explicitIdem! : `${turnId}:${source}`
   const at = readAt(req.at)
 
   const existing = usageByIdem(store, idem)
@@ -511,6 +600,8 @@ export function recordUsage(
     cachedTokens: optionalCount(req.cachedTokens, 'usage.cachedTokens'),
     toolCalls: optionalCount(req.toolCalls, 'usage.toolCalls'),
     costUsd: optionalCost(req.costUsd),
+    containerSeconds: optionalSeconds(req.containerSeconds, 'usage.containerSeconds'),
+    storageBytes: optionalCount(req.storageBytes, 'usage.storageBytes'),
     source,
     idem,
   }
@@ -519,7 +610,9 @@ export function recordUsage(
     store.db.exec('SAVEPOINT roost_record_usage')
     try {
       store.db
-        .prepare(`INSERT INTO usage_rows (${USAGE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .prepare(
+          `INSERT INTO usage_rows (${USAGE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
         .run(
           row.id,
           row.at,
@@ -533,6 +626,8 @@ export function recordUsage(
           row.cachedTokens,
           row.toolCalls,
           row.costUsd,
+          row.containerSeconds,
+          row.storageBytes,
           row.source,
           row.idem,
         )
@@ -557,6 +652,8 @@ export function recordUsage(
           cachedTokens: row.cachedTokens,
           toolCalls: row.toolCalls,
           costUsd: row.costUsd,
+          containerSeconds: row.containerSeconds,
+          storageBytes: row.storageBytes,
           source,
         },
       })
@@ -604,6 +701,63 @@ export function sumUsage(
   }
 
   return { totals, byBot: sortGroups(bots), byModel: sortGroups(models) }
+}
+
+/**
+ * 按 UTC 日聚合最近 `days` 天（含 at 所在日），最旧 → 最新，空日补零。
+ * 容器秒求和；存储按日取最大值（gauge）。
+ */
+export function usageDaily(store: Store, query: UsageDailyQuery): UsageDay[] {
+  assertOpen(store)
+  const req = asRecord(query, 'usage.daily', 'INVALID_INPUT')
+  const workspaceId = asNonEmptyString(req.workspaceId, 'usage.workspaceId')
+  const days = asInteger(req.days, 'usage.days', 1)
+  if (days > USAGE_DAILY_MAX_DAYS) {
+    throw budgetError(BUDGET_ERROR_CODES.invalid, `usage.days must be <= ${USAGE_DAILY_MAX_DAYS}`)
+  }
+  const at = readAt(req.at)
+
+  const endIndex = Math.floor(at / DAY_MS)
+  const startIndex = endIndex - days + 1
+  const rows = store.db
+    .prepare(
+      `SELECT CAST(at / ${DAY_MS} AS INTEGER) AS day_index,
+              COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+              COALESCE(SUM(tool_calls), 0)    AS tool_calls,
+              COALESCE(SUM(cost_usd), 0)      AS cost_usd,
+              COALESCE(SUM(container_seconds), 0) AS container_seconds,
+              COALESCE(MAX(storage_bytes), 0) AS storage_bytes,
+              COUNT(*) AS rows
+         FROM usage_rows
+        WHERE workspace_id = ? AND at >= ? AND at < ?
+        GROUP BY day_index`,
+    )
+    .all(workspaceId, startIndex * DAY_MS, (endIndex + 1) * DAY_MS) as Array<Record<string, unknown>>
+
+  const byIndex = new Map<number, UsageDay>()
+  for (const row of rows) {
+    const index = toNumber(row.day_index)
+    byIndex.set(index, {
+      date: dayLabel(index),
+      inputTokens: toNumber(row.input_tokens),
+      outputTokens: toNumber(row.output_tokens),
+      cachedTokens: toNumber(row.cached_tokens),
+      tokens: toNumber(row.input_tokens) + toNumber(row.output_tokens) + toNumber(row.cached_tokens),
+      toolCalls: toNumber(row.tool_calls),
+      costUsd: toNumber(row.cost_usd),
+      containerSeconds: toNumber(row.container_seconds),
+      storageBytes: toNumber(row.storage_bytes),
+      rows: toNumber(row.rows),
+    })
+  }
+
+  const out: UsageDay[] = []
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    out.push(byIndex.get(index) ?? emptyDay(dayLabel(index)))
+  }
+  return out
 }
 
 // ---- 软限 / 准入 ------------------------------------------------------------
@@ -658,15 +812,66 @@ export function periodEnd(period: QuotaPeriod, at: number): number {
 
 // ---- 内部 --------------------------------------------------------------------
 
-function resolveQuota(store: Store, req: Record<string, unknown>): Quota | null {
+/**
+ * 解析本次 reserve 要检查的层：
+ *   * 给了 quotaId：只命中那一条；
+ *   * 显式 scope：只查这一层（scopeId 缺省时按层推导：workspace→workspaceId、run→runId、turn→turnId）；
+ *   * 只给 scopeId（旧调用形态）：视作 workspace 单层；
+ *   * 都不给：命中 workspace / run / turn 中所有已配置的层。
+ */
+function resolveReserveTargets(
+  store: Store,
+  req: Record<string, unknown>,
+  ids: { workspaceId: string; runId: string; turnId: string | null },
+): Quota[] {
   if (req.quotaId !== undefined && req.quotaId !== null) {
-    return getQuota(store, asNonEmptyString(req.quotaId, 'reserve.quotaId'))
+    const quota = getQuota(store, asNonEmptyString(req.quotaId, 'reserve.quotaId'))
+    return quota === null ? [] : [quota]
   }
-  const scope = readScope(req.scope ?? 'workspace')
-  const scopeId = asNonEmptyString(req.scopeId, 'reserve.scopeId')
+
   const period = readPeriod(req.period ?? 'day')
   const metric = readMetric(req.metric)
-  return findQuotaTuple(store, scope, scopeId, period, metric)
+
+  if (req.scope !== undefined && req.scope !== null) {
+    const scope = readScope(req.scope)
+    const scopeId = explicitScopeId(req.scopeId, scope, ids)
+    const quota = findQuotaTuple(store, scope, scopeId, period, metric)
+    return quota === null ? [] : [quota]
+  }
+
+  if (req.scopeId !== undefined && req.scopeId !== null) {
+    const scopeId = asNonEmptyString(req.scopeId, 'reserve.scopeId')
+    const quota = findQuotaTuple(store, 'workspace', scopeId, period, metric)
+    return quota === null ? [] : [quota]
+  }
+
+  const targets: Quota[] = []
+  const workspaceQuota = findQuotaTuple(store, 'workspace', ids.workspaceId, period, metric)
+  if (workspaceQuota !== null) targets.push(workspaceQuota)
+  const runQuota = findQuotaTuple(store, 'run', ids.runId, period, metric)
+  if (runQuota !== null) targets.push(runQuota)
+  if (ids.turnId !== null) {
+    const turnQuota = findQuotaTuple(store, 'turn', ids.turnId, period, metric)
+    if (turnQuota !== null) targets.push(turnQuota)
+  }
+  return targets
+}
+
+function explicitScopeId(
+  value: unknown,
+  scope: QuotaScope,
+  ids: { workspaceId: string; runId: string; turnId: string | null },
+): string {
+  if (value !== undefined && value !== null) return asNonEmptyString(value, 'reserve.scopeId')
+  if (scope === 'workspace') return ids.workspaceId
+  if (scope === 'run') return ids.runId
+  if (scope === 'turn') {
+    if (ids.turnId === null) {
+      throw new StoreError('INVALID_INPUT', 'reserve.turnId is required for turn scope')
+    }
+    return ids.turnId
+  }
+  throw new StoreError('INVALID_INPUT', 'reserve.scopeId is required for tenant scope')
 }
 
 function findQuotaTuple(
@@ -740,7 +945,17 @@ function traceFor(row: UsageRow): Record<string, unknown> {
 }
 
 function emptyTotals(): UsageTotals {
-  return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, tokens: 0, toolCalls: 0, costUsd: 0, rows: 0 }
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    tokens: 0,
+    toolCalls: 0,
+    costUsd: 0,
+    containerSeconds: 0,
+    storageBytes: 0,
+    rows: 0,
+  }
 }
 
 function addToTotals(totals: UsageTotals, row: UsageRow): void {
@@ -750,7 +965,30 @@ function addToTotals(totals: UsageTotals, row: UsageRow): void {
   totals.tokens += (row.inputTokens ?? 0) + (row.outputTokens ?? 0) + (row.cachedTokens ?? 0)
   totals.toolCalls += row.toolCalls ?? 0
   totals.costUsd += row.costUsd ?? 0
+  totals.containerSeconds += row.containerSeconds ?? 0
+  // 存储是 gauge：取窗口内最大值，不叠加。
+  totals.storageBytes = Math.max(totals.storageBytes, row.storageBytes ?? 0)
   totals.rows += 1
+}
+
+function emptyDay(date: string): UsageDay {
+  return {
+    date,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    tokens: 0,
+    toolCalls: 0,
+    costUsd: 0,
+    containerSeconds: 0,
+    storageBytes: 0,
+    rows: 0,
+  }
+}
+
+/** day_index（UTC 毫秒 / 一天）→ YYYY-MM-DD。 */
+function dayLabel(index: number): string {
+  return new Date(index * DAY_MS).toISOString().slice(0, 10)
 }
 
 function addToGroup(groups: Map<string, UsageGroup>, key: string | null, row: UsageRow): void {
@@ -783,6 +1021,15 @@ function optionalCost(value: unknown): number | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new StoreError('INVALID_INPUT', 'usage.costUsd must be a non-negative number when present')
+  }
+  return value
+}
+
+/** 容器秒是 REAL：允许小数，只要非负有限。 */
+function optionalSeconds(value: unknown, label: string): number | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new StoreError('INVALID_INPUT', `${label} must be a non-negative number when present`)
   }
   return value
 }
@@ -861,6 +1108,8 @@ function rowToUsage(row: unknown): UsageRow {
     cachedTokens: r.cached_tokens === null ? null : toNumber(r.cached_tokens),
     toolCalls: r.tool_calls === null ? null : toNumber(r.tool_calls),
     costUsd: r.cost_usd,
+    containerSeconds: r.container_seconds,
+    storageBytes: r.storage_bytes === null ? null : toNumber(r.storage_bytes),
     source: r.source,
     idem: r.idem,
   }
