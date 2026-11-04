@@ -40,6 +40,13 @@ import {
   handleRemoveRoomMember
 } from './rooms-routes-ext.ts'
 import {
+  handleListWorkspaceMembers,
+  handleRemoveWorkspaceMember,
+  handleSetWorkspaceMemberRole,
+  requireWorkspaceRole,
+  workspaceIdForRoom
+} from './members-routes.ts'
+import {
   handleBotCreateRoom,
   handleDecideApproval,
   handleListApprovals,
@@ -1025,6 +1032,14 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   const roomId = roomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+
+  // 发消息：viewer 只读（auth.md §5）。memory port 没有成员表时跳过（requireWorkspaceRole 内处理）。
+  const workspaceId = workspaceIdForRoom(ctx, roomId)
+  if (workspaceId !== null) {
+    const gate = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin', 'member'])
+    if (!gate.ok) return sendError(res, gate.status, gate.code, gate.message)
+  }
+
   try {
     const message = await ctx.store.postMessage({
       accountId: auth.session.accountId,
@@ -1234,6 +1249,42 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     notFound(req, res, method, path)
+    return
+  }
+
+  // workspace 成员与角色（auth.md §5/§10；M5-5.3.3）。
+  if (/^\/api\/workspaces\/[^/]+\/members$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/members$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null || workspaceId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace members path')
+      return
+    }
+    await handleListWorkspaceMembers(ctx, req, res, workspaceId)
+    return
+  }
+
+  if (/^\/api\/workspaces\/[^/]+\/members\/[^/]+$/.test(path)) {
+    if (method !== 'PATCH' && method !== 'DELETE') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/members\/([^/]+)$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    const accountId = match === null ? null : safeDecode(match[2]!)
+    if (workspaceId === null || workspaceId === '' || accountId === null || accountId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace member path')
+      return
+    }
+    if (method === 'PATCH') {
+      await handleSetWorkspaceMemberRole(ctx, req, res, workspaceId, accountId)
+      return
+    }
+    await handleRemoveWorkspaceMember(ctx, req, res, workspaceId, accountId)
     return
   }
 

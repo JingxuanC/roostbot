@@ -28,6 +28,7 @@ import type { StorePort } from './port.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { createDmRoom } from '../../../packages/store/src/dm.ts'
 import { openKickoffRound } from './kickoff.ts'
+import { requireWorkspaceRole, workspaceIdForBot } from './members-routes.ts'
 
 export interface BotsRouteContext {
   store: StorePort
@@ -112,6 +113,10 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
     workspaceId = first.id
   }
 
+  // 建 Bot：owner/admin（auth.md §5）。
+  const gate = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin'])
+  if (!gate.ok) return sendError(res, gate.status, gate.code, gate.message)
+
   const role = readOptionalText(body['role'], BOT_LIMITS.roleMax, true)
   if (role === INVALID) return sendError(res, 400, 'bot.invalid', `role must be at most ${BOT_LIMITS.roleMax} characters`)
   const persona = readOptionalText(body['persona'], BOT_LIMITS.personaMax, true)
@@ -181,6 +186,7 @@ export async function handlePatchBot(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const botId = botIdFromPath(url.pathname)
   if (botId === null) return sendError(res, 404, 'not_found', 'malformed bot path')
+  if (!authorizeBotWrite(ctx, res, botId, auth.session.accountId)) return
 
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
@@ -218,6 +224,7 @@ export async function handleDeleteBot(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const botId = botIdFromPath(url.pathname)
   if (botId === null) return sendError(res, 404, 'not_found', 'malformed bot path')
+  if (!authorizeBotWrite(ctx, res, botId, auth.session.accountId)) return
 
   try {
     await ctx.store.deleteBot({ accountId: auth.session.accountId, botId, now: ctx.now() })
@@ -237,6 +244,7 @@ export async function handleRestoreBot(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const botId = botRestoreIdFromPath(url.pathname)
   if (botId === null) return sendError(res, 404, 'not_found', 'malformed bot restore path')
+  if (!authorizeBotWrite(ctx, res, botId, auth.session.accountId)) return
 
   try {
     const bot = await ctx.store.restoreBot({ accountId: auth.session.accountId, botId, now: ctx.now() })
@@ -323,6 +331,26 @@ function readOptionalText(value: unknown, max: number, allowEmpty: boolean): str
   if (text === '') return allowEmpty ? '' : INVALID
   if (text.length > max) return INVALID
   return text
+}
+
+/**
+ * Bot 写操作（PATCH/DELETE/restore）需要 owner/admin。
+ * Bot 不存在或 memory port 没有成员表时放行，交给 store 报 404 / 保持 v0 行为。
+ */
+function authorizeBotWrite(
+  ctx: BotsRouteContext,
+  res: ServerResponse,
+  botId: string,
+  accountId: string,
+): boolean {
+  const workspaceId = workspaceIdForBot(ctx, botId)
+  if (workspaceId === null) return true
+  const gate = requireWorkspaceRole(ctx, workspaceId, accountId, ['owner', 'admin'])
+  if (!gate.ok) {
+    sendError(res, gate.status, gate.code, gate.message)
+    return false
+  }
+  return true
 }
 
 function sendBotFailure(res: ServerResponse, err: unknown): void {

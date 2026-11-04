@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：70 / 152 · 进行中：3
+- 完成：71 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -111,7 +111,7 @@
 
 - [ ] 5.3.1 注册/登录（邮箱+密码 Argon2id）/邮箱验证码
 - [ ] 5.3.2 OIDC（Google/GitHub）
-- [ ] 5.3.3 邀请与角色（owner/admin/member/viewer）
+- [x] 5.3.3 角色与成员管理（owner/admin/member/viewer；邀请需账号体系，随 5.3.1 做）
 - [x] 5.3.4 设备列表/吊销
 - [x] 5.3.5 会话续期（<15 天续到 180 天封顶）
 - [ ] 5.3.6 token 改 HttpOnly cookie + CSRF 双提交
@@ -256,3 +256,4 @@
 - 2026-11-04 M5 审批前端（前端 agent）：卡片展示 action/target/consequence + 请求方，已决策留历史行；「需要你」角标改真实 pending 数；新增 `#/settings` 长期授权管理（列表/创建/撤销，403 提示仅 owner/admin）。`apps/web` 70 测试 + CDP 手工验收通过。
 - 2026-11-04 M5 插件市场第一批（后端 agent）：迁移 0013（4 张表 + `plugin_installs.state`）、目录/详情/版本/预检 API、安装记录与 `plugin.install/update/uninstall` 事件、发布者白名单与 A/B tier 校验；升级后 state 回到 `installing` 等第二批 sync。462 测试全绿。沙箱 sync/重启/冒烟/快照回滚留第二批。
 - 2026-11-04 M6 产物前端（前端 agent）：消息附件按 kind 渲染（图片懒加载/灯箱、PDF 卡片、HTML/SVG 沙箱 iframe、CSV 表格预览、代码块折叠、未知类型下载），`getBlob` 带 Bearer 读取，blob URL 统一登记与回收；86 前端测试 + 无头 Chrome 六种附件实测通过。6.2.5 的 PDF 首页缩略图仍未做。
+- 2026-11-04 M5 成员与角色（后端 agent）：成员列表/改角色/移除 API，admin 不能授予 owner，最后一个 owner 不能降级/移除，`auth.role.changed` / `auth.member.removed` 事件；Bot 写操作、房间设置、viewer 发消息补齐 403 校验。482 测试全绿（后端 349）。邀请待账号体系。

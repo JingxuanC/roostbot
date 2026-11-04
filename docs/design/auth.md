@@ -186,3 +186,23 @@ CREATE TABLE invites (
 **bootstrap 例外（配对码签发）**：仅当请求来自回环地址（`127.0.0.1` / `::1` / `::ffff:127.0.0.1`）且该账号尚无任何有效会话时，才允许不带 Bearer 签发配对码；账号一旦有会话，再签发必须带该账号的有效 Bearer。带了但无效的 Bearer 不会回退到 bootstrap。
 
 同源伺服：`apps/api` 同时伺服 `apps/web`（`GET /`），所以不需要 CORS；`?api=` 跨源在 v0 仍会被浏览器拦。
+
+## 13. 实现补充：成员与角色（M5-5.3.3，邀请除外）
+
+§10 只列了邀请接口；v0 还没有账号注册/邮箱体系，邀请留到 5.3.1。这一批先补「已有成员」的管理与角色强制：
+
+| 方法 | 路径 | 需要的角色 | 说明 |
+|---|---|---|---|
+| GET | `/api/workspaces/:id/members` | 该 workspace 任意成员 | 非成员返回 404，不泄漏 workspace 是否存在 |
+| PATCH | `/api/workspaces/:id/members/:accountId` | owner/admin | `{role}`；admin 不能授予 owner；最后一个 owner 不能降级 → 409 `workspace.last_owner` |
+| DELETE | `/api/workspaces/:id/members/:accountId` | owner/admin | 移除自己允许，但最后一个 owner 不能移除 → 409 |
+
+实现细节与 §5/§10 的差异：
+
+- **`auth.member.removed` 是实现补充**：§5 只规定角色变更写 `auth.role.changed`；移除成员没有对应事件，本批补写 `auth.member.removed`（actor=user/by，subject=`{kind:'member',id:accountId}`，payload `{workspaceId, role}`）。
+- **`auth.role.changed` 形状**：actor=`{kind:'user',id:by}`，subject=`{kind:'member',id:accountId}`，payload `{workspaceId, from, to}`；角色没变时不写事件。
+- **行与事件同生共死**：角色变更/移除与事件写入在同一个 savepoint；事件写失败会回滚成员行。
+- **`getWorkspaceRole` 不默认 viewer**：非成员返回 `null`；viewer 只用于展示，不能拿缺省值做授权（§5 的「内部越权」约束）。
+- **角色强制范围（只做确定项）**：Bot 创建/更新/删除/恢复 = owner/admin；房间设置/删除/成员增删 = owner/admin；建房间 = member 及以上；发消息（`POST /api/rooms/:id/messages`）= member 及以上，viewer → 403 `forbidden`。审批决策、配对码、插件安装、附件维持原语义；`POST /api/rooms/:id/say` 是 runtime token 内部接口，不适用用户角色，未改。
+- **memory port 没有成员表**：成员接口返回 503 `runtime.not_configured`；其余写接口在无 `rawStore` 时跳过角色校验，保持 v0 行为。
+- **未做**：邀请（email + 角色绑定）、成员加入 API、`viewer` 在前端的只读 UI（前端由另一个 agent 负责）。

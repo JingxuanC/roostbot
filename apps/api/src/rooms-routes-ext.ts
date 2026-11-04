@@ -29,6 +29,7 @@ import {
 import type { StorePort } from './port.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { openKickoffRound } from './kickoff.ts'
+import { requireWorkspaceRole, workspaceIdForRoom } from './members-routes.ts'
 
 export interface RoomsExtContext {
   store: StorePort
@@ -70,6 +71,10 @@ export async function handleCreateRoomExtended(
     if (first === undefined) return sendError(res, 409, 'no_workspace', 'create a workspace before a room')
     workspaceId = first.id
   }
+
+  // 建房间：member 及以上；viewer 只读（auth.md §5）。
+  const gate = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin', 'member'])
+  if (!gate.ok) return sendError(res, gate.status, gate.code, gate.message)
 
   // 没带 memberBotIds = v0 的空房间路径；显式带了就必须满足 M4 的建群规则。
   if (body['memberBotIds'] === undefined) {
@@ -205,6 +210,7 @@ export async function handlePatchRoom(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const roomId = roomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  if (!authorizeRoomWrite(ctx, res, roomId, auth.session.accountId)) return
 
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
@@ -278,6 +284,7 @@ export async function handleDeleteRoom(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const roomId = roomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  if (!authorizeRoomWrite(ctx, res, roomId, auth.session.accountId)) return
 
   try {
     // 删除语义在 store 层：rooms/members/rounds/seen/sessions 投影行清掉，
@@ -299,6 +306,7 @@ export async function handleAddRoomMembers(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const roomId = roomMemberCollectionPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room members path')
+  if (!authorizeRoomWrite(ctx, res, roomId, auth.session.accountId)) return
 
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
@@ -336,6 +344,7 @@ export async function handleRemoveRoomMember(
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
   const target = roomMemberItemPath(url.pathname)
   if (target === null) return sendError(res, 404, 'not_found', 'malformed room member path')
+  if (!authorizeRoomWrite(ctx, res, target.roomId, auth.session.accountId)) return
 
   try {
     const room = await ctx.store.removeRoomMember({
@@ -401,6 +410,26 @@ function readBotIds(value: unknown): string[] | null {
     if (!out.includes(id)) out.push(id)
   }
   return out
+}
+
+/**
+ * 房间设置/删除/成员增删：owner/admin（auth.md §5）。
+ * 房间不存在或 memory port 没有成员表时放行，交给 store 报 404 / 保持 v0 行为。
+ */
+function authorizeRoomWrite(
+  ctx: RoomsExtContext,
+  res: ServerResponse,
+  roomId: string,
+  accountId: string,
+): boolean {
+  const workspaceId = workspaceIdForRoom(ctx, roomId)
+  if (workspaceId === null) return true
+  const gate = requireWorkspaceRole(ctx, workspaceId, accountId, ['owner', 'admin'])
+  if (!gate.ok) {
+    sendError(res, gate.status, gate.code, gate.message)
+    return false
+  }
+  return true
 }
 
 function sendRoomFailure(res: ServerResponse, err: unknown): void {

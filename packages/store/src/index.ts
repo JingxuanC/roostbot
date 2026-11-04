@@ -23,6 +23,23 @@ export {
 
 export { applyMigrations, discoverMigrations } from './migrations.ts'
 
+// ---- M5：workspace 成员与角色 ------------------------------------------------
+export {
+  MEMBER_ERROR_CODES,
+  WORKSPACE_ROLES,
+  getWorkspaceMember,
+  getWorkspaceRole,
+  listWorkspaceMembers,
+  removeWorkspaceMember,
+  setWorkspaceMemberRole,
+} from './members.ts'
+export type {
+  RemoveWorkspaceMemberInput,
+  SetWorkspaceMemberRoleInput,
+  WorkspaceMember,
+  WorkspaceRole,
+} from './members.ts'
+
 export type {
   Actor,
   ClaimPairingInput,
