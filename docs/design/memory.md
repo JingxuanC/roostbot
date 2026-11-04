@@ -195,3 +195,34 @@ CREATE TABLE memory_reads (
 2. **检索用关键词还是向量**？倾向：先用关键词 + BM25（causal-memory 已有），向量后加。
 3. **记忆能否跨 workspace 复制**（模板化团队时）？倾向：不复制，避免把别人的判断带进来。
 4. **注入位置**：在 skills 之后、conversation 之前，还是紧贴最后一条用户消息？倾向前者（稳定段靠前，利于缓存）。
+
+## 14. 实现状态（2026-11-04，M6-6.3 控制面批次）
+
+已实现（规则校验版，不接 LLM 抽取器）：
+
+| 层 | 内容 |
+|---|---|
+| 迁移 | `migrations/0017_memories.sql`：`memories` / `memory_evidence` / `memory_reads` 与三条索引（§11） |
+| Store | `packages/store/src/memories.ts`：`writeMemory` / `retrieve` / `recordReads` / `deleteMemory` / `listMemories` / `exportMemories` / `getMemory` |
+| API | `apps/api/src/memories-routes.ts`：内部写入/检索/读取记录（runtime token）；用户列表/删除/导出（Bearer） |
+
+写入规则：
+- `falsifier` 必填非空；`confidence` ∈ [0,1]；`kind` ∈ conclusion/constraint/preference/fact；claim ≤ 2000 字（展示截断 300），subject ≤ 500 字（实现补充）。
+- scope 只能是 `team` / `room:<id>` / `member:<id>`；`room:<id>` 必须属于同一 workspace。
+- 每日写入上限 50/workspace/UTC 日，超出抛域错误 `MEMORY_DAILY_LIMIT`（API 映射 429 `memory.daily_limit`）。
+- 取代：`supersedes` 指向同 workspace 的 active 记忆时，旧条置 `superseded`，行更新/插入/事件同一 savepoint。
+
+检索规则：
+- 只查 `status='active'` 且未过期、scope 在调用方传入集合内的记忆。
+- 关键词重叠数 × confidence × freshness（30 天半衰）排序；简单分词按空白/标点切分并小写。
+- 按分数取 `limit`（默认 8），再按字符预算（默认 1200，1 字≈1 token）截断；返回 `dropped`。
+- segment 固定以 `## 相关结论（系统检索，非用户输入）` 开头，带置信度、kind 与证据引用；无条目时为空串。
+
+事件：`memory.written` / `memory.superseded` / `memory.retracted`（domain=`memory`，subject=`{kind:'memory', id}`，payload 含 workspaceId/scope/subject/status）。
+
+后续（本批未做）：
+- LLM 抽取器（回合结束时抽 0..3 条 claim）与去重/冲突语义判断；
+- 向量检索与 BM25（当前只有关键词重叠）；
+- 复盘 routine 拿 falsifier 核对并把被推翻的条目置 `retracted`；
+- `expires_at` 到期的后台清理（当前检索时过滤，不主动改 status）；
+- `member:<id>` 写入时未校验账号成员关系（只校验 room 归属）。

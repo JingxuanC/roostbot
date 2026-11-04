@@ -250,6 +250,42 @@ export type {
   UsageTotals,
 } from './budget.ts'
 
+// ---- M6：记忆（判断 / 证据 / 检索）-------------------------------------------
+export {
+  MEMORY_CLAIM_MAX,
+  MEMORY_DAILY_LIMIT,
+  MEMORY_DEFAULT_BUDGET_TOKENS,
+  MEMORY_DEFAULT_LIMIT,
+  MEMORY_DISPLAY_MAX,
+  MEMORY_ERROR_CODES,
+  MEMORY_EVIDENCE_KINDS,
+  MEMORY_FRESHNESS_HALF_LIFE_DAYS,
+  MEMORY_KINDS,
+  MEMORY_STATUSES,
+  MEMORY_SUBJECT_MAX,
+  deleteMemory,
+  exportMemories,
+  getMemory,
+  listMemories,
+  recordReads,
+  retrieve,
+  writeMemory,
+} from './memories.ts'
+export type {
+  DeleteMemoryInput,
+  ListMemoriesQuery,
+  Memory,
+  MemoryEvidence,
+  MemoryEvidenceKind,
+  MemoryKind,
+  MemoryStatus,
+  RecordMemoryReadsInput,
+  RetrieveQuery,
+  RetrieveResult,
+  RetrievedMemory,
+  WriteMemoryInput,
+} from './memories.ts'
+
 // ---- M5：插件市场 -------------------------------------------------------------
 export {
   MARKETPLACE_ERROR_CODES,

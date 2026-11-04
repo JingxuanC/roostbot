@@ -72,6 +72,14 @@ import {
   handlePatchQuota,
 } from './budget-routes.ts'
 import {
+  handleDeleteMemory,
+  handleExportMemories,
+  handleInternalRecordReads,
+  handleInternalRetrieve,
+  handleInternalWriteMemory,
+  handleListMemories,
+} from './memories-routes.ts'
+import {
   handleCreateSchedule,
   handleDeleteSchedule,
   handleInternalSchedulerTick,
@@ -2049,6 +2057,61 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleGetUsage(ctx, req, res, url)
+    return
+  }
+
+  // 记忆：内部写入 / 检索 / 读取记录，用户列表 / 删除 / 导出（memory.md §4–§9）。
+  if (path === '/api/internal/memories') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalWriteMemory(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/internal/memories/retrieve') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalRetrieve(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/internal/memories/reads') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalRecordReads(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/memories/export') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleExportMemories(ctx, req, res, url)
+    return
+  }
+
+  if (path === '/api/memories') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListMemories(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/memories\/[^/]+$/.test(path)) {
+    if (method !== 'DELETE') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleDeleteMemory(ctx, req, res, url)
     return
   }
 

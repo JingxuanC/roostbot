@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：104 / 152 · 进行中：1
+- 完成：108 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -159,11 +159,11 @@
 
 ### 6.3 记忆（`memory.md`）
 
-- [ ] 6.3.1 causal-memory 接入（作用域读写）
+- [x] 6.3.1 记忆作用域读写（本地 SQLite 后端，接口可替换为 causal-memory）
 - [ ] 6.3.2 claim 抽取器（falsifier 必填、每日上限）
-- [ ] 6.3.3 检索与注入（预算 1200 token / 8 条）
-- [ ] 6.3.4 冲突 supersede 与审计
-- [ ] 6.3.5 删除/导出（按 scope/subject）
+- [x] 6.3.3 检索与注入（预算 1200 token / 8 条 / 单条 300 字）
+- [x] 6.3.4 冲突 supersede 与审计（同事务事件）
+- [x] 6.3.5 删除/导出（软删 retracted；按 workspace 导出）
 - [ ] 6.3.6 复盘 routine 清理被否证条目
 
 ### 6.4 预算与计量（`budget.md`）
@@ -271,3 +271,4 @@
 - 2026-11-04 M6 部署与文档（部署 agent）：`deploy/`（systemd/launchd、nginx 同源反代、env.example、backup/restore 已往返验证）、`deployment.md`/`slo.md`/`compliance.md`/`attachments-ui.md`、runtime-contract 补 DSH Web 与 Sandbox 会话。**发现两个部署阻塞**：公网 Origin 不被 `isAllowedOrigin` 接受、`/api/config` 不推导 https/8443；6.7.3 暂不勾，随后端修复。
 - 2026-11-04 M6 连接器 UI（前端 agent）：`#/connectors` 卡片（连接/断开/状态）、按 Bot 的 read/write/actions 授权表单、空目录与 501 网关未配置降级。全仓 601 测试全绿（前端 170）。
 - 2026-11-04 公网部署阻塞修复（后端 agent）：CSRF Origin 校验支持「同源（X-Forwarded-Proto + Host）」与 `ROOST_ALLOWED_ORIGINS` 精确白名单，仍拒绝 `null`/`*`；`/api/config` 推导 https 与 `ROOST_DSH_PROXY_PUBLIC_PORT`/`ROOST_DSH_PUBLIC_ORIGIN`；`/healthz` 执行 `SELECT 1`，失败 503 `db:error`。436 后端测试全绿；deploy/README 已同步。
+- 2026-11-04 M6 记忆系统（后端 agent）：迁移 0017（memories/memory_evidence/memory_reads）、falsifier 必填、scope 可见性、supersede 原子替换、关键词×置信度×新鲜度检索与 1200 token/8 条预算、50/日写入上限、软删与导出、`memory.*` 事件。458 后端测试全绿。LLM 抽取器、BM25/向量、复盘清理留后续。
