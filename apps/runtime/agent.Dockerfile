@@ -14,9 +14,13 @@ ARG DSH_VERSION=0.2.1-rc.5
 RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" && npm cache clean --force && dsh --version
 
 COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
+# room-agent 的 dsh web 子进程封装（插件面板容器，ADR 0004）；缺这个文件 room-agent 起不来。
+COPY apps/runtime/dsh-web.mjs /opt/roost/dsh-web.mjs
 
 # 会话日志跟工作区走（停止/启动沙箱不丢），见 docs/spikes/0002。
 ENV DSH_HOME=/workspace/.dsh
+# 沙箱里默认开面板容器（127.0.0.1:4099）；控制面/用户可设 ROOST_DSH_WEB=0 关掉。
+ENV ROOST_DSH_WEB=1
 # 沙箱边界由 OpenShell 提供；DSH 自己的审批在沙箱里只会卡住 Bot。
 ENV DSH_PERMISSION_MODE=danger-full-access
 ENV HOME=/workspace

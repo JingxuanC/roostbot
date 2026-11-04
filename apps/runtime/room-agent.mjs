@@ -16,6 +16,14 @@
 import { spawn } from 'node:child_process'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 
+import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
+
+/** 环境变量里的端口：非法/未设返回 undefined，交给默认值。 */
+function readPort(value) {
+  const parsed = Number.parseInt(String(value ?? ''), 10)
+  return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : undefined
+}
+
 /** 换行分隔的 JSON-RPC 2.0 客户端（stdio）。 */
 export class JsonRpcProcessClient {
   constructor(child) {
@@ -210,8 +218,8 @@ export async function startRoomAgent(options) {
   const idleWaiters = new Map()
   const lastStatus = new Map()
   const prepared = new Set()
-  // 单成员回复超时取 ROUND_LIMITS.replyTimeoutMs（240s）。沙箱镜像只拷本文件，
-  // 不能 import packages/contract，所以这里与契约常量保持同值。
+  // 单成员回复超时取 ROUND_LIMITS.replyTimeoutMs（240s）。沙箱镜像只拷 apps/runtime 下的
+  // 文件，不能 import packages/contract，所以这里与契约常量保持同值。
   const turnTimeoutMs = options.turnTimeoutMs ?? 240_000
   // 可选 stop 轮询（GET /api/internal/rooms/:id/round）：接口没有 stopping 字段/
   // 404 时自动关闭，行为与之前完全一致。0 = 不轮询。
@@ -232,6 +240,35 @@ export async function startRoomAgent(options) {
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk) => process.stderr.write(chunk))
   const rpc = new JsonRpcProcessClient(child)
+
+  // 插件面板容器（ADR 0004 / wave1 §C）：沙箱里额外一个 `dsh web`，只绑 127.0.0.1:4099。
+  // 后台启动、**不阻塞 SDK 会话**：面板容器起不来时只记日志（dsh-web 里打 reason），
+  // 房间对话照常。ROOST_DSH_WEB=0 关闭；进程退出（stop）时一并 kill。
+  const dshWebEnabled = (process.env.ROOST_DSH_WEB ?? '1') !== '0'
+  const dshWebPort =
+    readPort(options.dshWebPort ?? process.env.ROOST_DSH_WEB_PORT ?? process.env.DSH_WEB_PORT) ??
+    DEFAULT_DSH_WEB_PORT
+  const dshWebBin = options.dshWebBin ?? options.dshBin ?? process.env.ROOST_DSH_BIN ?? 'dsh'
+  const dshWebAbort = new AbortController()
+  let dshWebHandle = null
+  let dshWebStart = null
+  if (dshWebEnabled) {
+    dshWebStart = startDshWeb({
+      port: dshWebPort,
+      bin: dshWebBin,
+      log,
+      signal: dshWebAbort.signal,
+      ...(Number.isFinite(options.dshWebReadyTimeoutMs)
+        ? { readyTimeoutMs: options.dshWebReadyTimeoutMs }
+        : {})
+    })
+      .then((handle) => {
+        dshWebHandle = handle
+        if (handle.ready) log('dsh web ready')
+        return handle
+      })
+      .catch(() => null) // startDshWeb 契约上不抛；兜底避免 unhandled rejection
+  }
 
   rpc.on('session.event', (params) => {
     const text = assistantText(params?.event)
@@ -684,11 +721,22 @@ export async function startRoomAgent(options) {
 
   void loop()
 
+  // stop 必须幂等：第二次调用不能往已经 end 的 stdin 再写 shutdown
+  // （会抛 ERR_STREAM_WRITE_AFTER_END，且 socket 的 error 事件无人接）。
+  let stopPromise = null
   return {
-    async stop() {
-      stopped = true
-      await rpc.request('shutdown').catch(() => undefined)
-      rpc.close()
+    stop() {
+      if (stopPromise !== null) return stopPromise
+      stopPromise = (async () => {
+        stopped = true
+        // 先取消/等 dsh web：abort 会让还在轮询的 startDshWeb 立刻 kill 子进程并返回。
+        dshWebAbort.abort()
+        if (dshWebStart !== null) await dshWebStart.catch(() => null)
+        if (dshWebHandle !== null) await dshWebHandle.stop().catch(() => undefined)
+        await rpc.request('shutdown').catch(() => undefined)
+        rpc.close()
+      })()
+      return stopPromise
     },
     rpc
   }

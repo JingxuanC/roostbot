@@ -47,8 +47,16 @@ export interface DshRouteContext {
   store: StorePort
   rawStore?: Store
   now: () => number
-  /** 假上游端口由 ServerOptions.dshWebPort 注入；生产默认 4099。 */
-  dshWebPort: number
+  /**
+   * 固定上游端口（ServerOptions.dshWebPort 注入；生产默认 4099）。
+   * 没有按 workspace 启动面板转发时用它；与 resolvePort 都没有 → 503 dsh.not_running。
+   */
+  dshWebPort?: number
+  /**
+   * 按 workspace 解析面板转发端口（apps/api/src/panel-forward.ts 的 resolvePanelPort）。
+   * 优先于 dshWebPort；返回 undefined 表示这个 workspace 的面板容器没唤醒。
+   */
+  resolvePort?: (workspaceId: string) => number | undefined
   signingSecret: string
 }
 
@@ -78,6 +86,30 @@ const HTML_SELF_REFERENCE = /(href|src|action)="\/(?!\/)/g
 
 export function isDshProxyPath(pathname: string): boolean {
   return DSH_PATH_PATTERN.test(pathname)
+}
+
+function isPort(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 && value < 65_536
+}
+
+/**
+ * 反代目标：优先本 workspace 的面板转发端口（resolvePort），否则回退固定 dshWebPort。
+ * 两者都没有 → undefined（路由层 503 dsh.not_running）。resolvePort 抛错按"未唤醒"处理，
+ * 不让一次面板查询把整条反代打挂。
+ */
+export function resolveDshTargetPort(
+  ctx: DshRouteContext,
+  workspaceId: string,
+): number | undefined {
+  if (ctx.resolvePort !== undefined) {
+    try {
+      const resolved = ctx.resolvePort(workspaceId)
+      if (isPort(resolved)) return resolved
+    } catch {
+      // 回退固定端口
+    }
+  }
+  return isPort(ctx.dshWebPort) ? ctx.dshWebPort : undefined
 }
 
 /**
@@ -248,11 +280,19 @@ async function handleDshProxy(
   }
 
   const upstreamPath = pathWithQuery(rest, url.search)
+  // 先按 workspace 解析面板转发端口；没有就回退固定端口。都没有说明面板容器没起来：
+  // 503 dsh.not_running 与"上游不可达"的 502 dsh.unavailable 是两件事。
+  const targetPort = resolveDshTargetPort(ctx, workspaceId)
+  if (targetPort === undefined) {
+    sendError(res, 503, 'dsh.not_running', 'dsh web is not running for this workspace')
+    return
+  }
+
   let settled = false
   const upstream = http.request(
     {
       host: '127.0.0.1',
-      port: ctx.dshWebPort,
+      port: targetPort,
       method: req.method,
       path: upstreamPath,
       headers: upstreamHeaders(req),
@@ -455,7 +495,8 @@ export const DSH_STATUS_TIMEOUT_MS = 1500
 
 /**
  * GET /api/workspaces/:id/dsh/status（Bearer，任意成员）。
- * 由控制面代探 127.0.0.1:<dshWebPort>/：前端不必从主控制面源跨源 fetch 反代端口（没有 CORS）。
+ * 由控制面代探本 workspace 的反代目标（resolvePort 优先，否则固定 dshWebPort）：
+ * 前端不必从主控制面源跨源 fetch 反代端口（没有 CORS）。
  * 探活失败不是服务错误：始终 200，用 available 区分，避免前端把"没启动"当接口故障。
  */
 export async function handleDshStatus(
@@ -474,7 +515,13 @@ export async function handleDshStatus(
     return
   }
 
-  const status = await probeDshWeb(ctx.dshWebPort, DSH_STATUS_TIMEOUT_MS)
+  // 与反代同一套目标解析：先看本 workspace 的转发端口，再回退固定端口。
+  const targetPort = resolveDshTargetPort(ctx, workspaceId)
+  if (targetPort === undefined) {
+    sendJson(res, 200, { available: false })
+    return
+  }
+  const status = await probeDshWeb(targetPort, DSH_STATUS_TIMEOUT_MS)
   if (status === null) sendJson(res, 200, { available: false })
   else sendJson(res, 200, { available: true, status })
 }
