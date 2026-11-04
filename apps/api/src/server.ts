@@ -112,6 +112,17 @@ import { handleInternalAdvance, handleInternalAssignments, handleInternalRound }
 import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
+import {
+  createHttpLogEntry,
+  resolveRequestId,
+  writeHttpLog,
+} from './logger.ts'
+import type { HttpLogEntry } from './logger.ts'
+import { createMetrics } from './metrics.ts'
+import type { MetricsRegistry } from './metrics.ts'
+import { handleAudit } from './audit-routes.ts'
+import { TokenBucketLimiter } from './rate-limit.ts'
+import type { RateLimiter, RateLimitKind } from './rate-limit.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { hasActiveSessionsForAccount, touchSession } from '../../../packages/store/src/sessions.ts'
 import { listMessageAttachments } from '../../../packages/store/src/attachments.ts'
@@ -180,6 +191,8 @@ export interface ServerOptions {
    * 测试直接用 store.tick，不走真实定时器。
    */
   schedulerLoop?: boolean
+  /** 结构化请求日志出口；默认写 stdout，测试可注入收集器。 */
+  logSink?: (entry: HttpLogEntry) => void
 }
 
 export interface StartedServer {
@@ -220,6 +233,14 @@ interface HandlerContext extends AuthContext {
   dsh: DshRouteContext
   /** 反代端口的实际绑定值等启动期可变状态。 */
   serverState: ServerState
+  /** 每个 server 实例独立的请求指标。 */
+  metrics: MetricsRegistry
+  /** 每个 server 实例独立的内存令牌桶。 */
+  rateLimiter: RateLimiter
+  /** 调度循环是否实际启用（memory port 下不启动）。 */
+  schedulerEnabled: boolean
+  /** 结构化请求日志出口。 */
+  logSink: (entry: HttpLogEntry) => void
 }
 
 type Clock = () => number
@@ -286,6 +307,7 @@ const ERROR_TEXT: Record<string, string> = {
   'room.members': '房间成员不合法',
   'room.responder': '「谁回答」必须指向房间成员',
   room_not_found: '找不到这个房间',
+  rate_limited: '操作太频繁，请稍后再试',
   internal_error: '服务出错了，请稍后重试'
 }
 
@@ -474,6 +496,21 @@ function workspaceJson(workspace: WorkspaceRecord): Record<string, unknown> {
 
 function retryAfterSeconds(ms: number): string {
   return String(Math.max(1, Math.ceil(ms / 1000)))
+}
+
+/** 写接口限流；返回 false 时已经写好 429 响应。 */
+function enforceRateLimit(
+  ctx: HandlerContext,
+  res: ServerResponse,
+  kind: RateLimitKind,
+  accountId: string
+): boolean {
+  const retryAfter = ctx.rateLimiter.consume(kind, accountId, ctx.now())
+  if (retryAfter === null) return true
+  sendError(res, 429, 'rate_limited', `too many ${kind} requests; retry after ${retryAfter}s`, {
+    'retry-after': String(retryAfter)
+  })
+  return false
 }
 
 function pruneFailures(ctx: HandlerContext, now: number): void {
@@ -1125,6 +1162,7 @@ function logPageJson(page: { hasMore: boolean; oldestSeq: number | null; floorSe
 async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const auth = await authenticate(ctx, req)
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  if (!enforceRateLimit(ctx, res, 'messages', auth.session.accountId)) return
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   const body = parsed.value as Record<string, unknown>
@@ -1321,7 +1359,43 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       notFound(req, res, method, path)
       return
     }
-    sendJson(res, 200, { ok: true, uptimeMs: Math.max(0, ctx.now() - ctx.startedAt) })
+    sendJson(res, 200, {
+      ok: true,
+      uptimeMs: Math.max(0, ctx.now() - ctx.startedAt),
+      store: ctx.rawStore === undefined ? 'memory' : 'sqlite',
+      scheduler: ctx.schedulerEnabled,
+      dsh: {
+        webPort: ctx.dsh.dshWebPort,
+        proxyPort: ctx.serverState.dshProxyPort ?? null
+      }
+    })
+    return
+  }
+
+  // Prometheus 抓取端点：无鉴权，手写 text/plain（M6-6.6）。
+  if (path === '/metrics') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const body = Buffer.from(ctx.metrics.render(ctx.rawStore), 'utf8')
+    res.writeHead(200, {
+      'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+      'content-length': String(body.byteLength),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    })
+    res.end(body)
+    return
+  }
+
+  // 审计查询：events 是事实源，只读，owner/admin 才能看（M6-6.6）。
+  if (path === '/api/audit') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleAudit(ctx, req, res, url)
     return
   }
 
@@ -2112,6 +2186,8 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
   }
   state.dsh = dsh
+  const schedulerEnabled =
+    (options.schedulerLoop === true || process.env.ROOST_SCHEDULER === '1') && options.rawStore !== undefined
   const ctx: RoomRouteContext = {
     store: options.store,
     now,
@@ -2122,6 +2198,10 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
     dsh,
     serverState: state,
+    metrics: createMetrics(),
+    rateLimiter: new TokenBucketLimiter(),
+    schedulerEnabled,
+    logSink: options.logSink ?? writeHttpLog,
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
     ...(options.rawStore === undefined
@@ -2137,6 +2217,32 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
   }
 
   const server = http.createServer((req, res) => {
+    const requestId = resolveRequestId(req.headers['x-request-id'])
+    res.setHeader('x-request-id', requestId)
+    const startedAt = ctx.now()
+
+    res.once('finish', () => {
+      const status = res.statusCode
+      const method = req.method ?? 'GET'
+      const path = req.url ?? '/'
+      const durationMs = Math.max(0, ctx.now() - startedAt)
+      const entry = createHttpLogEntry({
+        requestId,
+        method,
+        path,
+        status,
+        durationMs,
+        ...(status >= 500 ? { msg: 'request failed' } : {})
+      })
+      // 日志失败不能影响已经发出的响应。
+      try {
+        ctx.logSink(entry)
+      } catch {
+        // 忽略日志出口异常。
+      }
+      ctx.metrics.record(method, path, status, durationMs)
+    })
+
     handleRequest(ctx, req, res).catch((err: unknown) => {
       console.error('roost api: unhandled request error', err)
       if (res.headersSent) {

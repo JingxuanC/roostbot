@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：81 / 152 · 进行中：2
+- 完成：84 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -188,11 +188,11 @@
 ### 6.6 观测与运维
 
 - [ ] 6.6.1 事件→指标（Run/Assignment/沙箱/预算）
-- [ ] 6.6.2 结构化日志 + 请求 id
-- [ ] 6.6.3 审计查询页/API
+- [x] 6.6.2 结构化日志 + 请求 id（query token 脱敏）
+- [x] 6.6.3 审计查询 API（`GET /api/audit`，owner/admin，按 workspace 保守过滤）
 - [ ] 6.6.4 告警（沙箱 Error、预算超限、投递失败）
 - [ ] 6.6.5 健康检查（API/沙箱/网关）
-- [ ] 6.6.6 限流（配对、消息、安装）
+- [x] 6.6.6 限流（配对、消息 30/分、安装 10/时，429 + Retry-After）
 - [ ] 6.6.7 日志保留与脱敏
 - [ ] 6.6.8 SLO 与降级策略
 
@@ -264,3 +264,4 @@
 - 2026-11-04 DSH 反代独立源修复（后端 agent）：反代拆到同 host 的独立端口（`dshProxyPort`，默认 4098），iframe 保留反代端口自己的源，子资源不再受 opaque origin 的 cookie/CORS 限制；新增 `GET /api/config` 返回 `dshBase`、`GET /api/workspaces/:id/dsh/status` 由控制面代探活。406 后端测试全绿。
 - 2026-11-04 M5 面板容器前端（前端 agent）：`#/panels` 从 `/api/config` 取 `dshBase`，iframe 指向独立反代端口并用 `allow-same-origin`；探活改走控制面 `/dsh/status`；实测 iframe 内 fetch/script/XHR 三类子资源均到达上游（上一轮 0 次），父页面读 `contentDocument` 仍为 null。560 全量测试全绿（前端 107）。生命周期唤醒、WebSocket、注册数冒烟留后续。
 - 2026-11-04 M5 设置页扩展（前端 agent）：成员管理（角色下拉/移除/最后 owner 409）与设备管理（列表/吊销/当前设备标记），保留长期授权分区；403/503/空态独立降级。560 全量测试全绿（前端 124）。
+- 2026-11-04 M6 可观测与限流（后端 agent）：request id 回写、JSON 行日志（authorization/cookie/query token 脱敏）、`/metrics` Prometheus 文本（请求计数/延迟直方图/业务 gauge）、`GET /api/audit` 只读审计（owner/admin，workspace 归属宁少不多）、消息与插件安装内存令牌桶、healthz 扩展。417 后端测试全绿。告警/SLO 仍留文档。

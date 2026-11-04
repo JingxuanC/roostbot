@@ -47,6 +47,7 @@ import {
 } from '../../../packages/store/src/index.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { SessionRecord, StorePort, WorkspaceRole } from './port.ts'
+import type { RateLimiter } from './rate-limit.ts'
 import { authenticate, isPlainObject, readJsonBody, readText, sendError, sendJson } from './server.ts'
 
 export interface MarketplaceRouteContext {
@@ -54,6 +55,8 @@ export interface MarketplaceRouteContext {
   now: () => number
   /** 市场目录 / 安装记录只在 SQLite 里。 */
   rawStore?: Store
+  /** 每个 server 实例的写接口限流器。 */
+  rateLimiter?: RateLimiter
 }
 
 type Ctx = MarketplaceRouteContext
@@ -258,6 +261,13 @@ export async function handleMarketplaceInstall(
 
   const slug = slugFromPath(url.pathname, 'install')
   if (slug === null) return sendError(res, 404, 'not_found', 'malformed install path')
+
+  const retryAfter = ctx.rateLimiter?.consume('pluginInstall', auth.accountId, ctx.now()) ?? null
+  if (retryAfter !== null) {
+    return sendError(res, 429, 'rate_limited', `too many plugin install requests; retry after ${retryAfter}s`, {
+      'retry-after': String(retryAfter)
+    })
+  }
 
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
