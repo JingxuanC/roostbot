@@ -59,8 +59,8 @@ export const PAIRING_MAX_ATTEMPTS = 5
 export const PAIRING_LOCK_MS = 10 * 60 * 1000
 /** 设备会话 30 天（auth.md §2）。续期（<15 天 → 180 天）尚未实现，见报告。 */
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
-/** 防御性上限：任何 JSON body 超过 64KiB 直接 413。 */
-export const MAX_BODY_BYTES = 64 * 1024
+/** 防御性上限：任何 JSON body 超过 1MiB 直接 413（头像 dataURL ≤256KB 图片，base64 后约 350k 字符）。 */
+export const MAX_BODY_BYTES = 1024 * 1024
 /** 全局失败窗口：60 秒内 20 次配对失败即 429（每个 server 实例独立计数）。 */
 export const CLAIM_FAILURE_WINDOW_MS = 60 * 1000
 export const CLAIM_FAILURE_MAX = 20

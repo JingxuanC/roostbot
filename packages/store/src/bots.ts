@@ -453,7 +453,12 @@ function readAvatar(value: unknown): Bot['avatar'] | undefined {
       throw new StoreError('INVALID_BOT', `bot.avatar.${key} must be a non-empty string`)
     }
     const text = raw.trim()
-    if (text.length > 512) throw new StoreError('INVALID_BOT', `bot.avatar.${key} is too long`)
+    // shape/color 是程序化图标参数；image 是 ≤256KB 图片的 dataURL（base64 后约 350k 字符）。
+    const limit = key === 'image' ? 512_000 : 512
+    if (text.length > limit) throw new StoreError('INVALID_BOT', `bot.avatar.${key} is too long`)
+    if (key === 'image' && !/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(text)) {
+      throw new StoreError('INVALID_BOT', 'bot.avatar.image must be a base64 data URL (png/jpeg/webp/gif)')
+    }
     avatar[key] = text
   }
   return avatar

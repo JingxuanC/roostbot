@@ -90,5 +90,5 @@ POST   /api/bots/:id/kickoff    ← 可选：重新生成开场（调试用）
 ## 9. 实现状态（2026-11-04）
 
 已实现：`bots` / `bot_versions` 迁移、名字锁、模型创建时固定、CRUD API、人设版本、权限区、软删（当前为硬删）、前端列表/新建/设置页。
-已接：kickoff 消息（DM 房间开场）、头像上传（dataURL ≤256KB）、审批页。
+已接：kickoff 消息（DM 房间开场）、头像上传（dataURL ≤256KB，store 上限 512k 字符，API body 上限 1MiB）、审批页。
 未接：Bot 事件（created/updated/deleted）、软删恢复。
