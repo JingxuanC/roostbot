@@ -159,7 +159,7 @@ export function createStorePort(store: Store): StorePort {
       const rows = store.db
         .prepare(
           `SELECT w.id, w.tenant_id, w.name, w.home_mode, w.state, w.volume_id, w.profile_ver, w.created_at,
-                  CASE WHEN w.tenant_id = ? THEN 'owner' ELSE COALESCE(m.role, 'viewer') END AS role
+                  COALESCE(m.role, CASE WHEN w.tenant_id = ? THEN 'owner' ELSE 'viewer' END) AS role
              FROM workspaces w
              LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = ?
             WHERE w.tenant_id = ? OR m.user_id = ?
