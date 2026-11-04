@@ -243,3 +243,17 @@ Bot 设置里的工具列表要标**来源**（`mcp__data__* ← 行情中心`�
     `lock` 只是 profile-lock 摘要（`source=marketplace` + 市场版本 integrity/id），
     真正从 plugins 表生成完整 profile 锁是第二批的事。sync/回滚、`state` 推进到
     `installed|failed|disabling`、以及安装前快照都留到第二批。
+- **2026-11-04（M5-5.2 后端：反代 + 面板清单）**：
+  - `apps/api/src/dsh-proxy-routes.ts` 落地 `GET|HEAD|POST|PUT|PATCH|DELETE /w/:workspaceId/dsh/*`，
+    上游固定 `127.0.0.1:<DSH_WEB_PORT>`（`ServerOptions.dshWebPort` 可注入假上游），剥离
+    `/w/<id>/dsh` 前缀后流式透传路径/query/method/body；请求头去 hop-by-hop 与
+    cookie/authorization/x-runtime-*/x-roost-*，响应头去 hop-by-hop/x-frame-options/set-cookie，
+    CSP 剥 `frame-ancestors`，统一 `cache-control: no-store`；`text/html` 做保守的
+    `href="/`、`src="/`、`action="/` 前缀重写；上游不可达 502 `dsh.unavailable`。
+  - 鉴权：`POST /w/:workspaceId/dsh/session`（Bearer、workspace 任意成员）签发
+    `roost_dsh_<hash>` HttpOnly cookie（Path=`/w/<id>/dsh/`、SameSite=Lax、Max-Age=900，
+    HMAC-SHA256 签 `workspaceId|accountId|exp`）；反代接受 cookie 或 Bearer，非成员/不存在 404。
+  - `GET /api/workspaces/:id/panels`（Bearer、任意成员）读取已启用安装对应版本的
+    manifest `panels` 数组，返回 `{panels:[{pluginSlug,name,title?,slot?,path?}]}`；
+    memory port（无 rawStore）一律 503。**未做**：DSH Web 实际注册数冒烟、WebSocket upgrade、
+    生命周期唤醒/休眠（见 ADR 0004 待办）。

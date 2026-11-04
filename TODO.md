@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：71 / 152 · 进行中：2
+- 完成：72 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -101,7 +101,7 @@
 ### 5.2 DSH web 面板表面（ADR 0004）
 
 - [ ] 5.2.1 沙箱内起 `dsh web`（127.0.0.1:4099）与 room-agent 共存
-- [ ] 5.2.2 控制面反代 `/w/<workspace>/dsh/*`（设备会话鉴权、base path 剥离）
+- [x] 5.2.2 控制面反代 `/w/<workspace>/dsh/*`（短时 HttpOnly cookie 鉴权、base path 剥离、HTML 重写）
 - [ ] 5.2.3 iframe 容器（独立源、sandbox 属性、加载/失败兜底）
 - [ ] 5.2.4 面板清单（manifest `panels` + 启动冒烟核对）
 - [ ] 5.2.5 面板打开才唤醒、随沙箱 stop/start
@@ -257,3 +257,4 @@
 - 2026-11-04 M5 插件市场第一批（后端 agent）：迁移 0013（4 张表 + `plugin_installs.state`）、目录/详情/版本/预检 API、安装记录与 `plugin.install/update/uninstall` 事件、发布者白名单与 A/B tier 校验；升级后 state 回到 `installing` 等第二批 sync。462 测试全绿。沙箱 sync/重启/冒烟/快照回滚留第二批。
 - 2026-11-04 M6 产物前端（前端 agent）：消息附件按 kind 渲染（图片懒加载/灯箱、PDF 卡片、HTML/SVG 沙箱 iframe、CSV 表格预览、代码块折叠、未知类型下载），`getBlob` 带 Bearer 读取，blob URL 统一登记与回收；86 前端测试 + 无头 Chrome 六种附件实测通过。6.2.5 的 PDF 首页缩略图仍未做。
 - 2026-11-04 M5 成员与角色（后端 agent）：成员列表/改角色/移除 API，admin 不能授予 owner，最后一个 owner 不能降级/移除，`auth.role.changed` / `auth.member.removed` 事件；Bot 写操作、房间设置、viewer 发消息补齐 403 校验。482 测试全绿（后端 349）。邀请待账号体系。
+- 2026-11-04 M5 DSH Web 反代（后端 agent）：`/w/:ws/dsh/*` 前缀剥离反代、`POST /w/:ws/dsh/session` 换 15 分钟 HttpOnly cookie（iframe 不带 Authorization）、hop-by-hop/内部头/上游 Set-Cookie 过滤、CSP 去 frame-ancestors、HTML 站内绝对路径重写、`GET /api/workspaces/:id/panels` 从已启用插件 manifest 汇总面板。498 测试全绿（后端 355）。WebSocket 与面板注册冒烟留后续。

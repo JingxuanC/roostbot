@@ -60,6 +60,13 @@ import {
 } from './approvals-routes.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
+  handleDshRequest,
+  handleListWorkspacePanels,
+  isDshProxyPath,
+  resolveDshWebPort,
+} from './dsh-proxy-routes.ts'
+import type { DshRouteContext } from './dsh-proxy-routes.ts'
+import {
   handleDeletePluginInstall,
   handleGetMarketplacePlugin,
   handleListMarketplacePlugins,
@@ -136,6 +143,11 @@ export interface ServerOptions {
   attachmentsDir?: string
   /** 附件签名密钥；默认 ROOST_SIGNING_SECRET，未配置时进程内随机。 */
   signingSecret?: string
+  /**
+   * 沙箱内 dsh web 端口（反代固定目标 127.0.0.1:<port>）；默认 DSH_WEB_PORT 环境变量或 4099。
+   * 测试注入假上游端口。
+   */
+  dshWebPort?: number
 }
 
 export interface StartedServer {
@@ -164,6 +176,8 @@ interface HandlerContext extends AuthContext {
   runtimeManager?: RuntimeManager
   /** 内容存储；只有 rawStore 可用时才创建。 */
   attachments?: AttachmentsRuntime
+  /** DSH Web 反代与面板清单（ADR 0004）。 */
+  dsh: DshRouteContext
 }
 
 type Clock = () => number
@@ -1180,11 +1194,24 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
   const method = req.method ?? 'GET'
   const url = new URL(req.url ?? '/', 'http://control-plane.local')
   const path = normalizePath(url.pathname)
+  // /w/<id>/dsh/* 由反代自己鉴权（iframe 的 opaque origin 会发 Origin: null），
+  // 不受控制面"写操作只允许回环 Origin"的CSRF 规则约束。
+  const isDshPath = isDshProxyPath(url.pathname)
 
   // auth.md §7：控制面写操作要求 Origin 校验。本机回环之外一律拒绝。
-  if (method !== 'GET' && method !== 'HEAD' && !isAllowedOrigin(req.headers.origin)) {
+  if (
+    !isDshPath &&
+    method !== 'GET' &&
+    method !== 'HEAD' &&
+    !isAllowedOrigin(req.headers.origin)
+  ) {
     req.resume()
     sendError(res, 403, 'forbidden_origin', `write requests must come from a loopback origin, got ${req.headers.origin}`)
+    return
+  }
+
+  if (isDshPath) {
+    await handleDshRequest(ctx.dsh, req, res, url)
     return
   }
 
@@ -1253,6 +1280,21 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
   }
 
   // workspace 成员与角色（auth.md §5/§10；M5-5.3.3）。
+  if (/^\/api\/workspaces\/[^/]+\/panels$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/panels$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null || workspaceId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace panels path')
+      return
+    }
+    await handleListWorkspacePanels(ctx.dsh, req, res, workspaceId)
+    return
+  }
+
   if (/^\/api\/workspaces\/[^/]+\/members$/.test(path)) {
     if (method !== 'GET') {
       notFound(req, res, method, path)
@@ -1796,6 +1838,15 @@ export function createServer(options: ServerOptions): http.Server {
     sessionAccounts: new Set<string>(),
     streamPollMs: options.streamPollMs ?? 700,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
+    dsh: {
+      store: options.store,
+      now,
+      dshWebPort: resolveDshWebPort(options.dshWebPort),
+      // cookie 签名密钥与附件共用 ROOST_SIGNING_SECRET；都没配置则本进程随机（重启后旧 cookie 失效）。
+      signingSecret:
+        options.signingSecret ?? process.env.ROOST_SIGNING_SECRET ?? randomBytes(32).toString('hex'),
+      ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
+    },
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
     ...(options.rawStore === undefined

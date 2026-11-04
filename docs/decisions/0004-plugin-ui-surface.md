@@ -49,7 +49,7 @@ iframe 打开面板。产品主界面（房间、Bot、设置、市场）永远�
 
 ## 待办
 
-- [ ] 反代路由与 base path 细节（`/w/<workspace>/dsh/*`）
+- [x] 反代路由与 base path 细节（`/w/<workspace>/dsh/*`；`apps/api/src/dsh-proxy-routes.ts`）
 - [ ] iframe 容器组件与 CSP
-- [ ] 面板清单接口（市场/已安装页展示"提供了哪些面板"）
+- [x] 面板清单接口（manifest `panels` 声明；实际注册数冒烟留后续）
 - [ ] 沙箱规格与内存预算更新

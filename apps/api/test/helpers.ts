@@ -39,6 +39,8 @@ export interface ApiResult {
   status: number
   headers: Headers
   json: any
+  /** 原始响应文本（HTML 等非 JSON 响应用）。 */
+  text: string
 }
 
 export interface Harness {
@@ -77,14 +79,25 @@ function makeCaller(baseUrl: string) {
         json = { __unparsed: text }
       }
     }
-    return { status: response.status, headers: response.headers, json }
+    return { status: response.status, headers: response.headers, json, text }
   }
 }
 
-export async function startHarness(): Promise<Harness> {
+export interface HarnessOptions {
+  /** 假上游 dsh web 端口（反代测试用）；不传则用默认 4099。 */
+  dshWebPort?: number
+}
+
+export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
   const store = createMemoryStore()
   const clock = manualClock()
-  const started = await startServer({ store, now: clock.now, port: 0, host: '127.0.0.1' })
+  const started = await startServer({
+    store,
+    now: clock.now,
+    port: 0,
+    host: '127.0.0.1',
+    ...(options.dshWebPort === undefined ? {} : { dshWebPort: options.dshWebPort }),
+  })
 
   return {
     store,
@@ -99,11 +112,18 @@ export async function startHarness(): Promise<Harness> {
  * 真实 SQLite（:memory:）+ store-adapter 的 harness。
  * 设备列表/吊销、会话续期、auth.session.revoked 事件都依赖 rawStore，只有它能测。
  */
-export async function startSqliteHarness(): Promise<Harness> {
+export async function startSqliteHarness(options: HarnessOptions = {}): Promise<Harness> {
   const rawStore = openStore(':memory:')
   const store = createStorePort(rawStore)
   const clock = manualClock()
-  const started = await startServer({ store, rawStore, now: clock.now, port: 0, host: '127.0.0.1' })
+  const started = await startServer({
+    store,
+    rawStore,
+    now: clock.now,
+    port: 0,
+    host: '127.0.0.1',
+    ...(options.dshWebPort === undefined ? {} : { dshWebPort: options.dshWebPort }),
+  })
 
   return {
     store,
