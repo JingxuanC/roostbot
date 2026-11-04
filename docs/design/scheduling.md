@@ -261,6 +261,23 @@ CREATE TABLE run_events (
 | 人工停止尊重 | 部分 | ✅ | ✅ `--respect-stop` | ✅ |
 | 失败退避 | ❌ | ✅ | ✅ | ✅ |
 
+## 14. 实现状态（2026-11-04，M6-6.5 控制面批次）
+
+已落地：
+
+- **时间计算** `packages/scheduler/src/cron.ts`：5 段 cron（含列表/范围/步长）、`daily`/`weekly`/`every`，IANA 时区用 `Intl.DateTimeFormat` 换算；DST 跳过不存在的本地时刻、回拨只取第一次。
+- **数据模型** `migrations/0015_schedules.sql`：`workspace_schedules` / `activations` / `runs` / `run_events`，§10 的四组索引齐全。
+- **store** `packages/store/src/schedules.ts`：schedule 增删改查（cron/tz 变更重算 `next_run_at`）、`tick`、`manualActivation`、`listRuns`、`stopRun`；写入同一 savepoint，幂等键 `clockIdem(routineId, scheduledFor)` 由 `activations.idem` UNIQUE 兜底。
+- **tick 语义**：每次最多补 100 次；`now - scheduledFor > catch_up_ms` 记 `missed`，否则建 `queued`；重叠 `skip` 留 `skipped(duplicate)` 收据，`queue` 继续排队；推进按原 `scheduledFor`，不按 `now`。
+- **API** `apps/api/src/schedules-routes.ts`：用户侧 schedule CRUD / 立即触发 / run 列表 / 停止；内部 `POST /api/internal/scheduler/tick`（runtime token）。内存 port 一律 503 `runtime.not_configured`。
+- **后台 tick** `apps/api/src/scheduler-loop.ts`：`schedulerLoop: true` 或 `ROOST_SCHEDULER=1` 时启动，server close 时清理。
+
+尚未落地（见 §9、§12）：
+
+- 睡眠/唤醒握手（`/internal/power`、提前唤醒、禁睡窗口）；
+- 容器内执行与 effect 队列（本批只到 `queued`，不派发到 runtime）；
+- Web 页面（apps/web）的调度管理界面。
+
 ## 15. 实测备注（2026-11-03）
 
 沙箱空闲时的「睡」在 docker 驱动上是 **stop/start**（工作区保留、内存不保留），因为

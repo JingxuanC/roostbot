@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：76 / 152 · 进行中：2
+- 完成：78 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -178,9 +178,9 @@
 
 ### 6.5 调度（`scheduling.md`）
 
-- [ ] 6.5.1 `routines` 表 + cron 计算（含 DST 测试）
+- [x] 6.5.1 `routines` 表 + cron 计算（含 DST 测试，daily/weekly/every）
 - [ ] 6.5.2 激活控制器（clock/event/repair）
-- [ ] 6.5.3 幂等（routineId+scheduledFor）+ 12h catch-up
+- [x] 6.5.3 幂等（routineId+scheduledFor）+ 12h catch-up + 重叠 queue/skip
 - [ ] 6.5.4 睡/醒：空闲 stop/start（已验证，接调度）
 - [ ] 6.5.5 定时任务页（列表/启停/历史）
 - [ ] 6.5.6 复盘 routine 内置模板
@@ -260,3 +260,4 @@
 - 2026-11-04 M5 DSH Web 反代（后端 agent）：`/w/:ws/dsh/*` 前缀剥离反代、`POST /w/:ws/dsh/session` 换 15 分钟 HttpOnly cookie（iframe 不带 Authorization）、hop-by-hop/内部头/上游 Set-Cookie 过滤、CSP 去 frame-ancestors、HTML 站内绝对路径重写、`GET /api/workspaces/:id/panels` 从已启用插件 manifest 汇总面板。498 测试全绿（后端 355）。WebSocket 与面板注册冒烟留后续。
 - 2026-11-04 M5 插件市场前端（前端 agent）：市场/详情/已安装三屏，搜索与分类/tier 过滤、权限清单、预检、二次确认安装、启停/升级/卸载；安装后只显示「等待沙箱同步」；修复 HTTP 200 + `{ok:false,problems}` 被误判为请求失败。517 测试全绿（前端 97）。5.1.7 工具来源映射待后端。
 - 2026-11-04 M6 预算与计量（后端 agent）：迁移 0014（quotas/reservations/usage_rows）、UTC 周期重置的预留-结算、80% 软限 `billing.cap`、`billing.reserve/settle/usage/quota.changed` 事件、内部预留/结算/用量接口、`/api/quotas` 与 `/api/usage`，消息准入配额耗尽 429 且不落库。517 测试全绿（后端 373）。模型代理、容器秒、工作区时区、用量页留后续。
+- 2026-11-04 M6 定时激活（后端 agent）：迁移 0015（workspace_schedules/activations/runs/run_events）、零依赖 cron/daily/weekly/every + IANA 时区与 DST、tick 扫描（10s 循环，`ROOST_SCHEDULER=1`）、幂等键与 12h 追赶、重叠 queue/skip、routines 与 runs API、人工触发/停止。551 全量测试全绿（后端 401）。容器执行、睡眠/唤醒、调度页面留后续。

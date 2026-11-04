@@ -125,6 +125,37 @@ export {
 } from './rounds.ts'
 
 export { getWorkspaceRuntime, saveWorkspaceRuntime } from './workspace-runtime.ts'
+
+// ---- M6：控制面调度（schedule / activation / run / run_event）----------------
+export {
+  MAX_CATCH_UP_PER_TICK,
+  SCHEDULE_ERROR_CODES,
+  SCHEDULE_OVERLAPS,
+  createSchedule,
+  deleteSchedule,
+  getRun,
+  getSchedule,
+  listRuns,
+  listSchedules,
+  manualActivation,
+  stopRun,
+  tick,
+  updateSchedule,
+} from './schedules.ts'
+export type {
+  CreateScheduleInput,
+  ListRunsQuery,
+  ListSchedulesQuery,
+  ManualActivationInput,
+  ManualActivationResult,
+  Schedule,
+  ScheduleOverlap,
+  ScheduledRun,
+  StopRunInput,
+  TickInput,
+  TickResult,
+  UpdateScheduleInput,
+} from './schedules.ts'
 export type { RuntimePhase, WorkspaceRuntime } from './workspace-runtime.ts'
 
 export { createDmRoom, findDmRoom } from './dm.ts'

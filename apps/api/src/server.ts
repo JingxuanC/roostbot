@@ -66,6 +66,17 @@ import {
   handleListQuotas,
   handlePatchQuota,
 } from './budget-routes.ts'
+import {
+  handleCreateSchedule,
+  handleDeleteSchedule,
+  handleInternalSchedulerTick,
+  handleListRuns,
+  handleListSchedules,
+  handlePatchSchedule,
+  handleRunScheduleNow,
+  handleStopRun,
+} from './schedules-routes.ts'
+import { startSchedulerLoop } from './scheduler-loop.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
   handleDshRequest,
@@ -157,6 +168,11 @@ export interface ServerOptions {
    * 测试注入假上游端口。
    */
   dshWebPort?: number
+  /**
+   * 是否启动控制面调度 tick 循环（默认 false；ROOST_SCHEDULER=1 时也会启动）。
+   * 测试直接用 store.tick，不走真实定时器。
+   */
+  schedulerLoop?: boolean
 }
 
 export interface StartedServer {
@@ -297,6 +313,16 @@ function readPlatform(value: unknown): DevicePlatform | null | undefined {
 function normalizePath(pathname: string): string {
   const trimmed = pathname.replace(/\/+$/, '')
   return trimmed === '' ? '/' : trimmed
+}
+
+/** 解码路径段；非法百分号编码返回 null（调用方按 404 处理）。 */
+function decodeSegment(value: string): string | null {
+  try {
+    const decoded = decodeURIComponent(value).trim()
+    return decoded === '' ? null : decoded
+  } catch {
+    return null
+  }
 }
 
 /** 写操作只接受回环 Origin；没有 Origin（非浏览器客户端）也放行。 */
@@ -1636,6 +1662,93 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // 控制面调度：schedule CRUD、立即触发、run 查询/停止与内部 tick（scheduling.md §4–§10）。
+  const schedulesCollection = /^\/api\/workspaces\/([^/]+)\/schedules$/.exec(path)
+  if (schedulesCollection !== null) {
+    const workspaceId = decodeSegment(schedulesCollection[1]!)
+    if (workspaceId === null) {
+      sendError(res, 404, 'not_found', 'malformed workspace path')
+      return
+    }
+    if (method === 'GET') {
+      await handleListSchedules(ctx, req, res, workspaceId)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateSchedule(ctx, req, res, workspaceId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  const scheduleRunPath = /^\/api\/schedules\/([^/]+)\/run$/.exec(path)
+  if (scheduleRunPath !== null) {
+    const scheduleId = decodeSegment(scheduleRunPath[1]!)
+    if (scheduleId === null) {
+      sendError(res, 404, 'not_found', 'malformed schedule path')
+      return
+    }
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleRunScheduleNow(ctx, req, res, scheduleId)
+    return
+  }
+
+  const schedulePath = /^\/api\/schedules\/([^/]+)$/.exec(path)
+  if (schedulePath !== null) {
+    const scheduleId = decodeSegment(schedulePath[1]!)
+    if (scheduleId === null) {
+      sendError(res, 404, 'not_found', 'malformed schedule path')
+      return
+    }
+    if (method === 'PATCH') {
+      await handlePatchSchedule(ctx, req, res, scheduleId)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteSchedule(ctx, req, res, scheduleId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (path === '/api/runs') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListRuns(ctx, req, res, url)
+    return
+  }
+
+  const runStopPath = /^\/api\/runs\/([^/]+)\/stop$/.exec(path)
+  if (runStopPath !== null) {
+    const runId = decodeSegment(runStopPath[1]!)
+    if (runId === null) {
+      sendError(res, 404, 'not_found', 'malformed run path')
+      return
+    }
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleStopRun(ctx, req, res, runId)
+    return
+  }
+
+  if (path === '/api/internal/scheduler/tick') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalSchedulerTick(ctx, req, res)
+    return
+  }
+
   // 运行时审批申请：沙箱里的工具执行前调用，命中长期授权直接放行。
   if (path === '/api/internal/approvals') {
     if (method !== 'POST') {
@@ -1990,11 +2103,21 @@ export async function startServer(
   const address = server.address()
   const boundPort = typeof address === 'object' && address !== null ? address.port : port
 
+  const schedulerEnabled = options.schedulerLoop === true || process.env.ROOST_SCHEDULER === '1'
+  const stopScheduler =
+    schedulerEnabled && options.rawStore !== undefined
+      ? startSchedulerLoop({
+          rawStore: options.rawStore,
+          ...(options.now === undefined ? {} : { now: options.now }),
+        })
+      : null
+
   return {
     server,
     url: `http://${host}:${boundPort}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        stopScheduler?.()
         server.close((err) => {
           if (err) reject(err)
           else resolve()
