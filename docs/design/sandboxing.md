@@ -232,3 +232,24 @@ openshell sandbox exec probe -- sh -lc 'curl -sS https://example.com || true'   
 3. SDK 的 `SandboxSession.suspend/resume` 与 `Scheduling` 的暂停-恢复握手对齐（密度靠快照恢复）。
 
 在真跑通过之前，产品文案只能说「沙箱层已选定 OpenShell、策略与后端接口已就绪」，不能说「已隔离」。
+
+## 15. 方案 A：一个用户一个沙箱，会话在里面长活
+
+沙箱粒度定为**每用户/工作区一个**（租户边界，和 `workspace.md` 一致），不是每房间、每 Bot 一个：
+
+```
+沙箱 user-<workspace>（固定名字，workspace 卷持久）
+  └─ room-agent（沙箱主进程，Node）
+       ├─ 子进程：dsh --profile sdk（长活 JSON-RPC，stdio）
+       ├─ 每 (room, bot) 一个 sessionId：room-<roomId>-<botId>
+       ├─ 轮询控制面：取新消息 → session/prompt
+       └─ 收 session.event/assistant/message → POST /api/rooms/:id/say
+```
+
+- 多轮上下文由 **DSH 会话自己维护**（不再每条消息 fork 一个 headless）
+- 一个沙箱内多房间/多 Bot 用**不同 sessionId** 隔离；文件系统与工具权限是用户级共享
+- 会话日志在 `$DSH_HOME/sessions`，`DSH_HOME=/workspace/.dsh` 跟着沙箱工作区持久化
+- 单轮沙箱（sandboxing.md §2 的第二层）留到需要"每回合工具隔离"时再加
+
+已落地：`apps/runtime/room-agent.mjs`（JSON-RPC 客户端 + 控制面循环 + 确定性 session id），
+4 个测试覆盖多轮同会话、idem、协议解析。**尚未接线**：沙箱主进程改成 room-agent、控制面从沙箱可达（`host.openshell.internal`）、远端端到端验证。
