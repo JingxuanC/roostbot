@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：101 / 152 · 进行中：2
+- 完成：102 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -144,7 +144,7 @@
 - [x] 6.1.3 按 Bot 授权（read/write/actions）
 - [x] 6.1.4 动作级审批 + idem 幂等（写动作走 approval_grants/审批）
 - [x] 6.1.5 调用审计（`connector_calls`，含拒绝原因）
-- [ ] 6.1.6 连接器卡片 UI（连/断/授权）
+- [x] 6.1.6 连接器卡片 UI（连/断/授权）
 - [ ] 6.1.7 Composio 后端（同接口）
 
 ### 6.2 存储与产物（`storage.md`/`artifacts.md`）
@@ -269,3 +269,4 @@
 - 2026-11-04 M6 连接器框架（后端 agent）：迁移 0016（connections/connector_grants/connector_calls）、连接与 OAuth state 校验、按 Bot 的 read/write/actions 授权、写动作走审批或长期授权、调用审计与 idem 去重、默认 Stub 网关。431 后端测试全绿。真实 OpenConnector/OAuth 交换、Composio、连接器 UI 留后续。
 - 2026-11-04 M6 定时任务页（前端 agent）：`#/schedules` 列表/新建（cron 与 daily/weekly/every 示例）/启停/删除/立即运行，运行历史独立加载与停止；400/409/403/503 分别降级。全仓 587 测试全绿（前端 156）。容器执行与睡眠唤醒未接。
 - 2026-11-04 M6 部署与文档（部署 agent）：`deploy/`（systemd/launchd、nginx 同源反代、env.example、backup/restore 已往返验证）、`deployment.md`/`slo.md`/`compliance.md`/`attachments-ui.md`、runtime-contract 补 DSH Web 与 Sandbox 会话。**发现两个部署阻塞**：公网 Origin 不被 `isAllowedOrigin` 接受、`/api/config` 不推导 https/8443；6.7.3 暂不勾，随后端修复。
+- 2026-11-04 M6 连接器 UI（前端 agent）：`#/connectors` 卡片（连接/断开/状态）、按 Bot 的 read/write/actions 授权表单、空目录与 501 网关未配置降级。全仓 601 测试全绿（前端 170）。

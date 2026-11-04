@@ -66,6 +66,14 @@ test('定时任务页有独立路由，且不带参数', () => {
   assert.equal(routeMatch('#/schedules/x').name, 'notFound')
 })
 
+test('连接器页有独立路由，且不带参数', () => {
+  assert.equal(routeMatch('#/connectors').name, 'connectors')
+  assert.deepEqual(routeMatch('#/connectors').params, {})
+  assert.equal(routeMatch('#/connectors/').name, 'connectors')
+  assert.equal(routeMatch('connectors').name, 'connectors')
+  assert.equal(routeMatch('#/connectors/x').name, 'notFound')
+})
+
 test('插件市场：列表与详情都带独立路由', () => {
   const list = routeMatch('#/plugins')
   assert.equal(list.name, 'plugins')
@@ -117,5 +125,6 @@ test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('settings'), true)
   assert.equal(isKnownRoute('usage'), true)
   assert.equal(isKnownRoute('schedules'), true)
+  assert.equal(isKnownRoute('connectors'), true)
   assert.equal(isKnownRoute('nope'), false)
 })
