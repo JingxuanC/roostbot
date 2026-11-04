@@ -58,6 +58,14 @@ import {
   handleListApprovalGrants,
   handleRevokeApprovalGrant,
 } from './approvals-routes.ts'
+import {
+  handleGetUsage,
+  handleInternalBudgetReserve,
+  handleInternalBudgetSettle,
+  handleInternalUsage,
+  handleListQuotas,
+  handlePatchQuota,
+} from './budget-routes.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
   handleDshRequest,
@@ -87,6 +95,7 @@ import {
 import type { AttachmentsRuntime } from './attachments-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
+import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
 import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
@@ -1052,6 +1061,18 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
   if (workspaceId !== null) {
     const gate = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin', 'member'])
     if (!gate.ok) return sendError(res, gate.status, gate.code, gate.message)
+    // 准入拦截（budget.md §5）：日 runs / tokens 配额耗尽时消息不落库。
+    if (ctx.rawStore !== undefined) {
+      const blocked = findExhaustedWorkspaceQuota(ctx.rawStore, workspaceId, ctx.now())
+      if (blocked !== null) {
+        return sendError(
+          res,
+          429,
+          'quota_exhausted',
+          `workspace ${workspaceId} daily ${blocked.metric} quota exhausted`,
+        )
+      }
+    }
   }
 
   try {
@@ -1557,6 +1578,61 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleDecideApproval(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  // 预算：控制面预留-结算与用量（budget.md §6）。
+  if (path === '/api/internal/budget/reserve') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalBudgetReserve(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/internal/budget/settle') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalBudgetSettle(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/internal/usage') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalUsage(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/quotas') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListQuotas(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/quotas\/[^/]+$/.test(path)) {
+    if (method !== 'PATCH') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handlePatchQuota(ctx, req, res, url)
+    return
+  }
+
+  if (path === '/api/usage') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleGetUsage(ctx, req, res, url)
     return
   }
 

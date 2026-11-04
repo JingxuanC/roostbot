@@ -179,6 +179,46 @@ export type {
   PutAttachmentInput,
 } from './attachments.ts'
 
+// ---- M6：预算（配额 / 预留-结算 / 用量）--------------------------------------
+export {
+  BUDGET_ERROR_CODES,
+  QUOTA_METRICS,
+  QUOTA_PERIODS,
+  QUOTA_SCOPES,
+  SOFT_LIMIT_RATIO,
+  ensureQuota,
+  findExhaustedWorkspaceQuota,
+  getQuota,
+  getReservation,
+  isSoftLimitReached,
+  listQuotas,
+  periodEnd,
+  quotaRatio,
+  recordUsage,
+  reserve,
+  setQuotaLimit,
+  settle,
+  sumUsage,
+} from './budget.ts'
+export type {
+  EnsureQuotaInput,
+  ListQuotasQuery,
+  Quota,
+  QuotaMetric,
+  QuotaPeriod,
+  QuotaScope,
+  RecordUsageInput,
+  Reservation,
+  ReserveInput,
+  ReserveResult,
+  SettleInput,
+  SettleResult,
+  UsageGroup,
+  UsageRow,
+  UsageSummary,
+  UsageTotals,
+} from './budget.ts'
+
 // ---- M5：插件市场 -------------------------------------------------------------
 export {
   MARKETPLACE_ERROR_CODES,

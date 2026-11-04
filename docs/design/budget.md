@@ -173,3 +173,37 @@ CREATE TABLE usage_rows (
 2. **预留失败**：等待（排队）还是立刻 429？（倾向：交互式 429，后台任务排队）
 3. **成本账的展示粒度**：按 Run、按 Bot、按房间——三者都要，默认按 Run。
 4. **未结算的预留怎么回收**：超时（默认 2 倍 Run wall）自动释放。
+
+## 13. 实现状态（M6-6.4 控制面批次）
+
+已实现（`migrations/0014_budget.sql`、`packages/store/src/budget.ts`、`apps/api/src/budget-routes.ts`）：
+
+| 能力 | 说明 |
+|---|---|
+| 配额读写 | `ensureQuota` / `getQuota` / `listQuotas` / `setQuotaLimit`（只改 `limit_value`） |
+| 预留-结算 | `reserve` 原子检查剩余并写 `reservations`；`settle` 幂等，`reserved -= amount`、`used += actual` |
+| 周期重置 | `reserve`/`settle` 发现 `now >= resets_at` 时清零 `used/reserved` 并推进周期 |
+| 用量 | `recordUsage` 写 `usage_rows` + `billing.usage`；`sumUsage` 汇总总量与按 Bot/Model 分组 |
+| 软限 | `used / limit >= 0.8` 返回 warning（不阻断），写一次 `billing.cap` |
+| 准入 | `POST /api/rooms/:id/messages` 落库前检查 workspace 的日 `runs`/`tokens` 配额，耗尽 429 `quota_exhausted` |
+
+接口：
+
+| 方法 | 路径 | 鉴权 |
+|---|---|---|
+| POST | `/api/internal/budget/reserve` | runtime token；201 `{reservation, remaining}`，不足 429 |
+| POST | `/api/internal/budget/settle` | runtime token；200 `{reservation, remaining}` |
+| POST | `/api/internal/usage` | runtime token；201，`<turnId>:<source>` 重放 200 + `deduped: true` |
+| GET | `/api/quotas?workspaceId=` | Bearer（成员只读） |
+| PATCH | `/api/quotas/:id` | Bearer（仅 owner） |
+| GET | `/api/usage?workspaceId=&from=&to=` | Bearer（owner/admin） |
+
+实现补充（与 §10 原文的差异）：
+
+1. **`usage_rows.idem TEXT UNIQUE`**：幂等键 `<turnId>:<source>`，重放不重复计费（§6「幂等」）。
+2. **`reservations.quota_id`**：§10 的 reservations 没有指向配额的外键，`settle` 无法定位要回落的配额；补一列，不改变预留语义。
+3. **`billing.quota.changed`**：`PATCH /api/quotas/:id` 写该事件（§4 只定义了 usage/reserve/settle/cap，这是实现补充）。
+4. **周期时区**：当前按 **UTC** 推进（日 = UTC 0 点，月 = UTC 1 号 0 点）；工作区时区留后续（§12 待决 1）。
+5. **默认配额**：§8 的默认值尚未自动播种；由调用方通过 `ensureQuota` 显式建立。
+
+尚未实现（后续批次）：模型代理（token 由调用方上报，不由控制面抓取）、容器秒采集、存储采样、预留超时回收。
