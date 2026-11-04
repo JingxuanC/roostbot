@@ -251,5 +251,12 @@ openshell sandbox exec probe -- sh -lc 'curl -sS https://example.com || true'   
 - 会话日志在 `$DSH_HOME/sessions`，`DSH_HOME=/workspace/.dsh` 跟着沙箱工作区持久化
 - 单轮沙箱（sandboxing.md §2 的第二层）留到需要"每回合工具隔离"时再加
 
-已落地：`apps/runtime/room-agent.mjs`（JSON-RPC 客户端 + 控制面循环 + 确定性 session id），
-4 个测试覆盖多轮同会话、idem、协议解析。**尚未接线**：沙箱主进程改成 room-agent、控制面从沙箱可达（`host.openshell.internal`）、远端端到端验证。
+已落地并**远端端到端验证**：
+
+- 沙箱 `user-<8hex>`（每用户一个，stop/start 复用），主进程 `node /opt/roost/room-agent.mjs`
+- room-agent 拉起长活 `dsh --profile sdk`，每个 (room,bot) 一个 session，`session/resume` 续会话
+- 策略只放行 `host.openshell.internal:<port>` 一条 tcp 规则；控制面 `ROOST_HOST=0.0.0.0`
+- 实测：两轮问答记住 4271；`stop`/`start` 之后仍能答出 4271
+- 细节与四个坑见 `docs/spikes/0002-openshell-on-remote.md`
+
+v0 妥协：runtime token 走 `--env`（OpenShell 会警告），长期走 provider。

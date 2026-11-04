@@ -323,6 +323,61 @@ OpenShell 0.1.6 的 **docker 驱动不支持 `sandbox suspend`**（`compute driv
 sandbox suspend`），所以 runner 回退到 `stop`/`start`：工作区保留、内存不保留。语义上就是
 `scheduling.md` 的「睡」，只差快照能力；换 vm/podman 驱动时自动用真正的 suspend。
 
+## 方案 A 端到端：用户沙箱 + room-agent + 多轮 + stop/start（2026-11-04）
+
+远端实测（`47.90.253.85`，Docker 28 + OpenShell 0.1.6）：
+
+```
+沙箱：user-5f840b13   ← 每用户一个，固定名字
+主进程：node /opt/roost/room-agent.mjs
+沙箱内：room-agent → 子进程 dsh --profile sdk（JSON-RPC over stdio）
+        → 每 (room,bot) 一个 sessionId
+        → 轮询控制面 http://host.openshell.internal:8792
+```
+
+房间里的实际对话：
+
+```
+[user] 请记住这个数字：4271。只回复：记住了。
+[bot]  记住了。
+[user] 我刚才让你记住的数字是多少？只回答数字。
+[bot]  4271
+```
+
+**跨 stop/start 的记忆**：
+
+```
+$ openshell sandbox stop user-5f840b13      → Stopped
+$ node apps/runtime/planA-boot.mjs          → sandbox user-5f840b13 reused (started)
+$ openshell sandbox list                    → Ready
+
+[user] 重启之后：我刚才让你记住的数字是多少？只回答数字。
+[bot]  4271
+```
+
+这说明三件事同时成立：
+
+1. **沙箱是每用户一个**，名字确定（`user-<8hex>`），stop/start 复用不重建
+2. **主进程是 room-agent**，它拉起长活 `dsh --profile sdk`
+3. **会话跟着沙箱工作区持久化**：`DSH_HOME=/workspace/.dsh` + 启动时 `session/resume`，
+   所以 stop/start 之后同一个 session 还能续上（否则会得到空会话）
+
+### 这一轮踩的四个坑
+
+| 坑 | 现象 | 修法 |
+|---|---|---|
+| SDK provider 路由名 | `-32603 no adapter registered for provider "deepseek"` | 用 **`deepseek-official`**（SDK 文档：未注册的 route 直接初始化失败） |
+| 镜像 WORKDIR 权限 | `WorkspaceValidationFailed: OCI WorkingDir is not usable by the sandbox identity` | Dockerfile 里 `chown 1000:1000 /workspace` |
+| 构建镜像用错 socket | 镜像建进了系统 docker，沙箱在 docker28 里拉不到 → `pull access denied` | 构建必须显式 `-H unix:///var/run/docker28/docker.sock`，且 `--network host`（dockerd28 用了 `--bridge=none`） |
+| Error 沙箱被复用 | `create_failed` 后管理器一直 start 坏沙箱 | 按 phase 处理：Stopped→start，Ready→复用，**Error→delete 后重建** |
+
+### v0 的妥协（记在案）
+
+- runtime token 通过 `--env` 传入沙箱：OpenShell 会警告 "looks like a credential"（非致命）。
+  长期按设计走 provider。
+- 控制面用 `ROOST_HOST=0.0.0.0` 监听，沙箱经 `host.openshell.internal:<port>` 访问；
+  策略里只放行这一条 tcp 规则。
+
 ## 对项目的意义
 
 - 选型成立：gateway + docker 驱动 + 策略模型的形状与我们的 `SandboxBackend` 一致；
