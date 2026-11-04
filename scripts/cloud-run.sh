@@ -44,7 +44,8 @@ sleep 2
 head -1 /tmp/roost-cloud-api.log
 
 echo "== 2) 配对与控制面资源"
-CODE=$(post /api/pairing/code '' '{"accountId":"acc_cloud"}' | json "d['code']")
+ACCOUNT="acc_cloud_$(date +%s)"
+CODE=$(post /api/pairing/code '' "{\"accountId\":\"$ACCOUNT\"}" | json "d['code']")
 SESSION=$(post /api/pairing/claim '' "{\"code\":\"$CODE\"}" | json "d['sessionToken']")
 printf '%s' "$SESSION" > /tmp/roost-cloud-session
 chmod 600 /tmp/roost-cloud-session
