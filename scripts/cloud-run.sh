@@ -101,13 +101,20 @@ if [ "${ROOST_CHECK_MEMORY:-0}" = "1" ] && [ -n "$SB" ]; then
   FIRST=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "d['messages'][-1]['text']" || true)
   echo "  before restart: $FIRST"
   openshell sandbox stop "$SB" >/dev/null 2>&1
-  sleep 4
+  # 等 stop 真正落定再 start；否则 OpenShell 会报 concurrent modification 并进 Error。
+  for i in $(seq 1 30); do
+    P=$(openshell sandbox list 2>/dev/null | awk -v n="$SB" '$1 == n {print $NF}')
+    [ "$P" = "Stopped" ] && break
+    sleep 2
+  done
+  sleep 3
   post "/api/workspaces/$WS/start" "$SESSION" '{}' >/dev/null
   for i in $(seq 1 60); do
     P=$(get "/api/workspaces/$WS/runtime" "$SESSION" | json "d.get('runtime') and d['runtime']['phase'] or ''")
     [ "$P" = "ready" ] && break
     sleep 3
   done
+  echo "\n  restart phase=$P"
   ask "重启之后：我刚才让你记住的数字是多少？只回答数字。"; wait_bots 5 || true
   AFTER=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "d['messages'][-1]['text']" || true)
   echo "  after restart:  $AFTER"
