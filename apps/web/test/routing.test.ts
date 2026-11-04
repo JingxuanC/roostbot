@@ -58,6 +58,14 @@ test('用量页有独立路由，且不带参数', () => {
   assert.equal(routeMatch('#/usage/x').name, 'notFound')
 })
 
+test('定时任务页有独立路由，且不带参数', () => {
+  assert.equal(routeMatch('#/schedules').name, 'schedules')
+  assert.deepEqual(routeMatch('#/schedules').params, {})
+  assert.equal(routeMatch('#/schedules/').name, 'schedules')
+  assert.equal(routeMatch('schedules').name, 'schedules')
+  assert.equal(routeMatch('#/schedules/x').name, 'notFound')
+})
+
 test('插件市场：列表与详情都带独立路由', () => {
   const list = routeMatch('#/plugins')
   assert.equal(list.name, 'plugins')
@@ -108,5 +116,6 @@ test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('panels'), true)
   assert.equal(isKnownRoute('settings'), true)
   assert.equal(isKnownRoute('usage'), true)
+  assert.equal(isKnownRoute('schedules'), true)
   assert.equal(isKnownRoute('nope'), false)
 })

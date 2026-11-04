@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：89 / 152 · 进行中：2
+- 完成：90 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -182,7 +182,7 @@
 - [ ] 6.5.2 激活控制器（clock/event/repair）
 - [x] 6.5.3 幂等（routineId+scheduledFor）+ 12h catch-up + 重叠 queue/skip
 - [ ] 6.5.4 睡/醒：空闲 stop/start（已验证，接调度）
-- [ ] 6.5.5 定时任务页（列表/启停/历史）
+- [x] 6.5.5 定时任务页（列表/新建/启停/立即运行/运行历史）
 - [ ] 6.5.6 复盘 routine 内置模板
 
 ### 6.6 观测与运维
@@ -267,3 +267,4 @@
 - 2026-11-04 M6 可观测与限流（后端 agent）：request id 回写、JSON 行日志（authorization/cookie/query token 脱敏）、`/metrics` Prometheus 文本（请求计数/延迟直方图/业务 gauge）、`GET /api/audit` 只读审计（owner/admin，workspace 归属宁少不多）、消息与插件安装内存令牌桶、healthz 扩展。417 后端测试全绿。告警/SLO 仍留文档。
 - 2026-11-04 M6 用量页（前端 agent）：`#/usage` 时间范围（今天/7天/30天）、token/工具/成本汇总、配额进度（80% 警示/100% 耗尽）、按 Bot 与模型明细；用量 403 与配额 503 独立降级。571 全量测试全绿（前端 138）。
 - 2026-11-04 M6 连接器框架（后端 agent）：迁移 0016（connections/connector_grants/connector_calls）、连接与 OAuth state 校验、按 Bot 的 read/write/actions 授权、写动作走审批或长期授权、调用审计与 idem 去重、默认 Stub 网关。431 后端测试全绿。真实 OpenConnector/OAuth 交换、Composio、连接器 UI 留后续。
+- 2026-11-04 M6 定时任务页（前端 agent）：`#/schedules` 列表/新建（cron 与 daily/weekly/every 示例）/启停/删除/立即运行，运行历史独立加载与停止；400/409/403/503 分别降级。全仓 587 测试全绿（前端 156）。容器执行与睡眠唤醒未接。

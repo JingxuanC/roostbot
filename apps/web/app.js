@@ -36,6 +36,7 @@ import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
 import { mountPanelsPage } from './views/panels.js'
 import { mountPluginDetailPage } from './views/plugin-detail.js'
 import { mountPluginsPage } from './views/plugins.js'
+import { mountSchedulesPage } from './views/schedules.js'
 import { mountSettingsPage } from './views/settings.js'
 import { mountUsagePage } from './views/usage.js'
 
@@ -1123,7 +1124,7 @@ function renderNotFound(main) {
     ui.pageHeader('找不到这个页面'),
     ui.emptyState({
       title: '地址不对',
-      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/plugins、#/panels、#/rooms/new、#/rooms/:id/settings。`,
+      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/plugins、#/panels、#/schedules、#/rooms/new、#/rooms/:id/settings。`,
       action: ui.linkButton('回首页', '#/', { variant: 'primary' }),
       secondary: ui.linkButton('Bot 列表', '#/bots', { variant: 'ghost' }),
     })
@@ -1194,6 +1195,10 @@ async function renderRoute() {
     case 'usage':
       setTitle('用量')
       await mountUsagePage(main, ctx)
+      break
+    case 'schedules':
+      setTitle('定时任务')
+      await mountSchedulesPage(main, ctx)
       break
     case 'roomNew':
       setTitle('新建房间')

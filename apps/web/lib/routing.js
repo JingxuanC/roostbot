@@ -13,6 +13,7 @@
 //   #/panels            插件面板（DSH Web iframe 容器）
 //   #/settings          设置（长期授权）
 //   #/usage             用量（token / 工具调用 / 成本 / 配额）
+//   #/schedules         定时任务（cron / 运行历史）
 //   兼容旧地址 #room    房间预览（假数据）
 
 const ROUTES = new Set([
@@ -29,6 +30,7 @@ const ROUTES = new Set([
   'approvals',
   'settings',
   'usage',
+  'schedules',
   'notFound',
 ])
 
@@ -65,6 +67,8 @@ export function routeMatch(hash) {
   if (path === '/settings') return route('settings')
   // 用量：固定一层，不带参数。
   if (path === '/usage') return route('usage')
+  // 定时任务：固定一层，不带参数。
+  if (path === '/schedules') return route('schedules')
   // 插件面板（ADR 0004）：固定一层，不带参数；面板路径由页面内清单决定。
   if (path === '/panels') return route('panels')
 

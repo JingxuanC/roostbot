@@ -3231,3 +3231,88 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+/* ------------------------------------------------------------------ 定时任务页 */
+
+.schedule-row.is-disabled {
+  opacity: 0.72;
+}
+
+.schedule-bot {
+  font-size: 12px;
+}
+
+.schedule-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-sm);
+}
+
+.schedule-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 12px;
+  color: var(--roost-muted);
+  cursor: pointer;
+}
+
+.schedule-toggle input {
+  accent-color: var(--roost-accent);
+  cursor: pointer;
+}
+
+.schedule-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.schedule-form-grid > .field:first-child,
+.schedule-form-grid > .field:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.schedule-form-grid .form-error,
+.schedule-form-grid .form-status,
+.schedule-form-foot {
+  grid-column: 1 / -1;
+}
+
+.schedule-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+
+.schedule-examples .btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.schedule-runs-table td:first-child {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .schedule-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-form-grid > .field {
+    grid-column: 1 / -1;
+  }
+
+  .schedule-row {
+    flex-direction: column;
+  }
+
+  .schedule-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+  }
+}
