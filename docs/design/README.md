@@ -21,6 +21,7 @@
 | 15 | [artifacts.md](artifacts.md) | 产物怎么到用户手上：内容寻址 + 消息级授权 + 渲染矩阵 |
 | 17 | [rooms.md](rooms.md) | 房间运行时：共享日志、轮次、派发、限额、恢复 |
 | 18 | [bots.md](bots.md) | Bot 身份：名字锁、模型固定、kickoff、设置分区 |
+| 19 | [plugin-marketplace.md](plugin-marketplace.md) | 插件市场：A/B/C/D 兼容分级、安装流程、市场数据模型 |
 | 16 | [bot-identity.md](bot-identity.md) | Bot 的图标：程序化默认，上传/生成可选 |
 
 ## 读法建议
