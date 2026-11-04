@@ -45,6 +45,10 @@ export const STORE_ERROR_CODES = [
   'ACCOUNT_WRITE_FAILED',
   'INVALID_AUTH_TOKEN',
   'AUTH_TOKEN_WRITE_FAILED',
+  // ---- 每 workspace 短期 runtime token（0021_runtime_tokens.sql / runtime-tokens.ts）--
+  'INVALID_RUNTIME_TOKEN',
+  'RUNTIME_TOKEN_NOT_FOUND',
+  'RUNTIME_TOKEN_WRITE_FAILED',
 ] as const
 
 export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number]
