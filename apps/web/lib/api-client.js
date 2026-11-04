@@ -1,6 +1,11 @@
 // API 客户端：零依赖，只依赖注入的 fetch。
 // 错误统一读 {ok:false,error:{code,message}}，message 原样交给界面显示在原地；
 // 网络失败给出中文说明，绝不假装成功（docs/design/ui.md §1 诚实优先）。
+//
+// 会话：cookie 模式默认 credentials:'include'；写请求自动读 `roost_csrf` cookie
+// 并加 `x-csrf-token`（docs/build/wave1.md §A）。Bearer 仍保留，兼容现有 token 路径。
+
+import { csrfHeaders, csrfTokenFromCookie, isUnsafeMethod } from './auth-flow.js'
 
 export class ApiError extends Error {
   /**
@@ -40,12 +45,30 @@ function errorMessageFrom(status, payload, statusText) {
 }
 
 /**
- * @param {{base?: string, getToken?: () => string, fetchImpl?: typeof fetch}} [options]
+ * @param {{
+ *   base?: string,
+ *   getToken?: () => string,
+ *   getCsrfToken?: () => string,
+ *   fetchImpl?: typeof fetch
+ * }} [options]
  */
 export function createApiClient(options = {}) {
   const base = String(options.base ?? '').replace(/\/+$/, '')
   const getToken = typeof options.getToken === 'function' ? options.getToken : () => ''
+  const getCsrfToken = typeof options.getCsrfToken === 'function' ? options.getCsrfToken : null
   const fetchImpl = options.fetchImpl
+  // 登录响应会返回 csrfToken；cookie 尚未写入/被浏览器隔离时用它兜底。
+  let fallbackCsrfToken = ''
+
+  function csrfToken() {
+    if (getCsrfToken !== null) {
+      const value = getCsrfToken()
+      if (typeof value === 'string' && value !== '') return value
+    }
+    if (fallbackCsrfToken !== '') return fallbackCsrfToken
+    const cookie = typeof document !== 'undefined' && typeof document.cookie === 'string' ? document.cookie : ''
+    return csrfTokenFromCookie(cookie)
+  }
 
   async function request(method, path, body) {
     const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : null)
@@ -56,6 +79,7 @@ export function createApiClient(options = {}) {
     const headers = {}
     const token = getToken()
     if (token) headers.authorization = `Bearer ${token}`
+    if (isUnsafeMethod(method)) Object.assign(headers, csrfHeaders(method, csrfToken()))
     if (body !== undefined) headers['content-type'] = 'application/json'
 
     let response
@@ -183,5 +207,9 @@ export function createApiClient(options = {}) {
     post: (path, body) => request('POST', path, body),
     patch: (path, body) => request('PATCH', path, body),
     del: (path) => request('DELETE', path),
+    /** 登录响应带 csrfToken 时存进内存；cookie 读不到时仍能写。 */
+    setCsrfToken(token) {
+      fallbackCsrfToken = typeof token === 'string' ? token.trim() : ''
+    },
   }
 }

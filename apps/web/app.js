@@ -18,6 +18,7 @@ import { $, avatar, botAvatar, el } from './lib/dom.js'
 import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
+import { isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
 import { canonicalWorkspaceRoute, routeMatch } from './lib/routing.js'
 import {
   NOTIFICATION_TITLE,
@@ -41,12 +42,20 @@ import { mountApprovalsPage } from './views/approvals.js'
 import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
 import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
 import { mountPanelsPage } from './views/panels.js'
-import { mountPluginDetailPage } from './views/plugin-detail.js'
+import { mountMarketplacePage } from './views/marketplace.js'
 import { mountConnectorsPage } from './views/connectors.js'
 import { mountPluginsPage } from './views/plugins.js'
 import { mountSchedulesPage } from './views/schedules.js'
 import { mountSettingsPage } from './views/settings.js'
 import { mountUsagePage } from './views/usage.js'
+import { mountInstallsPage } from './views/installs.js'
+import {
+  mountLoginPage,
+  mountRegisterPage,
+  mountResetConfirmPage,
+  mountResetPage,
+  mountVerifyEmailPage,
+} from './views/auth.js'
 
 // ---------------------------------------------------------------------------
 // 一、固定样例
@@ -924,9 +933,46 @@ const api = createApiClient({
 let pendingRoute = ''
 let pageFlash = ''
 let routeSeq = 0
+let authNotice = ''
+// 会话探测：cookie 模式下浏览器看不到 HttpOnly token，只能问 GET /api/auth/me。
+// status=unknown 表示还没问；anonymous/authenticated 是确定结果；unavailable 表示账号接口未上线。
+const authState = { status: 'unknown', account: null, available: false }
+let authProbe = null
 
 function hasToken() {
-  return typeof sessionToken === 'string' && sessionToken !== ''
+  return (typeof sessionToken === 'string' && sessionToken !== '') || authState.status === 'authenticated'
+}
+
+async function probeSession() {
+  try {
+    const me = await api.get('/api/auth/me')
+    authState.status = 'authenticated'
+    authState.account = me && typeof me === 'object' ? me : { accountId: null, email: '' }
+    authState.available = true
+    return true
+  } catch (error) {
+    if (isAuthError(error)) {
+      authState.status = 'anonymous'
+      authState.account = null
+      authState.available = true
+      return false
+    }
+    // 404/405/501/503：账号接口还没上线，退回旧的配对流程；其它错误也不阻断页面。
+    authState.status = 'unavailable'
+    authState.account = null
+    authState.available = false
+    return false
+  }
+}
+
+async function ensureAuthProbe() {
+  if (authState.status !== 'unknown') return hasToken()
+  if (authProbe === null) authProbe = probeSession()
+  try {
+    return await authProbe
+  } finally {
+    authProbe = null
+  }
 }
 
 function setTitle(title) {
@@ -941,20 +987,31 @@ function navigate(hash) {
   location.hash = hash
 }
 
-/** 受保护页面发现会话失效：回配对页，并记住原地址。message 用于特定场景（如吊销当前设备）。 */
+/** 受保护页面发现 401：记住原地址并去 #/login；登录成功后回原路由。 */
 function requirePair(message = '') {
-  if (location.hash !== '#/' && location.hash !== '') pendingRoute = location.hash
+  const target = pendingRouteAfter(location.hash)
+  if (target !== '') pendingRoute = target
+  // 401 说明 cookie/token 都不再有效；登录页应显示表单，而不是“已登录”。
+  authState.status = 'anonymous'
+  authState.account = null
   stopNeedsPolling()
   resetApprovalNotifyState()
-  navigate('#/')
-  const note = $('#pair-note')
-  if (note) {
-    note.textContent =
-      message ||
-      '会话已失效或还没配对（token 只在内存里，刷新后要重新配对）。配对成功后会回到刚才的页面。'
-    note.hidden = false
-  }
-  setTitle('配对')
+  authNotice =
+    message ||
+    '会话已失效或还没登录。登录成功后会回到刚才的页面；也可以用配对码登录。'
+  navigate('#/login')
+  setTitle('登录')
+}
+
+/** 登录/注册成功后接手：更新会话状态，并把用户送回 pendingRoute。 */
+async function completeAuth(account) {
+  authState.status = 'authenticated'
+  authState.available = true
+  if (account && typeof account === 'object') authState.account = { ...authState.account, ...account }
+  authNotice = ''
+  const csrf = account && typeof account.csrfToken === 'string' ? account.csrfToken : ''
+  if (csrf !== '' && typeof api.setCsrfToken === 'function') api.setCsrfToken(csrf)
+  await enterLiveRoom('')
 }
 
 function flash(message) {
@@ -1064,6 +1121,13 @@ function pageContext() {
     loadRoom,
     requirePair,
     hasToken,
+    authState: () => authState,
+    completeAuth,
+    consumeAuthNotice: () => {
+      const message = authNotice
+      authNotice = ''
+      return message
+    },
     refreshNeedsCount,
     refreshSidebar() {
       renderSidebarRooms()
@@ -1191,9 +1255,11 @@ async function refreshNeedsCount() {
 
 function showView(name) {
   const pair = $('#pair-view')
+  const auth = $('#auth-view')
   const room = $('#room-view')
   const page = $('#page-view')
   if (pair) pair.hidden = name !== 'pair'
+  if (auth) auth.hidden = name !== 'auth'
   if (room) room.hidden = name !== 'room'
   if (page) page.hidden = name !== 'page'
   document.body.dataset.view = name
@@ -1213,7 +1279,7 @@ function renderNotFound(main) {
     ui.pageHeader('找不到这个页面'),
     ui.emptyState({
       title: '地址不对',
-      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/plugins、#/panels、#/schedules、#/connectors、#/rooms/new、#/rooms/:id/settings。`,
+      body: `没有匹配 ${hash} 的路由。可用的有 #/bots、#/installs、#/plugins、#/panels、#/schedules、#/connectors、#/login、#/register、#/rooms/new、#/rooms/:id/settings。`,
       action: ui.linkButton('回首页', '#/', { variant: 'primary' }),
       secondary: ui.linkButton('Bot 列表', '#/bots', { variant: 'ghost' }),
     })
@@ -1303,12 +1369,55 @@ async function renderRoute() {
   // 离开房间页就断开 SSE 并清掉重连定时器，别在后台一直收消息/重连。
   if (route.name !== 'room') stopStream()
 
+  if (isAuthRouteName(route.name)) {
+    await ensureAuthProbe()
+    const authMain = $('#auth-main')
+    if (!authMain) return
+    showView('auth')
+    const ctx = pageContext()
+    switch (route.name) {
+      case 'login':
+        setTitle('登录')
+        await mountLoginPage(authMain, ctx)
+        break
+      case 'register':
+        setTitle('注册')
+        await mountRegisterPage(authMain, ctx)
+        break
+      case 'verifyEmail':
+        setTitle('验证邮箱')
+        await mountVerifyEmailPage(authMain, ctx, route.params)
+        break
+      case 'reset':
+        setTitle('重置密码')
+        await mountResetPage(authMain, ctx)
+        break
+      case 'resetConfirm':
+        setTitle('设置新密码')
+        await mountResetConfirmPage(authMain, ctx, route.params)
+        break
+      default:
+        break
+    }
+    window.scrollTo(0, 0)
+    return
+  }
+
   if (route.name === 'pair') {
     showView('pair')
     setTitle('配对')
     focusPairCode()
     return
   }
+
+  // cookie 模式下先问一次 /api/auth/me；账号接口未上线（unavailable）时不拦截，保留旧配对流程。
+  await ensureAuthProbe()
+  const previewRoom = route.name === 'room' && route.params.id === null
+  if (!previewRoom && !hasToken() && authState.available) {
+    requirePair()
+    return
+  }
+
   if (
     route.name === 'workspaceRoom' ||
     route.name === 'workspaceBot' ||
@@ -1355,7 +1464,11 @@ async function renderRoute() {
       break
     case 'plugin':
       setTitle('插件详情')
-      await mountPluginDetailPage(main, ctx, route.params.slug)
+      await mountMarketplacePage(main, ctx, route.params.slug)
+      break
+    case 'installs':
+      setTitle('已安装插件')
+      await mountInstallsPage(main, ctx)
       break
     case 'panels':
       setTitle('插件面板')

@@ -3669,3 +3669,149 @@ button {
     width: 100%;
   }
 }
+
+/* ------------------------------------------------------------------ 账号页（auth.md §4） */
+
+.auth {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xl);
+}
+
+.auth-main {
+  width: 460px;
+  max-width: 100%;
+}
+
+.auth-shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.auth-wordmark {
+  align-self: flex-start;
+  color: var(--roost-accent);
+  text-decoration: none;
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.auth-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.auth-subtitle {
+  margin: 0;
+  font-size: 13px;
+}
+
+.auth-notice {
+  margin: 0;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+  color: var(--roost-warn);
+  font-size: 12px;
+}
+
+.auth-form {
+  gap: var(--space-md);
+}
+
+.auth-form .btn[type='submit'] {
+  width: 100%;
+}
+
+.auth-foot {
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--roost-border);
+  font-size: 12px;
+}
+
+.auth-foot a {
+  color: var(--roost-accent);
+  text-decoration: none;
+}
+
+.auth-foot a:hover {
+  text-decoration: underline;
+}
+
+.auth-rule {
+  width: 100%;
+  margin: var(--space-sm) 0;
+  border: 0;
+  border-top: 1px solid var(--roost-border);
+}
+
+.auth-providers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.auth-divider {
+  margin: 0;
+  color: var(--roost-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.auth-provider-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.auth-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+/* Bot 工具来源（plugin-marketplace.md §7） */
+
+.tool-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-sm);
+  font-size: 13px;
+}
+
+.tool-source-name {
+  font-family: var(--font-mono);
+}
+
+.tool-source-from {
+  font-size: 12px;
+}
+
+/* 插件安装状态的落点提示（详情页/已安装页共用） */
+
+.plugin-install-extra {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.plugin-install-extra a {
+  color: var(--roost-accent);
+}

@@ -9,7 +9,7 @@ import { isAuthError } from '../lib/api-client.js'
 import { el } from '../lib/dom.js'
 import { pluginDetailHref } from '../lib/plugins.js'
 import * as ui from '../lib/ui.js'
-import { createInstalledPane } from './plugin-installed.js'
+import { createInstallsPane } from './installs.js'
 import {
   isPluginForbidden,
   isPluginNotReady,
@@ -21,7 +21,7 @@ import {
 
 const PAGE_TITLE = '插件'
 const PAGE_SUBTITLE =
-  '市场里的插件由控制面目录同步；安装只写记录，沙箱同步由下一批完成，界面不会把「等待同步」说成「已安装」。'
+  '市场里的插件由控制面目录同步；安装会走预检/审批/任务，界面只显示接口给的 state，不把「等待批准」说成「已安装」。'
 
 const TIER_OPTIONS = [
   { value: '', label: '全部级别' },
@@ -79,6 +79,7 @@ function pluginsView(ctx, root, workspaceId) {
   const header = ui.pageHeader(PAGE_TITLE, {
     subtitle: PAGE_SUBTITLE,
     actions: [
+      ui.linkButton('已安装插件', '#/installs', { variant: 'ghost' }),
       ui.button('刷新', {
         variant: 'ghost',
         onClick: () => {
@@ -123,7 +124,7 @@ function pluginsView(ctx, root, workspaceId) {
   const results = el('div', { class: 'plugin-results' })
   marketPane.append(toolbar, countLine, results)
 
-  const installedPane = createInstalledPane(ctx, workspaceId, {
+  const installedPane = createInstallsPane(ctx, workspaceId, {
     getTitle: (slug) => titles.get(slug) || slug,
     onGoMarket: () => setTab('market'),
     onChanged: () => {

@@ -2,6 +2,12 @@
 //
 // 路由表（docs/build/m4-contract.md §5）：
 //   #/                  配对
+//   #/login             账号登录（cookie + CSRF）
+//   #/register          注册账号（邮箱 + 密码）
+//   #/verify-email      验证邮箱（?token=）
+//   #/reset             申请重置密码
+//   #/reset-confirm     用邮件 token 重置密码（?token=）
+//   #/installs          已安装插件（更新/启停/卸载/回滚）
 //   #/rooms/new         建群
 //   #/rooms/:id         房间
 //   #/rooms/:id/settings 房间设置
@@ -25,6 +31,12 @@
 
 const ROUTES = new Set([
   'pair',
+  'login',
+  'register',
+  'verifyEmail',
+  'reset',
+  'resetConfirm',
+  'installs',
   'room',
   'roomNew',
   'roomSettings',
@@ -71,9 +83,27 @@ function decodeSegment(segment) {
  * @returns {{name: string, params: Record<string, string|null>, path: string}}
  */
 export function routeMatch(hash) {
-  const path = normalizeHash(hash)
-  const route = (name, params = {}) => ({ name, params, path })
+  const normalized = normalizeHash(hash)
+  const queryIndex = normalized.indexOf('?')
+  const path = queryIndex === -1 ? normalized : normalized.slice(0, queryIndex)
+  const query = new URLSearchParams(queryIndex === -1 ? '' : normalized.slice(queryIndex + 1))
+  // 路径段参数优先；query 里同名的值不覆盖它（避免 ?id= 改掉真实路径）。
+  const route = (name, params = {}) => {
+    const merged = { ...params }
+    for (const [key, value] of query) {
+      if (!(key in merged)) merged[key] = value
+    }
+    return { name, params: merged, path }
+  }
   if (path === '/') return route('pair')
+  // 账号流程：固定一层；token 从 ?token= 读。
+  if (path === '/login') return route('login')
+  if (path === '/register') return route('register')
+  if (path === '/verify-email') return route('verifyEmail')
+  if (path === '/reset') return route('reset')
+  if (path === '/reset-confirm') return route('resetConfirm')
+  // 已安装插件：固定一层，不带参数。
+  if (path === '/installs') return route('installs')
   // 需要你 / 待审批（addendum §C）：固定一层，不带参数。
   if (path === '/approvals') return route('approvals')
   // 设置（长期授权）：固定一层，不带参数。

@@ -5,6 +5,7 @@ import { botAvatar, el } from '../lib/dom.js'
 import { isAuthError } from '../lib/api-client.js'
 import { AVATAR_ACCEPT, avatarLabel, isAvatarDataUrl, readAvatarFile } from '../lib/avatar.js'
 import { memberNameConflict } from '../lib/mentions.js'
+import { installsListPath, toolSourceRows } from '../lib/installs.js'
 import * as ui from '../lib/ui.js'
 
 const NAME_MAX = 40
@@ -55,6 +56,7 @@ function normalizeBot(payload) {
   return {
     ...bot,
     skills: Array.isArray(bot.skills) ? bot.skills : [],
+    tools: Array.isArray(bot.tools) ? bot.tools : [],
     toolsAllow: Array.isArray(bot.toolsAllow) ? bot.toolsAllow : [],
     toolsDeny: Array.isArray(bot.toolsDeny) ? bot.toolsDeny : [],
     memoryScopes: Array.isArray(bot.memoryScopes) ? bot.memoryScopes : [],
@@ -267,6 +269,7 @@ function createView(ctx, bots) {
     }
   })
 
+  void loadToolSources()
   return el('div', { class: 'stack' }, [header, form])
 }
 
@@ -488,6 +491,36 @@ function settingsView(ctx, bot, bots) {
       }),
     ])
   )
+  const toolSourceBox = el('div', { class: 'tool-source-box' })
+  const toolSourceSection = ui.section('工具来源', [toolSourceBox], {
+    description: '来自这个 Bot 的 tools，或已安装插件 installs[].tools；没有来源的项不显示。',
+  })
+  toolSourceSection.hidden = true
+
+  async function loadToolSources() {
+    let rows = toolSourceRows({ bot, installs: [] })
+    if (rows.length === 0) {
+      try {
+        const workspaceId = await ctx.ensureWorkspaceId()
+        const data = await ctx.api.get(installsListPath(workspaceId))
+        rows = toolSourceRows({ bot, installs: Array.isArray(data?.installs) ? data.installs : [] })
+      } catch {
+        // 拿不到安装记录就不显示工具来源；不猜一个插件名。
+        return
+      }
+    }
+    if (rows.length === 0) return
+    const list = el('ul', { class: 'tool-source-list' })
+    for (const row of rows) {
+      const item = el('li', { class: 'tool-source-row' })
+      item.append(el('span', { class: 'tool-source-name', text: row.name }))
+      item.append(el('span', { class: 'tool-source-from muted', text: `← ${row.source}` }))
+      list.append(item)
+    }
+    toolSourceBox.replaceChildren(list)
+    toolSourceSection.hidden = false
+  }
+
   form.append(
     ui.section('能力', [
       ui.field('技能', skills, { id: 'bot-setting-skills', hint: '每行一个技能名' }),
@@ -501,6 +534,7 @@ function settingsView(ctx, bot, bots) {
       }),
     ])
   )
+  form.append(toolSourceSection)
   form.append(ui.section('记忆', [memory.node]))
   form.append(
     ui.section('模型', [
@@ -696,5 +730,6 @@ function settingsView(ctx, bot, bots) {
     }
   })
 
+  void loadToolSources()
   return el('div', { class: 'stack' }, [header, form])
 }

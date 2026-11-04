@@ -1,7 +1,7 @@
 // 已安装插件（plugin-marketplace.md §7）：版本、state、enabled、更新与操作。
 //
-// 安装/升级在本批只会写记录（state=installing），所以每张卡都明确写「等待沙箱同步」；
-// 不显示「已安装成功」。启停只是 PATCH enabled，不会推进 state。
+// 兼容旧入口：新的已安装页是 #/installs（views/installs.js）。
+// 这个文件保留旧的 PATCH 形状，仅当外部还直接引用时使用；plugins.js 已改用新的 pane。
 // 所有服务端文本只进 textContent。
 
 import { isAuthError } from '../lib/api-client.js'

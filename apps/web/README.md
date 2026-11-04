@@ -10,19 +10,25 @@ M4 在原来的配对页 / 房间页之上加了 Bot 与建群/房间设置，�
 | 路由 | 视图 |
 |---|---|
 | `#/` | 配对（默认） |
+| `#/login` / `#/register` | 账号登录 / 注册（cookie 会话 + CSRF） |
+| `#/verify-email` | 验证邮箱（`?token=`） |
+| `#/reset` / `#/reset-confirm` | 申请重置 / 用邮件 token 设置新密码 |
 | `#/bots` | Bot 列表 + 新建入口 |
 | `#/bots/new` | 新建 Bot |
 | `#/bots/:id` | Bot 设置（身份 / 人设 / 技能 / 工具 / 审批 / 记忆 / 模型 / 状态 / 删除） |
 | `#/approvals` | 需要你：待审批的 Bot 建群请求（批准 / 拒绝） |
 | `#/plugins` | 插件：市场 / 已安装（页内切换） |
-| `#/plugins/:slug` | 插件详情：权限、README、预检、安装 |
+| `#/plugins/:slug` | 插件详情：权限披露、README、安装（409 预检 / 202 审批） |
+| `#/installs` | 已安装插件：更新 / 停用 / 启用 / 卸载 / 回滚 |
+| `#/panels` | 插件面板：清单 + 唤醒 + iframe `/w/<ws>/dsh/` |
 | `#/rooms/new` | 建群（名称可空、公告、成员多选、host、谁回答三选一） |
 | `#/rooms/:id` | 房间 |
 | `#/rooms/:id/settings` | 房间设置（名称 / 公告 / 成员增删 / 谁回答 / 删除） |
 | `#room` | 旧的房间预览地址，仍然可用（固定样例，不请求） |
 
 未知地址渲染「找不到这个页面」，不会白屏。刷新任何 hash 地址都能重新渲染；受保护页面在
-会话失效时回到配对页，配对成功后回到原地址。
+会话失效（401）时回到 `#/login`，并把原地址记到 `pendingRoute`，登录成功后回到原地址。
+登录页仍保留「用配对码登录」入口，旧的配对流程不被移除。
 
 ## 怎么起
 
@@ -54,7 +60,9 @@ API 地址：默认同源；`?api=http://127.0.0.1:8787` 可指定（受 CORS �
 | 房间来源 | **真**：`room.createdByKind === 'bot'` 时在房间列表/房间头显示「由 Bot 创建」，title 带 `createdBy` |
 | Bot 头像上传 | **真**：读成 dataURL、预览/移除，随 `PATCH /api/bots/:id` 发 `avatar.image`；前端卡 256KB，服务端 `avatar.image` 上限 512k 字符、JSON body 上限 1MiB |
 | 需要你 / 审批 | **真**：`#/approvals` 读 `GET /api/approvals`，批准/拒绝走 `POST /api/approvals/:id`；接口 404/405/501/503 时显示「审批接口未就绪」 |
-| 插件市场 / 已安装 | **真（目录层）**：`#/plugins` 读 `GET /api/marketplace/plugins`，详情/预检/安装与启停/升级/卸载走对应 API；接口 404/405/501/503 时显示「插件接口未就绪」。**本批没有沙箱 sync**：安装/升级后 state 停在 `installing`，界面只写「等待沙箱同步」，不写「已安装成功」 |
+| 账号登录 / 注册 | **真**：`#/login`、`#/register`、`#/verify-email`、`#/reset`、`#/reset-confirm` 走 `/api/auth/*`；会话在 HttpOnly cookie，写请求带 `x-csrf-token`。`GET /api/auth/providers` 404 时隐藏 OIDC 按钮。 |
+| 插件市场 / 已安装 | **真**：`#/plugins` 读 `GET /api/marketplace/plugins`；详情页「安装」直接 `POST .../install`，409 `plugin.preflight` 显示 problems，202 显示等待批准/任务；`#/installs` 的更新/启停/卸载/回滚都是真实请求。安装任务按 `GET /api/plugin-installs/:id` 轮询 2s、最多 60s，页面隐藏时暂停；接口 404/405/501/503 时显示「插件接口未就绪」。 |
+| 插件面板 | **真**：`GET /api/plugins/panels?workspaceId=`（404 时回退旧 `GET /api/workspaces/:id/panels`，再不行降级为整页面板）；打开前 `POST /api/panels/wake`；成功 iframe `/w/<ws>/dsh/`；503 `dsh.not_running` 显示「面板未运行」。 |
 | 房间删除 | 按钮会真的发 `DELETE /api/rooms/:id`；契约与当前控制面都没有这个接口，所以会如实显示 404 错误 |
 | 「需要你」抽屉（房间页） | **样例**。预览房间时显示；连上控制面后隐藏；真实审批在 `#/approvals` |
 | 预览房间（`#room`）的消息、工具调用、审批卡 | **固定样例**，发送只追加本地气泡 |
@@ -62,23 +70,28 @@ API 地址：默认同源；`?api=http://127.0.0.1:8787` 可指定（受 CORS �
 
 ## 会话 token 与刷新
 
-token 仍然**只在内存变量里**（`app.js` 的 `sessionToken`）：不写 `localStorage` / `sessionStorage`、
-不进 URL、不渲染（对齐 `docs/design/auth.md` §7；正式做法应是 HttpOnly cookie）。
+账号登录后会话在 **HttpOnly cookie**（`roost_session`），前端读不到也不写 `localStorage` /
+`sessionStorage`；写请求自动从 `roost_csrf` cookie 读 token 并加 `x-csrf-token`。旧的 Bearer
+token 仍保留（`app.js` 的 `sessionToken`，只在内存），所以现有 token 路径不会被破坏。
 
-所以刷新页面会丢 token：受保护页面收到 401 时，前端把当前 hash 记到 `pendingRoute`，回到配对页并
-显示说明；重新配对成功后自动回到刚才的地址。这是有意的诚实行为，不是白屏 bug。
+启动时先用 `GET /api/auth/me` 探测 cookie 会话；受保护页面收到 401 时把当前 hash 记到
+`pendingRoute`，跳到 `#/login`。登录成功后由 `completeAuth` 回到原地址。账号接口还没上线
+（404/405/501/503）时不会把页面锁死：配对页和旧的 Bearer 流程仍然可用。
 
 ## 文件
 
 ```
-index.html          三个视图的静态骨架（配对 / 房间 / 路由页外壳）
+index.html          四个视图的静态骨架（配对 / 账号 / 房间 / 路由页外壳）
 app.js              入口：状态、路由、房间页、SSE、输入区、@ 菜单
 styles.css          设计 token + 组件样式（深色一套）
 lib/glyph.js        程序化图标（packages/identity/src/glyph.ts 的等价重写，无 DOM）
 lib/dom.js          el / avatar / botAvatar / $（所有用户输入只进 textContent / value）
 lib/avatar.js       readAvatarFile / isAvatarDataUrl / avatarLabel（类型 + 256KB 校验）
 lib/approvals.js    approvalSummary / approvalActions / canDecide / 时间与状态文案
-lib/api-client.js   createApiClient / ApiError；错误读 {ok:false,error:{code,message}}
+lib/api-client.js   createApiClient / ApiError；cookie + CSRF + Bearer；错误读 {ok:false,error:{code,message}}
+lib/auth-flow.js    账号 payload 校验、pendingRoute、providers、authorizeUrl 白名单、CSRF cookie
+lib/installs.js     安装状态/权限披露/409 预检/202 轮询计划/动作路径/Bot 工具来源
+lib/panels.js       面板清单/唤醒路径、404 降级、503 dsh.not_running、iframe 路径
 lib/routing.js      routeMatch(hash)
 lib/rooms.js        whoAnswersLabel(room)、roomOriginLabel、slot 状态、轮次条目
 lib/mentions.js     parseMentionQuery / insertMention / memberNameConflict
@@ -88,8 +101,10 @@ views/bots.js       Bot 列表、新建、设置（含头像上传）
 views/rooms.js      建群、房间设置
 views/approvals.js  需要你：待审批列表 + 批准/拒绝
 views/plugins.js    插件页：市场 tab（搜索/分类/级别）+ 已安装 tab 切换
-views/plugin-detail.js  插件详情：权限、README、预检、二次确认安装
-views/plugin-installed.js 已安装列表：启停/升级/卸载
+views/marketplace.js 插件详情：权限披露、README、安装（409/202）、状态轮询
+views/installs.js   已安装页：更新/启停/卸载/回滚 + 轮询
+views/auth.js       登录/注册/验证邮箱/重置密码
+views/panels.js     面板容器：唤醒 + iframe + 503「面板未运行」
 views/plugin-kit.js 插件图标/截图/权限清单与降级态
 test/*.test.ts      node:test（DOM 无关）
 ```
@@ -115,7 +130,10 @@ node --check apps/web/app.js
 - `approvalSummary` / `approvalActions` / `canDecide`：建群摘要、成员去重、终态不可操作、decision 值与 API 对齐。
 - `pluginTierBadgeText` / `pluginPermissionItems` / `pluginInstallStateLabel` / `pluginUpdateAvailable`：
   插件 tier、权限摘要、install state 与更新判断；`safeAssetUrl` 只放行 http(s) 与同源路径。
-- `createApiClient`：Bearer、JSON 正文、`{ok:false,error}` 中文 message、HTTP 500、网络失败、204。
+- `createApiClient`：Bearer、cookie `credentials:'include'`、写请求 CSRF、JSON 正文、`{ok:false,error}` 中文 message、HTTP 500、网络失败、204。
+- `auth-flow`：邮箱/密码校验、登录/注册/重置 payload、pendingRoute、providers、authorizeUrl 白名单、CSRF cookie。
+- `installs`：权限披露顺序、409 plugin.preflight、202 approval/job、轮询 2s/60s/隐藏暂停、动作路径、Bot 工具来源。
+- `panels`：新清单接口、旧接口回退、404 降级、503 dsh.not_running、iframe `/w/<ws>/dsh/`。
 
 ## 与契约/设计的偏差（有意的）
 
