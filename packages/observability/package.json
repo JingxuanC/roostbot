@@ -1,0 +1,14 @@
+{
+  "name": "@roost/observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Observability primitives: event-to-metric mapping, alert rules, deep health probes, log redaction and retention planning.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": {
+    "check": "node --experimental-strip-types --check src/index.ts && node --experimental-strip-types --check src/from-events.ts && node --experimental-strip-types --check src/alerts.ts && node --experimental-strip-types --check src/health.ts && node --experimental-strip-types --check src/logs.ts && node --experimental-strip-types --test \"test/*.test.ts\"",
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\""
+  }
+}
