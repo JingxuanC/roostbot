@@ -10,6 +10,7 @@
 // 详情载入的 404/403/503 降级沿用现有插件页；所有服务端文本只进 textContent。
 
 import { isAuthError, isMissingRoute } from '../lib/api-client.js'
+import { card } from '../lib/components.js'
 import { el } from '../lib/dom.js'
 import {
   installApprovalHref,
@@ -175,7 +176,7 @@ function detailView(ctx, root, slug, plugin, versions) {
       .join(' · '),
   })
 
-  const hero = el('div', { class: 'page-card plugin-hero' })
+  const hero = card({ className: 'plugin-hero' })
   const heroTop = el('div', { class: 'plugin-hero-top' })
   heroTop.append(pluginIcon(plugin, 'is-large'))
   const heroMain = el('div', { class: 'plugin-hero-main' })

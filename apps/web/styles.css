@@ -11,38 +11,92 @@
  */
 
 :root {
+  /* ↓↓↓ 以下 --roost-* 与 packages/tokens/src/index.ts 的 cssVariables('dark') 逐字一致。
+     零构建，手写同步；packages/tokens/test/tokens.test.ts 会比对两处，改一边要改另一边。 */
+
   /* 色彩（ui.md §6） */
-  --roost-bg: #0b0c0e;
+  --roost-bg: #0B0C0E;
   --roost-surface: #141619;
-  --roost-border: #24272c;
-  --roost-ink: #e8eaef;
-  --roost-muted: #8b93a3;
-  --roost-accent: #d8ab52;
-  --roost-ok: #7fb37f;
-  --roost-warn: #d9a441;
-  --roost-danger: #d2726a;
+  --roost-border: #24272C;
+  --roost-ink: #E8EAEF;
+  --roost-muted: #8B93A3;
+  --roost-accent: #D8AB52;
+  --roost-ok: #7FB37F;
+  --roost-warn: #D9A441;
+  --roost-danger: #D2726A;
+
+  /* 字号 / 行高 */
+  --roost-font-size-xs: 12px;
+  --roost-font-size-sm: 13px;
+  --roost-font-size-md: 14px;
+  --roost-font-size-lg: 16px;
+  --roost-font-size-xl: 20px;
+  --roost-font-size-xxl: 24px;
+  --roost-font-size-display: 32px;
+  --roost-leading-body: 1.5;
+  --roost-leading-title: 1.3;
 
   /* 间距：4 的倍数 */
-  --space-xs: 4px;
-  --space-sm: 8px;
-  --space-md: 12px;
-  --space-lg: 16px;
-  --space-xl: 24px;
-  --space-xxl: 32px;
+  --roost-space-xs: 4px;
+  --roost-space-sm: 8px;
+  --roost-space-md: 12px;
+  --roost-space-lg: 16px;
+  --roost-space-xl: 24px;
+  --roost-space-xxl: 32px;
+  --roost-space-xxxl: 48px;
 
   /* 圆角 */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --roost-radius-sm: 6px;
+  --roost-radius-md: 10px;
+  --roost-radius-lg: 14px;
+  --roost-radius-full: 999px;
+
+  /* 阴影 */
+  --roost-shadow-none: none;
+  --roost-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --roost-shadow-md: 0 12px 32px rgba(0, 0, 0, 0.36);
+  --roost-shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.5);
+
+  /* 层叠顺序 */
+  --roost-z-base: 0;
+  --roost-z-raised: 5;
+  --roost-z-sticky: 10;
+  --roost-z-header: 30;
+  --roost-z-nav: 40;
+  --roost-z-overlay: 1000;
+  --roost-z-skip-link: 2000;
 
   /* 字体 */
-  --font-sans: -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --roost-font-sans: -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  --roost-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   /* 动效 */
-  --motion-fast: 120ms;
-  --motion-base: 180ms;
-  --easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --roost-motion-fast: 120ms;
+  --roost-motion-base: 180ms;
+  --roost-motion-slow: 240ms;
+  --roost-motion-reduced: 0ms;
+  --roost-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ↑↑↑ 以上为 token 同步区。 */
+
+  /* 旧变量名保留为别名，现有规则不用改，视觉不变。 */
+  --space-xs: var(--roost-space-xs);
+  --space-sm: var(--roost-space-sm);
+  --space-md: var(--roost-space-md);
+  --space-lg: var(--roost-space-lg);
+  --space-xl: var(--roost-space-xl);
+  --space-xxl: var(--roost-space-xxl);
+  --space-xxxl: var(--roost-space-xxxl);
+  --radius-sm: var(--roost-radius-sm);
+  --radius-md: var(--roost-radius-md);
+  --radius-lg: var(--roost-radius-lg);
+  --radius-full: var(--roost-radius-full);
+  --font-sans: var(--roost-font-sans);
+  --font-mono: var(--roost-font-mono);
+  --motion-fast: var(--roost-motion-fast);
+  --motion-base: var(--roost-motion-base);
+  --motion-slow: var(--roost-motion-slow);
+  --easing: var(--roost-easing);
 
   /* 派生色：tokens 没有定义的叠加层，只用于 hover / 次级底 */
   --hover: color-mix(in srgb, var(--roost-ink) 6%, var(--roost-bg));

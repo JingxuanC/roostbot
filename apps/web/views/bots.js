@@ -2,6 +2,7 @@
 // 页面只做展示与表单；请求都经 ctx.api，错误显示在原地。
 
 import { botAvatar, el } from '../lib/dom.js'
+import { button, field } from '../lib/components.js'
 import { isAuthError } from '../lib/api-client.js'
 import { AVATAR_ACCEPT, avatarLabel, isAvatarDataUrl, readAvatarFile } from '../lib/avatar.js'
 import { memberNameConflict } from '../lib/mentions.js'
@@ -178,20 +179,22 @@ function createView(ctx, bots) {
   const role = ui.input({ id: 'bot-role', placeholder: '例如 选股', maxlength: ROLE_MAX })
   const model = ui.input({ id: 'bot-model', placeholder: '例如 deepseek-chat', maxlength: 80, required: true })
   const error = ui.inlineError()
-  const submit = ui.button('创建 Bot', { variant: 'primary', type: 'submit' })
+  const submit = button({ label: '创建 Bot', variant: 'primary', type: 'submit' })
   const form = el('form', { class: 'form page-card', novalidate: true })
 
   form.append(
     ui.section('身份', [
-      ui.field('名字', name, { id: 'bot-name', required: true, hint: `≤${NAME_MAX} 字，同一个工作区里不能重名` }),
-      ui.field('角色', role, { id: 'bot-role', hint: `≤${ROLE_MAX} 字，只影响默认提示词` }),
+      field({ label: '名字', control: name, id: 'bot-name', required: true, hint: `≤${NAME_MAX} 字，同一个工作区里不能重名` }),
+      field({ label: '角色', control: role, id: 'bot-role', hint: `≤${ROLE_MAX} 字，只影响默认提示词` }),
     ])
   )
   form.append(
     ui.section(
       '模型',
       [
-        ui.field('模型', model, {
+        field({
+          label: '模型',
+          control: model,
           id: 'bot-model',
           required: true,
           hint: '创建时固定，之后全局默认变了不影响它（服务端要求创建时必须给模型）',
