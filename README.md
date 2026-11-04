@@ -20,6 +20,7 @@
 | [docs/design/](docs/design/) | 设计文档（19 份）：事件、认证、记忆、预算、loop 与上下文、消息、协作、调度、工作区、沙箱、连接器、存储、界面、插件、产物、Bot 图标、房间运行时、Bot 身份、插件市场 |
 | [docs/spikes/](docs/spikes/) | 可复现的实验与结论（含环境限制） |
 | [docs/decisions/](docs/decisions/) | 命名、记忆、许可、插件面板等决策记录 |
+| [deploy/README.md](deploy/README.md) | 部署：systemd/launchd、反代与 TLS、备份/恢复、升级/回滚 |
 
 ## 许可
 

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.roost.api</string>
+
+  <key>UserName</key>
+  <string>roost</string>
+
+  <key>WorkingDirectory</key>
+  <string>/opt/roost</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>set -a; . /usr/local/etc/roost/api.env; exec /usr/bin/env node --experimental-strip-types /opt/roost/apps/api/src/main.ts</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>Umask</key>
+  <integer>63</integer>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/roost/roost-api.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/roost/roost-api.log</string>
+</dict>
+</plist>

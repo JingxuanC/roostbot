@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：90 / 152 · 进行中：1
+- 完成：101 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -194,16 +194,16 @@
 - [ ] 6.6.5 健康检查（API/沙箱/网关）
 - [x] 6.6.6 限流（配对、消息 30/分、安装 10/时，429 + Retry-After）
 - [ ] 6.6.7 日志保留与脱敏
-- [ ] 6.6.8 SLO 与降级策略
+- [x] 6.6.8 SLO 与降级策略（`docs/design/slo.md`）
 
 ### 6.7 部署
 
-- [ ] 6.7.1 部署文档（控制面 + 沙箱 + 网关）
-- [ ] 6.7.2 systemd/launchd 单元 + 日志轮转
+- [x] 6.7.1 部署文档（控制面 + 沙箱 + 网关）
+- [x] 6.7.2 systemd/launchd 单元 + 日志轮转（journald；macOS 轮转需外部配置）
 - [ ] 6.7.3 反代与 TLS（同源、无 CORS）
-- [ ] 6.7.4 备份/恢复（SQLite + 卷快照）
-- [ ] 6.7.5 升级与回滚流程
-- [ ] 6.7.6 多环境配置（dev/staging/prod）
+- [x] 6.7.4 备份/恢复（SQLite `.backup` + 附件 tar，已往返验证）
+- [x] 6.7.5 升级与回滚流程
+- [x] 6.7.6 多环境配置（dev/staging/prod）
 
 ## 工程债（P2/P3）
 
@@ -223,11 +223,11 @@
 ## 文档待写
 
 - [ ] D1 `docs/design/observability.md`（指标/日志/审计/告警）
-- [ ] D2 `docs/design/deployment.md`（部署/升级/备份/回滚）
-- [ ] D3 `docs/design/slo.md`（SLO 与降级）——或并入 D1
-- [ ] D4 `docs/design/compliance.md`（数据驻留/导出/删除/保留）
-- [ ] D5 `docs/design/attachments-ui.md`（若 6.2 需要独立交互说明）
-- [ ] D6 更新 `runtime-contract.md`（DSH web 表面 + SDK 会话）
+- [x] D2 `docs/design/deployment.md`（部署/升级/备份/回滚）
+- [x] D3 `docs/design/slo.md`（SLO 与降级）
+- [x] D4 `docs/design/compliance.md`（数据驻留/导出/删除/保留）
+- [x] D5 `docs/design/attachments-ui.md`（附件与产物渲染交互）
+- [x] D6 更新 `runtime-contract.md`（DSH web 表面 + SDK 会话）
 
 ## 已完成（清单建立前）
 
@@ -268,3 +268,4 @@
 - 2026-11-04 M6 用量页（前端 agent）：`#/usage` 时间范围（今天/7天/30天）、token/工具/成本汇总、配额进度（80% 警示/100% 耗尽）、按 Bot 与模型明细；用量 403 与配额 503 独立降级。571 全量测试全绿（前端 138）。
 - 2026-11-04 M6 连接器框架（后端 agent）：迁移 0016（connections/connector_grants/connector_calls）、连接与 OAuth state 校验、按 Bot 的 read/write/actions 授权、写动作走审批或长期授权、调用审计与 idem 去重、默认 Stub 网关。431 后端测试全绿。真实 OpenConnector/OAuth 交换、Composio、连接器 UI 留后续。
 - 2026-11-04 M6 定时任务页（前端 agent）：`#/schedules` 列表/新建（cron 与 daily/weekly/every 示例）/启停/删除/立即运行，运行历史独立加载与停止；400/409/403/503 分别降级。全仓 587 测试全绿（前端 156）。容器执行与睡眠唤醒未接。
+- 2026-11-04 M6 部署与文档（部署 agent）：`deploy/`（systemd/launchd、nginx 同源反代、env.example、backup/restore 已往返验证）、`deployment.md`/`slo.md`/`compliance.md`/`attachments-ui.md`、runtime-contract 补 DSH Web 与 Sandbox 会话。**发现两个部署阻塞**：公网 Origin 不被 `isAllowedOrigin` 接受、`/api/config` 不推导 https/8443；6.7.3 暂不勾，随后端修复。

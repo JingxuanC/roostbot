@@ -23,9 +23,16 @@
 | 18 | [bots.md](bots.md) | Bot 身份：名字锁、模型固定、kickoff、设置分区 |
 | 19 | [plugin-marketplace.md](plugin-marketplace.md) | 插件市场：A/B/C/D 兼容分级、安装流程、市场数据模型 |
 | 16 | [bot-identity.md](bot-identity.md) | Bot 的图标：程序化默认，上传/生成可选 |
+| 20 | [observability.md](observability.md) | 请求 id、结构化日志、`/metrics`、审计查询、限流 |
+| 21 | [deployment.md](deployment.md) | 单机拓扑、systemd/launchd、反代与 TLS、备份/恢复、升级/回滚、多环境 |
+| 22 | [slo.md](slo.md) | 可用性/延迟/错误预算与告警阈值（基于 `/metrics` 与 `/healthz`） |
+| 23 | [compliance.md](compliance.md) | 数据驻留、导出、删除、保留期（与 storage/artifacts 的 GC 对齐） |
+| 24 | [attachments-ui.md](attachments-ui.md) | 消息附件与产物渲染：图片/PDF/HTML 沙箱/表格/代码及安全边界 |
 
 ## 读法建议
 
 - **想知道"一句话从来到走"**：1 → 2 → 6 → 7
-- **想部署**：9 → 8 → 10 → 3
+- **想部署**：21 → 9 → 8 → 10 → 3
 - **想控成本**：1 → 4 → 5
+- **想上线运维**：21 → 20 → 22 → 23
+- **想改附件/产物界面**：15 → 12 → 24

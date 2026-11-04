@@ -1,0 +1,34 @@
+[Unit]
+Description=Roost Bot control plane
+Documentation=file:///opt/roost/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+# 单实例：同一个 ROOST_DB 只能有一个进程写。不要用 systemd 模板并行起多份。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=roost
+Group=roost
+WorkingDirectory=/opt/roost
+EnvironmentFile=/etc/roost/api.env
+ExecStart=/usr/bin/env node --experimental-strip-types /opt/roost/apps/api/src/main.ts
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillSignal=SIGTERM
+StateDirectory=roost
+StateDirectoryMode=0700
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=roost-api
+
+# 基础加固；启用 ROOST_SANDBOX=openshell 时，openshell CLI 可能需要访问用户目录/容器 socket，
+# 如启动失败先去掉 NoNewPrivileges/PrivateTmp 再排查。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
