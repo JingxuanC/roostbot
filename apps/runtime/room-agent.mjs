@@ -121,6 +121,7 @@ export async function startRoomAgent(options) {
   const cursors = loadCursors(options.stateFile)
   const assistant = new Map()
   const idleWaiters = new Map()
+  const prepared = new Set()
   let stopped = false
 
   const child = spawn(options.dshBin ?? 'dsh', ['--profile', options.dshProfile ?? 'sdk'], {
@@ -166,8 +167,17 @@ export async function startRoomAgent(options) {
     })
   }
 
+  async function prepareSession(sessionId) {
+    // 沙箱 stop/start 或进程重启后，DSH_HOME 里的会话还在；先 resume，
+    // 否则 SDK 会为同一个 id 新建一个空会话，多轮上下文就断了。
+    if (prepared.has(sessionId)) return
+    prepared.add(sessionId)
+    await rpc.request('session/resume', { sessionId }).catch(() => undefined)
+  }
+
   async function turn(roomId, seq, text) {
     const sessionId = sessionIdFor(roomId, botId)
+    await prepareSession(sessionId)
     assistant.delete(sessionId)
     const idle = idleSignal(sessionId)
     await rpc.request('session/prompt', {

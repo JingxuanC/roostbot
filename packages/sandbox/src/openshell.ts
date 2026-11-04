@@ -170,6 +170,20 @@ export class OpenShellBackend implements SandboxBackend {
     }
   }
 
+  async list(): Promise<Array<{ name: string; phase: string }>> {
+    const result = await runCommand(this.binary, [...this.commonArgs, 'sandbox', 'list'], { timeoutMs: 60_000 })
+    if (result.code !== 0) return []
+    return result.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !/^NAME\b/.test(line))
+      .map((line) => {
+        const parts = line.split(/\s+/)
+        return { name: parts[0] ?? '', phase: parts[parts.length - 1] ?? '' }
+      })
+      .filter((entry) => entry.name !== '')
+  }
+
   async start(handle: SandboxHandle): Promise<void> {
     const result = await runCommand(this.binary, [...this.commonArgs, 'sandbox', 'start', handle.id], { timeoutMs: 180_000 })
     if (result.code !== 0) {

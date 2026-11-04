@@ -50,15 +50,17 @@ function installShutdown(started: StartedServer): void {
 
 async function main(): Promise<void> {
   const port = readPort()
+  // 沙箱要通过 host.openshell.internal 访问控制面，所以默认仍是回环，但允许显式放开。
+  const host = process.env.ROOST_HOST ?? DEFAULT_HOST
   // ROOST_DB 给了路径 = 用真实 SQLite 卷；否则内存实现（重启即丢，界面上会说明）。
   const dbPath = process.env.ROOST_DB
   const store = dbPath === undefined || dbPath === '' ? createMemoryStore() : createStorePort(openStore(dbPath))
 
   let started: StartedServer
   try {
-    started = await startServer({ store, port, host: DEFAULT_HOST })
+    started = await startServer({ store, port, host })
   } catch (err) {
-    console.error(`roost api: failed to listen on ${DEFAULT_HOST}:${port}`, err)
+    console.error(`roost api: failed to listen on ${host}:${port}`, err)
     process.exitCode = 1
     return
   }
