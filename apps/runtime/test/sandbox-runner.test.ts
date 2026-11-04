@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { SANDBOX_PROBE, sandboxPolicy, startSandboxRunner } from '../sandbox-runner.ts'
+import { SANDBOX_PROBE, buildDshShell, sandboxPolicy, startSandboxRunner } from '../sandbox-runner.ts'
 import { startRoomWorker } from '../worker.ts'
 
 test('策略：默认拒绝出网，非 root，只读系统路径', () => {
@@ -49,4 +49,18 @@ test('worker 接受注入的 reply（沙箱回合替换点）', async () => {
   handle.stop()
   assert.deepEqual(seen, [])
   assert.equal(handle.replies, 0)
+})
+
+test('第一轮不带 --session-id，第二轮带上（headless 的 adopt 契约）', () => {
+  const first = buildDshShell({ text: '第一句', mockModel: true, modelBaseUrl: 'http://127.0.0.1:18080' })
+  assert.doesNotMatch(first, /--session-id/)
+  assert.match(first, /DSH_HOME=\/workspace\/\.dsh/)
+
+  const second = buildDshShell({ text: '第二句', sessionId: 'session-abc123', provider: 'deepseek' })
+  assert.match(second, /--session-id session-abc123/)
+  // provider 模式不设 key，凭据由网关注入
+  assert.doesNotMatch(second, /DEEPSEEK_API_KEY/)
+  // 引号内的单引号要转义
+  const tricky = buildDshShell({ text: "it's fine", sessionId: 'session-x', provider: 'deepseek' })
+  assert.match(tricky, /'it'\\''s fine'/)
 })

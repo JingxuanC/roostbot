@@ -157,6 +157,32 @@ export async function startRoomWorker(options: RoomWorkerOptions): Promise<RoomW
 }
 
 // CLI：`ROOST_API=http://127.0.0.1:8787 ROOST_RUNTIME_TOKEN=… node worker.ts`
+type SessionState = Record<string, string>
+
+/** 回复尾巴里的会话状态说明（不暴露完整 id）。 */
+function turnSuffix(turns: string): string {
+  return turns
+}
+
+function loadState(path: string | undefined): SessionState {
+  if (path === undefined || path === '') return {}
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as SessionState
+  } catch {
+    return {}
+  }
+}
+
+function saveState(path: string | undefined, state: SessionState): void {
+  if (path === undefined || path === '') return
+  try {
+    writeFileSync(`${path}.tmp`, JSON.stringify(state, null, 2))
+    renameSync(`${path}.tmp`, path)
+  } catch {
+    // 状态文件丢了只是退化成新会话，不影响回复。
+  }
+}
+
 async function main(): Promise<void> {
   const apiBase = process.env.ROOST_API ?? 'http://127.0.0.1:8787'
   const runtimeToken = process.env.ROOST_RUNTIME_TOKEN
@@ -192,6 +218,10 @@ async function main(): Promise<void> {
       }, idleMs)
     }
 
+    // 每个房间一个 DSH 会话：第一轮新建并记住 id，之后用 --session-id adopt。
+    // 不这样做的话，每条消息都是一次全新的 session（headless 默认行为），房间没有多轮上下文。
+    const statePath = process.env.ROOST_STATE_FILE
+    const sessionState = loadState(statePath)
     const modelLabel =
       process.env.ROOST_DSH_PROVIDER !== undefined
         ? `真实模型（凭据由 OpenShell provider「${process.env.ROOST_DSH_PROVIDER}」注入）`
@@ -201,12 +231,31 @@ async function main(): Promise<void> {
     const handle = await startRoomWorker({
       apiBase,
       runtimeToken,
-      reply: async ({ text }) => {
+      reply: async ({ text, roomId }) => {
         const clipped = text.length > 120 ? `${text.slice(0, 120)}…` : text
         if (dshTurn) {
-          const answer = await runner.runDshTurn(`房间里有人说：${text}`)
+          const prompt = `房间里有人说：${text}`
+          const known = sessionState[roomId]
+          let result
+          try {
+            result = await runner.runDshTurn(prompt, known)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            if (known !== undefined && /does not exist|SESSION_QUERY_SESSION_NOT_FOUND/.test(message)) {
+              // 会话日志没了（沙箱换过/工作区丢过）：退回新会话，不让房间卡住。
+              delete sessionState[roomId]
+              result = await runner.runDshTurn(prompt)
+            } else {
+              throw error
+            }
+          }
+          if (result.sessionId !== '') {
+            sessionState[roomId] = result.sessionId
+            saveState(statePath, sessionState)
+          }
           scheduleIdleSuspend()
-          return `「${answer}」（沙箱内 DSH 回合 · ${modelLabel} · ${runner.backend}）`
+          const turns = known === undefined ? '新会话' : `承接会话 ${result.sessionId.slice(-8)}`
+          return `「${result.text}」（沙箱内 DSH 回合 · ${modelLabel} · ${turnSuffix(turns)}）`
         }
         const probe = await runner.run(SANDBOX_PROBE)
         scheduleIdleSuspend()

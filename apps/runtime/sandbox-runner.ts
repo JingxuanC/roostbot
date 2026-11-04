@@ -24,13 +24,46 @@ export interface SandboxRunnerOptions {
   model?: string
   /** OpenShell provider 名：凭据由网关注入，沙箱内不设 key。 */
   provider?: string
+  /** 会话 id 的持久化文件（worker 侧），默认不持久化。 */
+  stateFile?: string
   log?: (line: string) => void
+}
+
+
+export interface DshShellOptions {
+  text: string
+  sessionId?: string
+  mockModel?: boolean
+  modelBaseUrl?: string
+  model?: string
+  provider?: string
+}
+
+/**
+ * 构造沙箱内执行的 shell。第一轮不带 `--session-id`（headless 会用 `session-<uuid>` 新建），
+ * 之后带上一轮拿到的 id 来 adopt（dsh-headless 的 resolveAgent 明确要求：未知 id 直接失败）。
+ * DSH_HOME 放 /workspace/.dsh，session 日志跟着工作区跨 stop/start 保留。
+ */
+export function buildDshShell(options: DshShellOptions): string {
+  const quoted = `'${options.text.replace(/'/g, `'\\''`)}'`
+  const mock = options.mockModel === true
+    ? 'node /opt/mock-openai.mjs > /tmp/mock.log 2>&1 & MOCK=$!; sleep 1; '
+    : ''
+  const cleanup = options.mockModel === true ? '; RC=$?; kill $MOCK 2>/dev/null; exit $RC' : ''
+  const envParts = ['export HOME=/workspace', 'export DSH_HOME=/workspace/.dsh']
+  if (options.provider === undefined) {
+    if (options.modelBaseUrl !== undefined) envParts.push(`DEEPSEEK_BASE_URL=${options.modelBaseUrl}`)
+    envParts.push('DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-mock-key}')
+    if (options.model !== undefined) envParts.push(`DEEPSEEK_DEFAULT_MODEL=${options.model}`)
+  }
+  const sessionArg = options.sessionId === undefined ? '' : ` --session-id ${options.sessionId}`
+  return `${envParts.join(' ')}; ${mock}dsh --profile headless --json${sessionArg} ${quoted}${cleanup}`
 }
 
 export interface SandboxRunner {
   readonly backend: string
   /** 跑一个 DSH headless 回合，返回模型回复文本（沙箱内执行）。 */
-  runDshTurn(text: string): Promise<string>
+  runDshTurn(text: string, sessionId?: string): Promise<{ text: string; sessionId: string }>
   /** 在沙箱里跑一条命令，返回 stdout（失败抛错）。 */
   run(command: string[]): Promise<{ code: number; stdout: string; stderr: string }>
   stop(): Promise<void>
@@ -78,27 +111,8 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
     log(`sandbox ${handle.name} created (${handle.id})`)
   }
 
-  const turnCommand = (text: string): string[] => {
-    const quoted = `'${text.replace(/'/g, `'\\''`)}'`
-    const mock = options.mockModel === true
-      ? 'node /opt/mock-openai.mjs > /tmp/mock.log 2>&1 & MOCK=$!; sleep 1; '
-      : ''
-    const cleanup = options.mockModel === true ? '; RC=$?; kill $MOCK 2>/dev/null; exit $RC' : ''
-    const envParts = ['export HOME=/workspace']
-    if (options.provider === undefined) {
-      // 没有 provider：走 mock/自建 endpoint，需要一个（假的或真的）key 环境变量。
-      if (options.modelBaseUrl !== undefined) envParts.push(`DEEPSEEK_BASE_URL=${options.modelBaseUrl}`)
-      envParts.push('DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-mock-key}')
-      if (options.model !== undefined) envParts.push(`DEEPSEEK_DEFAULT_MODEL=${options.model}`)
-    }
-    // provider 模式：**不设** DEEPSEEK_API_KEY —— 设置后 DSH 会自己发 Authorization，
-    // 反而绕过了 OpenShell 的注入（实测 401）。
-    const env = envParts.join(' ')
-    return ['sh', '-lc', `${env}; ${mock}dsh --profile headless --json ${quoted}${cleanup}`]
-  }
-
-  // docker 驱动不支持 suspend（OpenShell 0.1.6 实测：compute driver does not support
-  // sandbox suspend），所以回退到 stop/start：工作区保留、内存不保留，语义上就是「睡」。
+  // docker 驱动不支持 suspend（OpenShell 0.1.6 实测），回退到 stop/start：
+  // 工作区保留、内存不保留，语义上就是「睡」。
   let sleepMode: 'suspend' | 'stop' | null = null
 
   async function ensureAwake(): Promise<void> {
@@ -117,6 +131,19 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
     sleepMode = null
   }
 
+  const turnCommand = (text: string, sessionId?: string): string[] => [
+    'sh',
+    '-lc',
+    buildDshShell({
+      text,
+      sessionId,
+      mockModel: options.mockModel === true,
+      modelBaseUrl: options.modelBaseUrl,
+      model: options.model,
+      provider: options.provider
+    })
+  ]
+
   return {
     backend: options.backend,
     async run(command) {
@@ -126,17 +153,19 @@ export async function startSandboxRunner(options: SandboxRunnerOptions): Promise
       return { code: result.code, stdout: result.stdout, stderr: result.stderr }
     },
     /** 在沙箱里跑一个真正的 DSH headless 回合，返回 final 文本。 */
-    async runDshTurn(text) {
+    async runDshTurn(text, sessionId) {
       await ensureAwake()
       const target: SandboxHandle = handle ?? { id: `local_${name}`, name, backend: backend.id }
-      const result = await backend.exec(target, turnCommand(text), { timeoutMs: 180_000 })
+      const result = await backend.exec(target, turnCommand(text, sessionId), { timeoutMs: 240_000 })
       const lines = result.stdout.split('\n').filter((line) => line.trim().startsWith('{'))
       const final = [...lines].reverse().find((line) => line.includes('"type":"final"'))
+      const session = lines.find((line) => line.includes('"type":"session"'))
       if (final === undefined) {
         throw new Error(`dsh turn produced no final event (code=${result.code}): ${result.stderr.slice(-400)}`)
       }
-      const parsed = JSON.parse(final) as { text?: string }
-      return parsed.text ?? ''
+      const finalEvent = JSON.parse(final) as { text?: string }
+      const sessionEvent = session === undefined ? { sessionId: sessionId ?? '' } : (JSON.parse(session) as { sessionId?: string })
+      return { text: finalEvent.text ?? '', sessionId: sessionEvent.sessionId ?? sessionId ?? '' }
     },
     async suspend() {
       if (handle === null || sleepMode !== null) return false
