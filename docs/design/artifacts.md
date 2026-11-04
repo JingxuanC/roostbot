@@ -165,3 +165,11 @@ CREATE TABLE message_attachments (
 2. **`page` 的隔离**：独立 origin（推荐）还是一个子域？独立 origin 需要额外的证书与域名规划。
 3. **产物能否直接给外部人看**（分享链接）？倾向：v2 之前不做，避免把内部报告变成公开 URL。
 4. **长图/长表格的渲染上限**：超过多少像素/行就只给下载？倾向：图片长边 > 8000px、表格 > 500 行只给下载。
+
+## 12. 实现状态（2026-11-04，v0 切片）
+
+- **登记**：`POST /api/internal/artifacts`（runtime token + raw body，≤50MB）→ `LocalVolumeStore.put` → 图片剥 EXIF / 读宽高 / 尽力缩略 → 写 `artifacts` 行 → 有 `x-message-seq` 时写 `message_attachments` → 写 `artifact.published` 事件。
+- **消息级路由**：`GET /api/messages/:seq/files/:artifactId`，校验「消息存在且是 chat.message + 调用者是房间所在 workspace 成员 + 消息确实引用该产物」，失败一律 404；支持 Range（206 / Content-Range）与 `?raw=1` 下载；响应 `Cache-Control: private, no-store` + `X-Content-Type-Options: nosniff`。
+- **签名读取**：`GET /api/attachments/:id?token=`，HMAC + 过期校验，支持 Range。
+- **缩略图降级**：有 `sips`（macOS）或 `convert` 时生成 ≤640 长边 JPEG；都缺失或执行失败时 `thumbId = null`，不报错。**PDF 首页缩略图 v0 未实现**（需要 PDF 渲染器，留待后续，当前返回 `null`）。
+- **与文档的偏差**：`message_attachments` 用 `message_seq`（events.seq）而不是 `message_id`；问题 3「产物能否直接给外部人看」仍按 v2 之前不做处理，签名 URL 只签发 5 分钟。

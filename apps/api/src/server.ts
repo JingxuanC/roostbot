@@ -52,6 +52,15 @@ import {
   handleRevokeApprovalGrant,
 } from './approvals-routes.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
+import {
+  createAttachmentsRuntime,
+  handleInternalArtifactUpload,
+  handleInternalAttachmentGc,
+  handleServeMessageFile,
+  handleServeSignedAttachment,
+  handleUploadAttachment,
+} from './attachments-routes.ts'
+import type { AttachmentsRuntime } from './attachments-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
@@ -60,6 +69,8 @@ import type { RuntimeManager } from './workspace-runtime.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { hasActiveSessionsForAccount, touchSession } from '../../../packages/store/src/sessions.ts'
+import { listMessageAttachments } from '../../../packages/store/src/attachments.ts'
+import type { MessageAttachment } from '../../../packages/store/src/attachments.ts'
 
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 8787
@@ -104,6 +115,10 @@ export interface ServerOptions {
   rawStore?: Store
   /** 工作区沙箱管理器；不配置时 /start 返回 runtime.not_configured。 */
   runtimeManager?: RuntimeManager
+  /** 附件内容存储根目录；默认 ROOST_ATTACHMENTS_DIR 或 <cwd>/data/attachments。 */
+  attachmentsDir?: string
+  /** 附件签名密钥；默认 ROOST_SIGNING_SECRET，未配置时进程内随机。 */
+  signingSecret?: string
 }
 
 export interface StartedServer {
@@ -130,6 +145,8 @@ interface HandlerContext extends AuthContext {
    */
   sessionAccounts: Set<string>
   runtimeManager?: RuntimeManager
+  /** 内容存储；只有 rawStore 可用时才创建。 */
+  attachments?: AttachmentsRuntime
 }
 
 type Clock = () => number
@@ -761,13 +778,49 @@ export function roomJson(room: RoomRecord): Record<string, unknown> {
   }
 }
 
-function messageJson(message: RoomMessageRecord): Record<string, unknown> {
+function messageJson(
+  message: RoomMessageRecord,
+  attachments: MessageAttachment[] = []
+): Record<string, unknown> {
   return {
     seq: message.seq,
     at: message.at,
     actor: { kind: message.actorKind, id: message.actorId },
-    text: message.text
+    text: message.text,
+    // 无附件时也返回 []，前端形状稳定。
+    attachments: attachments.map((item) => ({
+      artifactId: item.artifactId,
+      kind: item.kind,
+      name: item.name,
+      size: item.size,
+      mime: item.mime,
+      url: item.url
+    }))
   }
+}
+
+/** 批量给消息挂上附件；只有 SQLite store 可用时才查（memory harness 不查）。 */
+function messagesJson(
+  ctx: HandlerContext,
+  messages: RoomMessageRecord[]
+): Record<string, unknown>[] {
+  if (ctx.rawStore === undefined || messages.length === 0) {
+    return messages.map((message) => messageJson(message))
+  }
+  let grouped: Map<number, MessageAttachment[]>
+  try {
+    grouped = new Map()
+    for (const item of listMessageAttachments(ctx.rawStore, messages.map((message) => message.seq))) {
+      const list = grouped.get(item.messageSeq)
+      if (list === undefined) grouped.set(item.messageSeq, [item])
+      else list.push(item)
+    }
+  } catch (error) {
+    // 附件读失败不能把整条消息列表打成 500：降级为 []，并把原因留在日志里。
+    console.error('roost api: failed to load message attachments', error)
+    grouped = new Map()
+  }
+  return messages.map((message) => messageJson(message, grouped.get(message.seq) ?? []))
 }
 
 
@@ -827,14 +880,14 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
     if (afterSeq !== undefined) {
       // 增量路径（room-agent 轮询）不受裁剪影响：after 之后照单全收。
       const messages = await ctx.store.readMessagesInternal({ roomId, afterSeq })
-      sendJson(res, 200, { messages: messages.map(messageJson) })
+      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
       return
     }
     // 首看/向前翻页走裁剪投影（rooms.md §3：保留 60、首看 12）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLogInternal({ roomId, ...query })
-    sendJson(res, 200, { messages: page.messages.map(messageJson), page: logPageJson(page) })
+    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -858,7 +911,7 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   try {
     const message = await ctx.store.postBotMessage({ roomId, botId, text, ...(idem === undefined ? {} : { idem }) })
-    sendJson(res, 201, { message: messageJson(message) })
+    sendJson(res, 201, { message: messagesJson(ctx, [message])[0] })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -911,14 +964,14 @@ async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, r
     if (afterSeq !== undefined) {
       // 增量路径（SSE 断线补拉）不受裁剪影响：after 之后照单全收。
       const messages = await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, afterSeq })
-      sendJson(res, 200, { messages: messages.map(messageJson) })
+      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
       return
     }
     // 首看给最近 12 条；before 游标向前翻，最多翻到最近 60 条（rooms.md §3）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLog({ accountId: auth.session.accountId, roomId, ...query })
-    sendJson(res, 200, { messages: page.messages.map(messageJson), page: logPageJson(page) })
+    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -980,7 +1033,7 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
         console.error('roost api: failed to open round', error)
       }
     }
-    sendJson(res, 201, { message: messageJson(message) })
+    sendJson(res, 201, { message: messagesJson(ctx, [message])[0] })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1037,9 +1090,11 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
         res.write('event: error\ndata: {"code":"stream_unavailable"}\n\n')
         break
       }
-      for (const message of batch) {
+      const batchJson = messagesJson(ctx, batch)
+      for (let index = 0; index < batch.length; index += 1) {
+        const message = batch[index]!
         lastSeq = message.seq
-        res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(messageJson(message))}\n\n`)
+        res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(batchJson[index])}\n\n`)
       }
       if (batch.length > 0) res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
       await sleep(ctx.streamPollMs)
@@ -1499,6 +1554,63 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // ---- 附件与产物（docs/design/artifacts.md §5）-------------------------------
+  if (path === '/api/attachments') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleUploadAttachment(ctx, req, res)
+    return
+  }
+
+  if (/^\/api\/attachments\/[^/]+$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/attachments\/([^/]+)$/.exec(path)
+    const id = match === null ? null : safeDecode(match[1]!)
+    if (id === null) {
+      sendError(res, 404, 'not_found', 'malformed attachment path')
+      return
+    }
+    await handleServeSignedAttachment(ctx, req, res, url, id)
+    return
+  }
+
+  if (/^\/api\/messages\/[^/]+\/files\/[^/]+$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/messages\/([^/]+)\/files\/([^/]+)$/.exec(path)
+    if (match === null) {
+      sendError(res, 404, 'not_found', 'malformed message file path')
+      return
+    }
+    await handleServeMessageFile(ctx, req, res, url, match[1]!, match[2]!)
+    return
+  }
+
+  if (path === '/api/internal/artifacts') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalArtifactUpload(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/internal/attachments/gc') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalAttachmentGc(ctx, req, res)
+    return
+  }
+
   if (path === '/api/bots') {
     if (method === 'GET') {
       await handleListBots(ctx, req, res, url)
@@ -1556,7 +1668,17 @@ export function createServer(options: ServerOptions): http.Server {
     streamPollMs: options.streamPollMs ?? 700,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
-    ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager })
+    ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
+    ...(options.rawStore === undefined
+      ? {}
+      : {
+          attachments: createAttachmentsRuntime({
+            rawStore: options.rawStore,
+            now,
+            ...(options.attachmentsDir === undefined ? {} : { root: options.attachmentsDir }),
+            ...(options.signingSecret === undefined ? {} : { signingSecret: options.signingSecret }),
+          }),
+        })
   }
 
   const server = http.createServer((req, res) => {

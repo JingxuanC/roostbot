@@ -19,7 +19,7 @@ test('按文件名升序执行迁移；再次打开不重复执行', () => {
     const dbPath = join(dir, 'workspace.db')
 
     const first = openStore(dbPath)
-    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql'])
+    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql'])
     first.close()
 
     const second = openStore(dbPath)
@@ -47,6 +47,10 @@ test('核心表与索引都在', () => {
       'capability_grants',
       'invites',
       'schema_migrations',
+      'attachments',
+      'attachment_refs',
+      'artifacts',
+      'message_attachments',
     ]) {
       assert.ok(tables.includes(name), `missing table ${name}`)
     }
@@ -61,6 +65,9 @@ test('核心表与索引都在', () => {
       'idx_events_kind_seq',
       'idx_sessions_token',
       'idx_pairing_codes_expires',
+      'idx_attachments_workspace',
+      'idx_attachments_gc',
+      'idx_message_attachments_message',
     ]) {
       assert.ok(indexes.includes(name), `missing index ${name}`)
     }
@@ -174,7 +181,7 @@ test(':memory: 也能跑迁移（测试用）', () => {
   const store = openStore(':memory:')
   try {
     assert.equal(store.path, ':memory:')
-    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql'])
+    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql'])
   } finally {
     store.close()
   }

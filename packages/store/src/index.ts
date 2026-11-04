@@ -134,3 +134,30 @@ export {
   requestBotRoom,
   startOfLocalDay,
 } from './bot-rooms.ts'
+
+// ---- M6：附件与产物 -----------------------------------------------------------
+export {
+  ARTIFACT_KINDS,
+  ATTACHMENT_RETENTION_MS,
+  addAttachmentRef,
+  deleteAttachmentRows,
+  getArtifact,
+  getAttachment,
+  linkArtifact,
+  listArtifactsByMessage,
+  listCollectableAttachments,
+  listMessageAttachments,
+  putArtifact,
+  putAttachment,
+  recordAttachmentGc,
+  removeAttachmentRef,
+  unlinkArtifact,
+} from './attachments.ts'
+export type {
+  Artifact,
+  ArtifactKind,
+  Attachment,
+  MessageAttachment,
+  PutArtifactInput,
+  PutAttachmentInput,
+} from './attachments.ts'

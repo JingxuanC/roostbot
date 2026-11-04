@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：60 / 152 · 进行中：2
+- 完成：64 / 152 · 进行中：3
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -149,10 +149,10 @@
 
 ### 6.2 存储与产物（`storage.md`/`artifacts.md`）
 
-- [ ] 6.2.1 `LocalVolumeStore` 实现（内容寻址、原子写、权限）
-- [ ] 6.2.2 附件表 + 引用计数 + GC
-- [ ] 6.2.3 上传/下载 API + Range + 预签名
-- [ ] 6.2.4 消息级文件授权路由
+- [x] 6.2.1 `LocalVolumeStore` 实现（内容寻址、原子写、权限）
+- [x] 6.2.2 附件表 + 引用计数 + GC
+- [x] 6.2.3 上传/下载 API + Range + 预签名
+- [x] 6.2.4 消息级文件授权路由
 - [ ] 6.2.5 缩略图（图片 + PDF 首页）+ EXIF 剥离
 - [ ] 6.2.6 产物渲染（image/pdf/html/table/code/page）
 - [ ] 6.2.7 产物卡片 UI + 沙箱 iframe（HTML）
@@ -252,3 +252,4 @@
 - 2026-11-04 M5 认证加固（后端 agent）：配对码签发鉴权（Bearer owner/admin + 回环 bootstrap 例外）、会话续期（<15 天续到 createdAt+180d）、`GET /api/devices` + `DELETE /api/devices/:id`（写 `auth.session.revoked`）；399 测试全绿。
 - 2026-11-04 M5 审批闭环（后端 agent）：迁移 0011（approvals 增 action/target/consequence + `approval_grants`）、`approval.requested/decided` 事件（savepoint 保证恰好一次）、运行时 `POST/GET /api/internal/approvals`（命中长期授权直接放行）、用户侧 `/api/approval-grants`（仅 owner/admin 显式创建/撤销）；406 测试全绿。
 - 2026-11-04 M5 多端（前端 agent）：SSE 显式重连（1s→30s 退避，重连前 `after=lastSeq` 补拉）、`LIVE.seen` 统一去重与按 seq 乱序插入、离线提示与 online/visibilitychange/pageshow 补拉；`apps/web` 61 测试 + CDP 断网实测通过。
+- 2026-11-04 M6 存储与产物（后端 agent）：`LocalVolumeStore`（内容寻址/原子写/去重/HMAC 签名读取）、迁移 0012（attachments/attachment_refs/artifacts/message_attachments，`message_seq` 对齐 events.seq）、raw 上传（产物 50MB / 附件 10MB）、消息级文件路由（Range/206、`?raw=1`、失败一律 404）、`attachment.gc`、EXIF 剥离与尺寸解析；431 测试全绿。缩略图尽力而为（有 sips/convert 才生成），PDF 首页缩略图未做。

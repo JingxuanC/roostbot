@@ -169,3 +169,12 @@ CREATE TABLE attachment_refs (
 2. **报告成品（HTML）存哪**：store 还是卷内文件？倾向：卷内（可被 git 式审计），store 只放大附件。
 3. **保留期按套餐差异化**：免费 30 天、付费 365 天？
 4. **图片压缩**：上传时就转 WebP，还是按需生成缩略图？倾向：保留原图 + 按需缩略图缓存。
+
+## 13. 实现状态（2026-11-04，v0 切片）
+
+- **LocalVolumeStore 已实现**：`packages/storage/src/local.ts`。`id = sha256(bytes).slice(0,32)`，落盘 `ab/cd/<id>/{blob,meta.json}`；临时文件 → fsync → rename，目录 0700、文件 0600；同内容重复 `put` 幂等。
+- **根目录**：`ROOST_ATTACHMENTS_DIR`，缺省 `<cwd>/data/attachments`；测试通过构造参数注入。
+- **签名读取**：`signRead(id, ttl)` 返回 `/api/attachments/<id>?token=<expires>.<HMAC>`；密钥取 `ROOST_SIGNING_SECRET`，未配置时进程内随机；校验同时检查 HMAC 与过期时间。
+- **元数据/引用**：迁移 `0012_attachments.sql` 建 `attachments` / `attachment_refs`；`ref_count` 与 `attachment_refs` 同事务维护，重复引用幂等。
+- **GC**：`listCollectableAttachments` 只取 `ref_count = 0` 且超过 7 天的行；`deleteAttachmentRows` 拒绝删除有引用的行；blob 由 API 层删除，删除前写 `attachment.gc` 事件。
+- **与文档的偏差**：消息身份是 `events.seq`（`rooms.ts` 约定），因此 `message_attachments` 用 `message_seq INTEGER`，文件路由为 `/api/messages/:seq/files/:artifactId`，没有引入新的 `mid`。
