@@ -17,6 +17,8 @@ COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
 
 # 会话日志跟工作区走（停止/启动沙箱不丢），见 docs/spikes/0002。
 ENV DSH_HOME=/workspace/.dsh
+# 沙箱边界由 OpenShell 提供；DSH 自己的审批在沙箱里只会卡住 Bot。
+ENV DSH_PERMISSION_MODE=danger-full-access
 ENV HOME=/workspace
 WORKDIR /workspace
 # 沙箱以 uid 1000 运行，WORKDIR 必须对它是可用的（否则 OpenShell 报

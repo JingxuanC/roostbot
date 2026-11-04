@@ -244,6 +244,7 @@
 
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
+- 2026-11-04 沙箱内 DSH 命令不再逐条要审批：runtime/planA-boot/镜像统一 `DSH_PERMISSION_MODE=danger-full-access`（边界在 OpenShell）；`bots.approval` 到 DSH 预设的映射仍未做（4.2.19）。
 - 2026-11-04 远端 31 个提交（M4 tail + M5/M6）合入：742 测试全过、verify.sh 与四个 M4 冒烟无回归；E3 迁移项标记完成。
 - 2026-11-04 头像链路打通：store 的 image 上限从 512 字符放宽到 512k 字符 + dataURL 校验，API body 上限 64KiB→1MiB；HTTP 350k 字符冒烟通过。
 - 2026-11-04 收尾修正：kickoff 轮未结束时用户消息并入同一轮（否则 cloud-run 的双 Bot 验收会只回一个）。

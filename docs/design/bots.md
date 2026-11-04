@@ -88,6 +88,12 @@ POST   /api/bots/:id/kickoff    ← 可选：重新生成开场（调试用）
 2. 人设版本保留几个？（倾向：最近 20 个）
 3. 删除时是否同时退出所有房间并通知？（已定：是。删除即退出所有房间含 DM，逐房写 `bot.removed_from_room` 事件（audience=room:<id>），另写 workspace 级 `bot.deleted`（audience=team）；恢复不自动回房间）
 
+## 8.1 命令审批从哪来
+
+DSH 默认给新会话 pin `workspace-write + ask`（base profile 的 `permission-presets`），所以每条
+bash 都要审批。沙箱里我们的边界是 OpenShell，因此沙箱 env 固定 `DSH_PERMISSION_MODE=danger-full-access`，
+DSH 自己的审批关闭；`bots.approval` 字段到 DSH 预设的映射还没做（TODO 4.2.19）。
+
 ## 9. 实现状态（2026-11-04）
 
 已实现：`bots` / `bot_versions` 迁移、名字锁、模型创建时固定、CRUD API、人设版本、权限区、软删（迁移 0010 `bots.deleted_at`，7 天窗口 `BOT_SOFT_DELETE_WINDOW_MS`，`POST /api/bots/:id/restore`）、Bot 事件（`bot.created`/`bot.updated`/`bot.deleted`/`bot.restored`/`bot.removed_from_room`，写入 workspace 事件日志）、前端列表/新建/设置页。

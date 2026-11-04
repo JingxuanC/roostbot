@@ -19,6 +19,7 @@ const result = await ensureUserSandbox({
     ROOST_STATE_FILE: '/workspace/.dsh/room-cursors.json',
     ROOST_DSH_PROVIDER: 'deepseek-official',
     ROOST_DSH_MODEL: 'deepseek-chat',
+    DSH_PERMISSION_MODE: 'danger-full-access',
     ROOST_WORKDIR: '/workspace'
   },
   log: (line) => console.log(line)

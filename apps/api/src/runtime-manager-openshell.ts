@@ -53,6 +53,9 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
           ROOST_STATE_FILE: '/workspace/.dsh/room-cursors.json',
           ROOST_DSH_PROVIDER: 'deepseek-official',
           ROOST_DSH_MODEL: 'deepseek-chat',
+          // 沙箱内的边界是 OpenShell，不是 DSH 自带的 sandbox：
+          // 不设这个的话 fresh session 会 pin 到 workspace-write + ask，每条 bash 都要人批。
+          DSH_PERMISSION_MODE: 'danger-full-access',
           ROOST_WORKDIR: '/workspace'
         },
         log: config.log ?? (() => {})
