@@ -154,17 +154,38 @@ export function createStorePort(store: Store): StorePort {
     },
 
     async listWorkspaces(input: { accountId: string }): Promise<WorkspaceRecord[]> {
-      const rows = listWorkspacesInStore(store, { tenantId: input.accountId })
-      return rows.map((workspace) => ({
-        id: workspace.id,
-        tenantId: workspace.tenantId,
-        name: workspace.name,
-        homeMode: workspace.homeMode,
-        state: workspace.state,
-        ...(workspace.volumeId === null ? {} : { volumeId: workspace.volumeId }),
-        profileVersion: workspace.profileVersion,
-        role: roleOf(store, workspace.id, input.accountId),
-        createdAt: workspace.createdAt,
+      // 账号能看到两类 workspace：自己创建的租户（tenant_id）和被邀请成为成员的（workspace_members）。
+      // 只按 tenant_id 查会让 OIDC/邮箱登录的成员看不到被邀请的工作区。
+      const rows = store.db
+        .prepare(
+          `SELECT w.id, w.tenant_id, w.name, w.home_mode, w.state, w.volume_id, w.profile_ver, w.created_at,
+                  CASE WHEN w.tenant_id = ? THEN 'owner' ELSE COALESCE(m.role, 'viewer') END AS role
+             FROM workspaces w
+             LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = ?
+            WHERE w.tenant_id = ? OR m.user_id = ?
+            ORDER BY w.created_at ASC, w.id ASC`,
+        )
+        .all(input.accountId, input.accountId, input.accountId, input.accountId) as Array<{
+          id: string
+          tenant_id: string
+          name: string
+          home_mode: string
+          state: string
+          volume_id: string | null
+          profile_ver: string
+          created_at: number | bigint
+          role: WorkspaceRole
+        }>
+      return rows.map((row) => ({
+        id: row.id,
+        tenantId: row.tenant_id,
+        name: row.name,
+        homeMode: row.home_mode as WorkspaceRecord['homeMode'],
+        state: row.state as WorkspaceRecord['state'],
+        ...(row.volume_id === null ? {} : { volumeId: row.volume_id }),
+        profileVersion: row.profile_ver,
+        role: row.role,
+        createdAt: Number(row.created_at),
       }))
     },
 

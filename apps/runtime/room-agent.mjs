@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
+import { installProfilePlugin } from './profile-plugins.mjs'
 
 /** 环境变量里的端口：非法/未设返回 undefined，交给默认值。 */
 function readPort(value) {
@@ -206,6 +207,53 @@ function saveCursors(path, cursors) {
   }
 }
 
+/**
+ * 启动 DSH 前把审批桥装进它的 profile（TODO 5.4.3）。
+ *
+ * 开关 `ROOST_APPROVAL_BRIDGE=1`（镜像默认开）。失败只记日志返回 null：
+ * 桥装不上时房间对话照常，不能因为审批面坏了让 Bot 整个起不来。
+ * 返回 null 表示「本次没有装」，调用方据此**不要**改 DSH 的权限档位。
+ */
+export function prepareApprovalBridgeProfile(options = {}) {
+  const env = options.env ?? process.env
+  const log = options.log ?? (() => {})
+  if ((env.ROOST_APPROVAL_BRIDGE ?? '0') !== '1') return null
+
+  const dshHome = (env.DSH_HOME ?? '').trim()
+  if (dshHome === '') {
+    log('approval bridge skipped: DSH_HOME is unset')
+    return null
+  }
+  const missing = ['ROOST_API', 'ROOST_RUNTIME_TOKEN', 'ROOST_WORKSPACE_ID', 'ROOST_BOT_ID'].filter(
+    (key) => (env[key] ?? '').trim() === ''
+  )
+  if (missing.length > 0) {
+    log(`approval bridge skipped: missing env ${missing.join(', ')}`)
+    return null
+  }
+
+  const timeoutMs = Number.parseInt(String(env.ROOST_APPROVAL_TIMEOUT_MS ?? ''), 10)
+  try {
+    const result = installProfilePlugin({
+      dshHome,
+      profile: (env.ROOST_DSH_PROFILE ?? 'sdk').trim() || 'sdk',
+      packageDir: (env.ROOST_APPROVAL_BRIDGE_PACKAGE ?? '/opt/roost/packages/approvals-bridge').trim(),
+      configJson: {
+        apiBase: env.ROOST_API.trim(),
+        runtimeToken: env.ROOST_RUNTIME_TOKEN.trim(),
+        workspaceId: env.ROOST_WORKSPACE_ID.trim(),
+        botId: env.ROOST_BOT_ID.trim(),
+        ...(Number.isInteger(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {})
+      }
+    })
+    log(`approval bridge installed at ${result.packageDir} (patched=${result.patched})`)
+    return result
+  } catch (error) {
+    log(`approval bridge install failed: ${errorMessage(error)}`)
+    return null
+  }
+}
+
 export async function startRoomAgent(options) {
   const log = options.log ?? ((line) => console.log(`[room-agent] ${line}`))
   const botId = options.botId
@@ -233,9 +281,21 @@ export async function startRoomAgent(options) {
   const backoffMaxMs = options.backoffMaxMs ?? 30_000
   let stopped = false
 
+  // 审批桥必须在 DSH 启动前落到 profile 里（DSH 只在 boot 时读 cordis.patch.yml）。
+  // 装成功时把 DSH 的权限档位钉到 workspace-write：控制面给沙箱的
+  // DSH_PERMISSION_MODE=danger-full-access 会把 approval 策略一起钉成 never，
+  // 桥永远收不到请求；真正的外部边界仍是 OpenShell。
+  const approvalBridge = prepareApprovalBridgeProfile({ log })
+  const childEnv = { ...process.env, ...(options.dshEnv ?? {}) }
+  if (approvalBridge !== null) {
+    childEnv.DSH_PERMISSION_MODE = (process.env.ROOST_DSH_PERMISSION_MODE ?? '').trim() || 'workspace-write'
+    childEnv.ROOST_APPROVAL_BRIDGE = '1'
+    log(`dsh permission mode for approval bridge: ${childEnv.DSH_PERMISSION_MODE}`)
+  }
+
   const child = spawn(options.dshBin ?? 'dsh', ['--profile', options.dshProfile ?? 'sdk'], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...(options.dshEnv ?? {}) }
+    env: childEnv
   })
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk) => process.stderr.write(chunk))

@@ -1,0 +1,307 @@
+// Cordis 插件入口：把审批桥真正挂进一个 DSH 进程（docs/build/wave3.md §A）。
+//
+// 这个文件是「分发」的最后一段：bridge 状态机（bridge.ts）与 DSH answerer
+// （dsh.ts）都已存在，这里只做两件有副作用的事：
+//   1. request —— 把一次 DSH 工具审批落成控制面的 pending 审批单；
+//   2. wait    —— 轮询控制面，直到人批准/拒绝，或桥自己记超时。
+//
+// 纪律：
+//   * 不 import 任何 DSH 包。`ctx` 只要求 `on(event, listener)`，由 Cordis
+//     宿主传进来；这样插件包在 node:test 里不需要 DSH 也能跑。
+//   * 建单失败 = 通道坏了，桥记 `request_failed`，DSH 适配器答 `unavailable`
+//     （不是「用户拒绝」）。超时 = 人没回答，桥记 `timeout`，DSH 答 `rejected`
+//     （失败关闭）。
+//   * 轮询只信控制面的 status：approved / rejected 以外的词一律当作「还没决定」，
+//     免得一个坏响应被误读成放行。
+
+import { createApprovalBridge } from './bridge.ts'
+import type { ApprovalBridge, BridgeDecision, WaitInput } from './bridge.ts'
+import { defaultRequestId, installApprovalBridge } from './dsh.ts'
+import type { DshApprovalContext, DshApprovalRequestEvent, InstallApprovalBridgeHandle } from './dsh.ts'
+
+/** 插件配置（由 profile 的 cordis.patch.yml 注入）。 */
+export interface ApprovalBridgePluginConfig {
+  /** 控制面根地址，例如 `http://host.openshell.internal:8792`。 */
+  apiBase: string
+  /** 每个 workspace 一张的短 runtime token；只发给控制面的内部审批接口。 */
+  runtimeToken: string
+  workspaceId: string
+  botId: string
+  /** 等一个决定的上限；默认 5 分钟，超时失败关闭。 */
+  timeoutMs?: number
+}
+
+/**
+ * 测试注入点。生产路径（Cordis 调 `apply(ctx, config)`）不传第三个参数，
+ * 于是用全局 fetch / 真实 setTimeout。
+ */
+export interface ApprovalBridgePluginDeps {
+  fetch?: typeof fetch
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
+  now?: () => number
+  /** 第一次轮询前的等待；默认 500ms（测试传小值，别真的等半秒）。 */
+  pollIntervalMs?: number
+  /** 退避上限；默认 2000ms。 */
+  maxPollIntervalMs?: number
+}
+
+/** `apply` 的返回值。Cordis 会忽略它；测试与诊断用得到账本。 */
+export interface ApprovalBridgePluginHandle {
+  bridge: ApprovalBridge
+  answerer: InstallApprovalBridgeHandle
+}
+
+const DEFAULT_TIMEOUT_MS = 5 * 60_000
+const DEFAULT_POLL_MS = 500
+const DEFAULT_MAX_POLL_MS = 2_000
+
+/**
+ * 插件入口。Cordis 的 `apply` 约定：拿到宿主 ctx 与配置，注册副作用即可。
+ *
+ * ```yaml
+ * - insert:
+ *     - id: roost-approval-bridge
+ *       name: '@roost/approval-bridge'
+ *       config:
+ *         apiBase: http://host.openshell.internal:8792
+ *         runtimeToken: rt_…
+ *         workspaceId: ws_…
+ *         botId: bot_…
+ * ```
+ */
+export function apply(
+  ctx: DshApprovalContext,
+  config: ApprovalBridgePluginConfig,
+  deps: ApprovalBridgePluginDeps = {},
+): ApprovalBridgePluginHandle {
+  if (ctx === null || typeof ctx !== 'object' || typeof (ctx as { on?: unknown }).on !== 'function') {
+    throw new TypeError('approval bridge plugin needs a Cordis-like ctx with on(event, listener)')
+  }
+  const settings = readConfig(config)
+  const doFetch = deps.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
+  const sleep = deps.sleep ?? defaultSleep
+  const pollIntervalMs = readDelay(deps.pollIntervalMs, DEFAULT_POLL_MS, 'pollIntervalMs')
+  const maxPollIntervalMs = readDelay(deps.maxPollIntervalMs, DEFAULT_MAX_POLL_MS, 'maxPollIntervalMs')
+
+  // 命中长期授权时控制面返回 { approval: null, granted: true }，没有 id 可轮询。
+  // 记在本地，wait 直接答 approved —— 否则一次已授权的调用会白等 5 分钟。
+  const granted = new Set<string>()
+  // DSH 的 approval 事件带 callId，但桥的契约里只有 argsSummary/consequence。
+  // 自己包一层 requestId，把 callId 留下来给 payload（展示与审计用）。
+  const callIds = new Map<string, string>()
+  const nextRequestId = defaultRequestId()
+
+  let bridge: ApprovalBridge
+  bridge = createApprovalBridge({
+    timeoutMs: settings.timeoutMs,
+    ...(deps.now === undefined ? {} : { now: deps.now }),
+    request: async (request) => {
+      const callId = callIds.get(request.id)
+      const response = await doFetch(`${settings.apiBase}/api/internal/approvals`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-runtime-token': settings.runtimeToken,
+        },
+        body: JSON.stringify({
+          workspaceId: settings.workspaceId,
+          kind: 'tool.call',
+          requester: settings.botId,
+          requesterKind: 'bot',
+          action: `调用工具 ${request.tool}`,
+          target: request.id,
+          consequence: request.consequence === '' ? request.argsSummary : request.consequence,
+          payload: {
+            tool: request.tool,
+            ...(callId === undefined ? {} : { callId }),
+          },
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`create approval ${response.status}`)
+      }
+      const body = await response.json().catch(() => null)
+      if (body !== null && typeof body === 'object' && body.granted === true) {
+        granted.add(request.id)
+        return { approvalId: null }
+      }
+      const id = body?.approval?.id
+      if (typeof id !== 'string' || id === '') {
+        throw new Error('create approval returned no approval id')
+      }
+      return { approvalId: id }
+    },
+    wait: (input) =>
+      waitForDecision(input, {
+        apiBase: settings.apiBase,
+        runtimeToken: settings.runtimeToken,
+        fetch: doFetch,
+        sleep,
+        pollIntervalMs,
+        maxPollIntervalMs,
+        granted,
+      }),
+  })
+
+  const answerer = installApprovalBridge(ctx, bridge, {
+    scope: { workspaceId: settings.workspaceId, botId: settings.botId },
+    describe: (request) => describeForCard(request),
+    requestId: (request) => {
+      const id = nextRequestId(request)
+      const callId = typeof request.callId === 'string' ? request.callId.trim() : ''
+      if (callId !== '') callIds.set(id, callId)
+      return id
+    },
+  })
+
+  return { bridge, answerer }
+}
+
+/** Cordis 插件名：入口模块被 patch 的 `name` 引用，导出它只是让 meta 可见。 */
+export const name = '@roost/approval-bridge'
+
+// ---- 控制面轮询 --------------------------------------------------------------
+
+interface WaitOptions {
+  apiBase: string
+  runtimeToken: string
+  fetch: typeof fetch
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>
+  pollIntervalMs: number
+  maxPollIntervalMs: number
+  granted: ReadonlySet<string>
+}
+
+/**
+ * 500ms → 2s 退避地轮询一张审批单。
+ *
+ * 返回：
+ *   * `approved` / `rejected` —— 人的决定，原样交给桥；
+ *   * `null` —— 这一轮没等到（超时 / 被 abort / 未知 status），桥据此记
+ *     `timeout`（失败关闭），**不要在这里编一个 rejected**。
+ */
+async function waitForDecision(input: WaitInput, options: WaitOptions): Promise<BridgeDecision | null> {
+  const { request, approvalId, signal, deadlineAt } = input
+  if (options.granted.has(request.id)) return 'approved'
+  if (approvalId === null) return null
+
+  let delay = options.pollIntervalMs
+  while (!signal.aborted) {
+    let response: Response
+    try {
+      response = await options.fetch(
+        `${options.apiBase}/api/internal/approvals/${encodeURIComponent(approvalId)}`,
+        { headers: { 'x-runtime-token': options.runtimeToken }, signal },
+      )
+    } catch (error) {
+      // 桥落定/超时会 abort：这不是控制面故障，安静收手。
+      if (signal.aborted || isAbortError(error)) return null
+      throw error
+    }
+    if (!response.ok) throw new Error(`poll approval ${response.status}`)
+
+    const body = await response.json().catch(() => null)
+    const status = body?.approval?.status
+    if (status === 'approved') return 'approved'
+    if (status === 'rejected') return 'rejected'
+    // pending 之外只可能是控制面加了新词：宁可继续等/超时，也不放行。
+    if (status !== 'pending') return null
+
+    if (deadlineAt !== null && Date.now() >= deadlineAt) return null
+    try {
+      await options.sleep(delay, signal)
+    } catch {
+      if (signal.aborted) return null
+      throw new Error('approval poll sleep failed')
+    }
+    delay = Math.min(delay * 2, options.maxPollIntervalMs)
+  }
+  return null
+}
+
+/** 卡片文案：DSH 只给 toolName / callId / reason / displayReason，没有工具参数。 */
+export function describeForCard(request: DshApprovalRequestEvent): {
+  argsSummary: string
+  consequence: string
+} {
+  const callId = typeof request.callId === 'string' && request.callId !== '' ? ` (call ${request.callId})` : ''
+  const reason = readDisplayReason(request)
+  return {
+    argsSummary: `${request.toolName}${callId}${reason === '' ? '' : ` — ${reason}`}`,
+    consequence:
+      reason === '' ? `tool ${request.toolName} will run with no recorded justification` : reason,
+  }
+}
+
+/** displayReason 是本地化给人看的；中文优先，其次英文，最后退到 reason。 */
+function readDisplayReason(request: DshApprovalRequestEvent): string {
+  const display = request.displayReason
+  if (display !== null && typeof display === 'object') {
+    for (const key of ['zh', 'en']) {
+      const value = display[key]
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    }
+  }
+  return typeof request.reason === 'string' ? request.reason.trim() : ''
+}
+
+// ---- 小工具 ------------------------------------------------------------------
+
+function readConfig(config: ApprovalBridgePluginConfig): Required<ApprovalBridgePluginConfig> {
+  if (config === null || typeof config !== 'object') {
+    throw new TypeError('approval bridge plugin needs a config object')
+  }
+  const apiBase = readText(config.apiBase, 'apiBase').replace(/\/+$/, '')
+  if (!/^https?:\/\//.test(apiBase)) {
+    throw new TypeError('approval bridge plugin config.apiBase must be an http(s) URL')
+  }
+  return {
+    apiBase,
+    runtimeToken: readText(config.runtimeToken, 'runtimeToken'),
+    workspaceId: readText(config.workspaceId, 'workspaceId'),
+    botId: readText(config.botId, 'botId'),
+    timeoutMs: readTimeout(config.timeoutMs),
+  }
+}
+
+function readText(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new TypeError(`approval bridge plugin config.${field} is required (non-empty string)`)
+  }
+  return value.trim()
+}
+
+function readTimeout(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_TIMEOUT_MS
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError('approval bridge plugin config.timeoutMs must be a positive finite number')
+  }
+  return Math.trunc(value)
+}
+
+function readDelay(value: number | undefined, fallback: number, field: string): number {
+  if (value === undefined) return fallback
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(`approval bridge deps.${field} must be a positive finite number`)
+  }
+  return Math.trunc(value)
+}
+
+/** 可被 abort 打断的 sleep：桥超时/落定后轮询必须立刻停手，不能挂着 500ms 定时器。 */
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal === undefined) return new Promise((resolve) => setTimeout(resolve, ms))
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function finish(): void {
+      clearTimeout(timer)
+      signal!.removeEventListener('abort', finish)
+      resolve()
+    }
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}

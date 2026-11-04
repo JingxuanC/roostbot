@@ -16,12 +16,20 @@ RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" && npm cache clean --force 
 COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
 # room-agent 的 dsh web 子进程封装（插件面板容器，ADR 0004）；缺这个文件 room-agent 起不来。
 COPY apps/runtime/dsh-web.mjs /opt/roost/dsh-web.mjs
+# 审批桥：启动 dsh 前由 room-agent 装进 $DSH_HOME/profiles/<profile>（TODO 5.4.3）。
+COPY apps/runtime/profile-plugins.mjs /opt/roost/profile-plugins.mjs
+COPY packages/approvals-bridge /opt/roost/packages/approvals-bridge
 
 # 会话日志跟工作区走（停止/启动沙箱不丢），见 docs/spikes/0002。
 ENV DSH_HOME=/workspace/.dsh
 # 沙箱里默认开面板容器（127.0.0.1:4099）；控制面/用户可设 ROOST_DSH_WEB=0 关掉。
 ENV ROOST_DSH_WEB=1
-# 沙箱边界由 OpenShell 提供；DSH 自己的审批在沙箱里只会卡住 Bot。
+# 审批桥默认开（可用 ROOST_APPROVAL_BRIDGE=0 覆盖）。开着时 room-agent 会把
+# DSH 的权限档位钉到 workspace-write，否则 approval 策略是 never，桥收不到请求。
+ENV ROOST_APPROVAL_BRIDGE=1
+ENV ROOST_APPROVAL_BRIDGE_PACKAGE=/opt/roost/packages/approvals-bridge
+# 沙箱外边界由 OpenShell 提供；这里保留 danger-full-access 作为「桥关闭时」的
+# 默认档位，桥启用时 room-agent 会覆盖它（approval 才能到达 answerer）。
 ENV DSH_PERMISSION_MODE=danger-full-access
 ENV HOME=/workspace
 WORKDIR /workspace
