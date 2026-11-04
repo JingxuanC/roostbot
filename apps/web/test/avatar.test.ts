@@ -32,6 +32,14 @@ test('readAvatarFile 把 PNG 读成可识别的 dataURL', async () => {
   assert.equal(isAvatarDataUrl(result.dataUrl), true)
 })
 
+test('readAvatarFile 能读真正的 File（浏览器同款接口）', async () => {
+  if (typeof File !== 'function') return
+  const file = new File([new Uint8Array([1, 2, 3])], 'avatar.png', { type: 'image/png' })
+  const result = await readAvatarFile(file)
+  assert.equal(result.ok, true)
+  assert.equal(result.dataUrl, 'data:image/png;base64,AQID')
+})
+
 test('readAvatarFile 接受 JPEG / WebP / GIF（accept 与类型白名单一致）', async () => {
   for (const type of ['image/jpeg', 'image/webp', 'image/gif']) {
     const result = await readAvatarFile(fakeFile(new Uint8Array([9]), type))

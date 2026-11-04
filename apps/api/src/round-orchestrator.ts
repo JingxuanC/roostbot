@@ -76,9 +76,24 @@ export interface OpenRoundInput {
  */
 export function openRoundForMessage(input: OpenRoundInput): RoomRound | null {
   const existing = activeRound(input.store, input.room.id)
-  if (existing !== null) return existing
   const detail = detailOrThrow(input.store, input.room.id)
   const engine = engineRoom(detail)
+  if (existing !== null) {
+    // kickoff 轮还没结束就来了用户消息：把这一轮的发言人并进去，而不是丢掉这条消息。
+    if (existing.startSeq === 0) {
+      const speakers = openingSpeakers(engine, { text: input.text })
+      const slots = [...existing.slots]
+      for (const speaker of speakers) {
+        if (!slots.some((slot) => slot.botId === speaker.botId)) {
+          slots.push({ botId: speaker.botId, ...(speaker.name === undefined ? {} : { name: speaker.name }), status: 'waiting' })
+        }
+      }
+      const updated = { ...existing, slots }
+      saveRound(input.store, updated)
+      return updated
+    }
+    return existing
+  }
   if (engine.members.length === 0) return null
   const speakers = openingSpeakers(engine, { text: input.text })
   const slots = speakers.map((member: { botId: string; name?: string }) => ({
