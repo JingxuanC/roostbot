@@ -161,3 +161,41 @@ export type {
   PutArtifactInput,
   PutAttachmentInput,
 } from './attachments.ts'
+
+// ---- M5：插件市场 -------------------------------------------------------------
+export {
+  MARKETPLACE_ERROR_CODES,
+  PLUGIN_INSTALL_STATES,
+  PLUGIN_SLUG_MAX,
+  PLUGIN_SLUG_PATTERN,
+  PLUGIN_TIERS,
+  createInstall,
+  deleteInstall,
+  getInstall,
+  getMarketPlugin,
+  getPublisher,
+  isPluginSlug,
+  listInstalls,
+  listMarketPlugins,
+  listPublishers,
+  listVersions,
+  updateInstall,
+  upsertMarketPlugin,
+  upsertPublisher,
+  upsertVersion,
+} from './marketplace.ts'
+export type {
+  CreateInstallInput,
+  DeleteInstallInput,
+  ListMarketPluginsQuery,
+  MarketPlugin,
+  PluginInstall,
+  PluginInstallState,
+  PluginPublisher,
+  PluginTier,
+  PluginVersion,
+  UpdateInstallInput,
+  UpsertMarketPluginInput,
+  UpsertPublisherInput,
+  UpsertVersionInput,
+} from './marketplace.ts'

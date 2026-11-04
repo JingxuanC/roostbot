@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：65 / 152 · 进行中：3
+- 完成：68 / 152 · 进行中：3
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -87,10 +87,10 @@
 
 ### 5.1 插件市场（`docs/design/plugin-marketplace.md`）
 
-- [ ] 5.1.1 表：`plugin_publishers` / `plugin_market` / `plugin_versions` / `plugin_installs`
-- [ ] 5.1.2 市场 API（列表/详情/版本/预检）
+- [x] 5.1.1 表：`plugin_publishers` / `plugin_market` / `plugin_versions` / `plugin_installs`
+- [x] 5.1.2 市场 API（列表/详情/版本/预检）
 - [ ] 5.1.3 安装流程：预检 → 权限披露 → 批准 → 写锁 → 沙箱 sync → 冒烟 → 回滚
-- [ ] 5.1.4 profile lock 生成与校验（manifest + pnpm-lock + patch 行 + integrity）
+- [x] 5.1.4 profile lock 生成与校验（manifest + pnpm-lock + patch 行 + integrity；`packages/plugins/profile-lock.ts`）
 - [ ] 5.1.5 已安装 API（更新/停用/卸载/回滚）
 - [ ] 5.1.6 市场页 + 详情页 + 已安装页
 - [ ] 5.1.7 Bot 工具列表标"来源插件"
@@ -254,3 +254,4 @@
 - 2026-11-04 M5 多端（前端 agent）：SSE 显式重连（1s→30s 退避，重连前 `after=lastSeq` 补拉）、`LIVE.seen` 统一去重与按 seq 乱序插入、离线提示与 online/visibilitychange/pageshow 补拉；`apps/web` 61 测试 + CDP 断网实测通过。
 - 2026-11-04 M6 存储与产物（后端 agent）：`LocalVolumeStore`（内容寻址/原子写/去重/HMAC 签名读取）、迁移 0012（attachments/attachment_refs/artifacts/message_attachments，`message_seq` 对齐 events.seq）、raw 上传（产物 50MB / 附件 10MB）、消息级文件路由（Range/206、`?raw=1`、失败一律 404）、`attachment.gc`、EXIF 剥离与尺寸解析；431 测试全绿。缩略图尽力而为（有 sips/convert 才生成），PDF 首页缩略图未做。
 - 2026-11-04 M5 审批前端（前端 agent）：卡片展示 action/target/consequence + 请求方，已决策留历史行；「需要你」角标改真实 pending 数；新增 `#/settings` 长期授权管理（列表/创建/撤销，403 提示仅 owner/admin）。`apps/web` 70 测试 + CDP 手工验收通过。
+- 2026-11-04 M5 插件市场第一批（后端 agent）：迁移 0013（4 张表 + `plugin_installs.state`）、目录/详情/版本/预检 API、安装记录与 `plugin.install/update/uninstall` 事件、发布者白名单与 A/B tier 校验；升级后 state 回到 `installing` 等第二批 sync。462 测试全绿。沙箱 sync/重启/冒烟/快照回滚留第二批。

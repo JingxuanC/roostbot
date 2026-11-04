@@ -224,3 +224,22 @@ Bot 设置里的工具列表要标**来源**（`mcp__data__* ← 行情中心`�
   在建沙箱前经 sync 接口拉锁，拉不到即失败（不假装启动成功），锁 id 注入沙箱 env
   （`ROOST_PROFILE_LOCK_ID`）。未做：沙箱内 `dsh plugin sync --lockfile` 应用锁、锁落盘到
   workspace 卷（等真实插件安装才有内容可装）。锁的纯构造在 `packages/plugins/src/profile-lock.ts`。
+- **2026-11-04（M5-5.1 第一批：目录 + 预检 + 安装记录）**：
+  - 迁移 `0013_marketplace.sql` 落地 §5 四张表（publishers / market / versions / installs）。
+    `plugin_installs` 增 `state`（`installing|installed|failed|disabling`，默认 `installing`）——
+    这是给**第二批 sync/回滚**准备的状态列：本批写入安装行时还没执行 sync，所以不写 `installed`。
+  - `packages/store/src/marketplace.ts` 提供 publisher / market / version / install 的读写与
+    `plugin.install|plugin.update|plugin.uninstall` 事件（domain=`plugin`，actor=user，
+    subject=`{kind:'plugin',id:slug}`，payload 带 workspace/slug/version/lock）。
+    `UNIQUE(workspace_id, slug)` 冲突返回 tagged `PLUGIN_INSTALL_EXISTS`。
+  - API：`GET /api/marketplace/plugins`（含可选 `workspaceId` 的 installed 标记）、详情/版本、
+    `POST .../preflight`（复用 `packages/plugins` 的 `classifyPlugin`/`preflight`，DSH 版本取
+    镜像基线 `0.2.1-rc.5`）、`POST .../install`（owner/admin；发布者 verified 白名单；
+    tier 仅 A/B；预检无阻断问题；重复安装幂等）、`GET /api/plugin-installs?workspaceId=`、
+    `PATCH/DELETE /api/plugin-installs/:id`。内存 port（无 rawStore）一律 503
+    `runtime.not_configured`。
+  - **批次边界**：install 返回 `202 {install: {state:'installing'}, next:'sync'}`；本批**不执行**
+    沙箱 `pnpm install --frozen-lockfile`、不重启 DSH、不跑冒烟、不做快照回滚。
+    `lock` 只是 profile-lock 摘要（`source=marketplace` + 市场版本 integrity/id），
+    真正从 plugins 表生成完整 profile 锁是第二批的事。sync/回滚、`state` 推进到
+    `installed|failed|disabling`、以及安装前快照都留到第二批。

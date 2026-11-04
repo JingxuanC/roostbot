@@ -19,7 +19,7 @@ test('按文件名升序执行迁移；再次打开不重复执行', () => {
     const dbPath = join(dir, 'workspace.db')
 
     const first = openStore(dbPath)
-    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql'])
+    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql'])
     first.close()
 
     const second = openStore(dbPath)
@@ -51,6 +51,10 @@ test('核心表与索引都在', () => {
       'attachment_refs',
       'artifacts',
       'message_attachments',
+      'plugin_publishers',
+      'plugin_market',
+      'plugin_versions',
+      'plugin_installs',
     ]) {
       assert.ok(tables.includes(name), `missing table ${name}`)
     }
@@ -68,6 +72,10 @@ test('核心表与索引都在', () => {
       'idx_attachments_workspace',
       'idx_attachments_gc',
       'idx_message_attachments_message',
+      'idx_plugin_market_category',
+      'idx_plugin_market_tier',
+      'idx_plugin_versions_slug',
+      'idx_plugin_installs_workspace',
     ]) {
       assert.ok(indexes.includes(name), `missing index ${name}`)
     }
@@ -181,7 +189,7 @@ test(':memory: 也能跑迁移（测试用）', () => {
   const store = openStore(':memory:')
   try {
     assert.equal(store.path, ':memory:')
-    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql'])
+    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql'])
   } finally {
     store.close()
   }

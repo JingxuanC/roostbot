@@ -53,6 +53,16 @@ import {
 } from './approvals-routes.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
+  handleDeletePluginInstall,
+  handleGetMarketplacePlugin,
+  handleListMarketplacePlugins,
+  handleListMarketplaceVersions,
+  handleListPluginInstalls,
+  handleMarketplaceInstall,
+  handleMarketplacePreflight,
+  handlePatchPluginInstall,
+} from './marketplace-routes.ts'
+import {
   createAttachmentsRuntime,
   handleInternalArtifactUpload,
   handleInternalAttachmentGc,
@@ -1368,6 +1378,74 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handlePluginsSync(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  // 插件市场：目录 / 详情 / 预检 / 安装（plugin-marketplace.md §6；M5-5.1）。
+  if (path === '/api/marketplace/plugins') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListMarketplacePlugins(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/marketplace\/plugins\/[^/]+\/versions$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListMarketplaceVersions(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/marketplace\/plugins\/[^/]+\/preflight$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleMarketplacePreflight(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/marketplace\/plugins\/[^/]+\/install$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleMarketplaceInstall(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/marketplace\/plugins\/[^/]+$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleGetMarketplacePlugin(ctx, req, res, url)
+    return
+  }
+
+  if (path === '/api/plugin-installs') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListPluginInstalls(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/plugin-installs\/[^/]+$/.test(path)) {
+    if (method === 'PATCH') {
+      await handlePatchPluginInstall(ctx, req, res, url)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeletePluginInstall(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
     return
   }
 
