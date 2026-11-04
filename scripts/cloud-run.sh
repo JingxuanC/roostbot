@@ -1,0 +1,92 @@
+#!/bin/sh
+# 云端一键跑 M4：控制面 + 用户沙箱（room-agent）+ 两个 Bot 的房间对话。
+#
+# 前置（在云主机上，仓库根执行）：
+#   * OpenShell gateway 可认证（openshell status → Authenticated）
+#   * 镜像已构建：docker build -f apps/runtime/agent.Dockerfile -t roost/agent:dev .
+#   * 环境变量：
+#       ROOST_RUNTIME_TOKEN=<随机串>      内部接口 token（脚本也会用）
+#       ROOST_SANDBOX=openshell           （固定）
+#       ROOST_CP_HOST=host.openshell.internal
+#       ROOST_CP_PORT=<控制面端口，默认 8792>
+#       ROOST_SANDBOX_IMAGE=roost/agent:dev
+#       PORT=<控制面端口，默认 8792>
+#       ROOST_DB=<sqlite 路径，默认 ./data/roost.db>
+#
+# 用法： sh scripts/cloud-run.sh
+# 结束后：浏览器打开 http://<云主机>:<PORT>/ ，用脚本打印的新配对码配对。
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT" || exit 1
+
+PORT="${PORT:-8792}"
+CP_HOST="${ROOST_CP_HOST:-host.openshell.internal}"
+CP_PORT="${ROOST_CP_PORT:-$PORT}"
+TOKEN="${ROOST_RUNTIME_TOKEN:-}"
+DB="${ROOST_DB:-$ROOT/data/roost.db}"
+IMAGE="${ROOST_SANDBOX_IMAGE:-roost/agent:dev}"
+BASE="http://127.0.0.1:$PORT"
+
+[ -n "$TOKEN" ] || { echo "need ROOST_RUNTIME_TOKEN"; exit 2; }
+command -v python3 >/dev/null || { echo "need python3"; exit 2; }
+
+json() { python3 -c "import sys,json;d=json.load(sys.stdin);print(eval(sys.argv[1],{'d':d}))" "$1" 2>/dev/null; }
+post() { curl -sS -m 30 -X POST "$BASE$1" -H 'content-type: application/json' ${2:+-H "authorization: Bearer $2"} -d "$3"; }
+get()  { curl -sS -m 30 "$BASE$1" -H "authorization: Bearer $2"; }
+
+echo "== 1) 启动控制面（SQLite + 沙箱管理）"
+mkdir -p "$(dirname "$DB")"
+pkill -f "apps/api/src/main.ts" 2>/dev/null
+ROOST_HOST=0.0.0.0 ROOST_DB="$DB" ROOST_RUNTIME_TOKEN="$TOKEN" PORT="$PORT" \
+ROOST_SANDBOX=openshell ROOST_CP_HOST="$CP_HOST" ROOST_CP_PORT="$CP_PORT" ROOST_SANDBOX_IMAGE="$IMAGE" \
+nohup node --experimental-strip-types apps/api/src/main.ts > /tmp/roost-cloud-api.log 2>&1 &
+sleep 2
+head -1 /tmp/roost-cloud-api.log
+
+echo "== 2) 配对与控制面资源"
+CODE=$(post /api/pairing/code '' '{"accountId":"acc_cloud"}' | json "d['code']")
+SESSION=$(post /api/pairing/claim '' "{\"code\":\"$CODE\"}" | json "d['sessionToken']")
+WS=$(post /api/workspaces "$SESSION" '{"name":"云端验收"}' | json "d['workspace']['id']")
+echo "  workspace=$WS"
+
+BOT_A=$(post /api/bots "$SESSION" "{\"workspaceId\":\"$WS\",\"name\":\"研究员\",\"role\":\"选股\",\"model\":\"deepseek-chat\"}" | json "d['bot']['id']")
+BOT_B=$(post /api/bots "$SESSION" "{\"workspaceId\":\"$WS\",\"name\":\"评审员\",\"role\":\"风控\",\"model\":\"deepseek-chat\"}" | json "d['bot']['id']")
+ROOM=$(post /api/rooms "$SESSION" "{\"workspaceId\":\"$WS\",\"name\":\"云端验收\",\"memberBotIds\":[\"$BOT_A\",\"$BOT_B\"],\"hostBotId\":\"$BOT_A\",\"responder\":{\"kind\":\"everyone\"}}" | json "d['room']['id']")
+echo "  bots=$BOT_A,$BOT_B room=$ROOM"
+
+echo "== 3) 启动用户沙箱（room-agent 作为主进程）"
+post "/api/workspaces/$WS/start" "$SESSION" '{}' > /tmp/roost-start.json
+cat /tmp/roost-start.json | head -c 300; echo
+for i in $(seq 1 60); do
+  PHASE=$(get "/api/workspaces/$WS/runtime" "$SESSION" | json "d.get('runtime') and d['runtime']['phase'] or ''")
+  [ "$PHASE" = "ready" ] && break
+  sleep 3
+done
+echo "  runtime phase=$PHASE"
+
+echo "== 4) 两个 Bot 的房间对话"
+post "/api/rooms/$ROOM/messages" "$SESSION" '{"text":"请用一句话说今天盘前该看什么"}' >/dev/null
+for i in $(seq 1 60); do
+  COUNT=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "sum(1 for m in d['messages'] if m['actor']['kind']=='bot')")
+  [ "${COUNT:-0}" -ge 2 ] && break
+  sleep 3
+done
+get "/api/rooms/$ROOM/messages" "$SESSION" | python3 -c '
+import sys,json
+for m in json.load(sys.stdin)["messages"]:
+    print(f"  [{m[\"actor\"][\"kind\"]}] {m[\"text\"][:120]}")
+'
+ROUND_STATE=$(get "/api/rooms/$ROOM" "$SESSION" | json "d.get('round') and d['round']['state'] or 'none'")
+echo "  round=$ROUND_STATE"
+
+WEB_CODE=$(post /api/pairing/code '' '{"accountId":"acc_cloud"}' | json "d['code']")
+echo
+echo "== 完成"
+echo "  浏览器: http://<云主机>:$PORT/  配对码: $WEB_CODE"
+echo "  房间:   $ROOM"
+if [ "${COUNT:-0}" -ge 2 ] && [ "$ROUND_STATE" = "done" ]; then
+  echo "  结果: PASS（两个 Bot 都回复，轮次 done）"
+  exit 0
+fi
+echo "  结果: 未达成（检查 /tmp/roost-cloud-api.log、openshell logs、镜像）"
+exit 1
