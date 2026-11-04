@@ -80,7 +80,7 @@
 
 - [x] 4.5.1 新建 Bot → 出现"自我介绍 + 问用途"的 kickoff 消息
 - [x] 4.5.2 建群拉 2 个 Bot → 两个 Bot 都能按 responder 回答
-- [ ] 4.5.3 远端真实模型两轮对话（记得上一句）→ 沙箱重启后仍记得
+- [x] 4.5.3 远端真实模型两轮对话（记得上一句）→ 沙箱重启后仍记得
 - [ ] 4.5.4 以上全部在浏览器里完成（不靠 curl / 手工脚本）
 
 ## M5 平台能力（P1）
@@ -245,6 +245,7 @@
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
 - 2026-11-04 沙箱内 DSH 命令不再逐条要审批：runtime/planA-boot/镜像统一 `DSH_PERMISSION_MODE=danger-full-access`（边界在 OpenShell）；`bots.approval` 到 DSH 预设的映射仍未做（4.2.19）。
+- 2026-11-04 远端 4.5.3 验收 PASS：真实 DeepSeek 双 Bot 同房间各自回复；stop/start 沙箱后追问仍答出 4271（sandbox user-7cceef0c）。
 - 2026-11-04 wave3 完成：缩略图/EXIF 上传接线、DSH 审批桥包、每 workspace 短 runtime token 全路由接线、设计 tokens+组件化、调度 repair/event 与宿主 idle sleeper；1208 测试。
 - 2026-11-04 wave2 完成并接线：记忆 claims/cleanup、模型代理+计量、Composio+缩略图库、观测（事件指标/告警/深度健康/日志脱敏）、激活控制器+idle-sleeper、工程债清理（E1/E4/E5/E7/E8/E11/E12）；1068 测试 + verify.sh 全绿。
 - 2026-11-04 wave1 完成并接线：账号登录（scrypt+OIDC+cookie/CSRF）、插件安装真实流水线（预检/审批/job/sync/回滚）、沙箱 dsh web 面板 + workspace 端口转发、登录/安装/面板前端；892 测试 + wave1 HTTP 冒烟 10/10。
