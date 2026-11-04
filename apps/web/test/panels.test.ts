@@ -1,7 +1,62 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { panelFailureMessage, panelProxyPath, panelStateLabel } from '../lib/panels.js'
+import {
+  PANEL_NOT_CONFIGURED_MESSAGE,
+  normalizeDshBase,
+  panelFailureMessage,
+  panelProxyPath,
+  panelProxyUrl,
+  panelStateLabel,
+} from '../lib/panels.js'
+
+test('normalizeDshBase：只接受 http(s) origin，返回规范化 origin', () => {
+  assert.equal(normalizeDshBase('http://127.0.0.1:4098'), 'http://127.0.0.1:4098')
+  assert.equal(normalizeDshBase('https://dsh.example.com'), 'https://dsh.example.com')
+  assert.equal(normalizeDshBase('http://dsh.example.com/'), 'http://dsh.example.com')
+  assert.equal(normalizeDshBase('HTTP://Example.COM:80'), 'http://example.com')
+  assert.equal(normalizeDshBase('  http://127.0.0.1:4098  '), 'http://127.0.0.1:4098')
+  assert.equal(normalizeDshBase('http://[::1]:4098'), 'http://[::1]:4098')
+})
+
+test('normalizeDshBase：拒绝非 http(s)、带路径/凭据/query/hash 与坏值', () => {
+  const bad = [
+    null,
+    undefined,
+    42,
+    '',
+    '   ',
+    'ftp://127.0.0.1:4098',
+    'javascript:alert(1)',
+    '//127.0.0.1:4098',
+    'http://127.0.0.1:4098/path',
+    'http://127.0.0.1:4098/?q=1',
+    'http://127.0.0.1:4098/#frag',
+    'http://user:pass@127.0.0.1:4098',
+    'http://127.0.0.1:4098//',
+    'not a url',
+    'http://',
+  ]
+  for (const value of bad) assert.equal(normalizeDshBase(value), null, String(value))
+})
+
+test('panelProxyUrl：dshBase + 固定路径，非法任一项返回 null', () => {
+  assert.equal(panelProxyUrl('http://127.0.0.1:4098', 'ws_1'), 'http://127.0.0.1:4098/w/ws_1/dsh/')
+  assert.equal(
+    panelProxyUrl('http://127.0.0.1:4098/', 'ws-1', 'plugins/market/index.html'),
+    'http://127.0.0.1:4098/w/ws-1/dsh/plugins/market/index.html'
+  )
+  assert.equal(panelProxyUrl('https://dsh.example.com', 'ws_1', 'panel'), 'https://dsh.example.com/w/ws_1/dsh/panel')
+  assert.equal(panelProxyUrl(null, 'ws_1'), null)
+  assert.equal(panelProxyUrl('http://127.0.0.1:4098/path', 'ws_1'), null)
+  assert.equal(panelProxyUrl('http://127.0.0.1:4098', 'ws/1'), null)
+  assert.equal(panelProxyUrl('http://127.0.0.1:4098', 'ws_1', '../secret'), null)
+})
+
+test('配置缺失文案明确指向 ROOST_DSH_PROXY_PORT', () => {
+  assert.match(PANEL_NOT_CONFIGURED_MESSAGE, /面板容器未配置/)
+  assert.match(PANEL_NOT_CONFIGURED_MESSAGE, /ROOST_DSH_PROXY_PORT/)
+})
 
 test('panelProxyPath：固定前缀，根路径与面板子路径', () => {
   assert.equal(panelProxyPath('ws_1'), '/w/ws_1/dsh/')

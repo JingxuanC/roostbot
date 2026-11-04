@@ -1,16 +1,21 @@
 // 插件面板（ADR 0004 / plugin-marketplace.md §3 C 级、§12）。
 //
-// 流程：ensureWorkspaceId → POST /w/:ws/dsh/session 拿 HttpOnly cookie → 探测 /w/:ws/dsh/*
-// → 用 sandbox="allow-scripts" 的 iframe 嵌 DSH Web。iframe 的 src 只能由 lib/panels.js
-// 生成（固定前缀 + 白名单路径），绝不接受外部 URL。
+// 流程：GET /api/config 取 dshBase → ensureWorkspaceId → POST /w/:ws/dsh/session 拿 cookie
+// → GET /api/workspaces/:id/dsh/status 由控制面代探活 → 用 iframe 嵌 dshBase 上的 DSH Web。
+// 反代跑在独立端口（独立 origin），iframe 才允许 allow-same-origin；插件代码仍碰不到主页面。
 //
-// 失败态：401/403/404/502 由探测拿到；10s 未 load 按超时处理。iframe 的 opaque origin
-// 读不到响应状态，所以先用同源 fetch（只带 cookie、不带 Bearer）探测；探测通过后 iframe
-// 仍可能因为凭据差异拿不到内容。所有服务端文本只进 textContent。
+// iframe 的 src 只能由 lib/panels.js 生成（http(s) origin + 白名单路径），绝不接受外部 URL。
+// 失败态：配置缺失、status 不可用、10s 未 load 都显示失败卡片。所有服务端文本只进 textContent。
 
 import { isAuthError } from '../lib/api-client.js'
 import { el } from '../lib/dom.js'
-import { panelFailureMessage, panelProxyPath, panelStateLabel } from '../lib/panels.js'
+import {
+  PANEL_NOT_CONFIGURED_MESSAGE,
+  normalizeDshBase,
+  panelFailureMessage,
+  panelProxyUrl,
+  panelStateLabel,
+} from '../lib/panels.js'
 import * as ui from '../lib/ui.js'
 import { createPanelsCatalog } from './panels-catalog.js'
 
@@ -18,21 +23,32 @@ const PAGE_TITLE = '插件面板'
 const PAGE_SUBTITLE = '插件面板由沙箱里的 DSH Web 渲染；Roost 的产品界面不变，面板只是容器里的一个标签页。'
 const LOAD_TIMEOUT_MS = 10_000
 const IFRAME_TITLE = '插件面板（DSH Web）'
+const statusOf = (error) => (error && typeof error.status === 'number' ? error.status : 0)
+const codeOf = (error) => (error && typeof error.code === 'string' ? error.code : '')
 
-function statusOf(error) {
-  return error && typeof error.status === 'number' ? error.status : 0
-}
-
-function codeOf(error) {
-  return error && typeof error.code === 'string' ? error.code : ''
-}
-
-/**
- * @param {HTMLElement} root
- * @param {object} ctx pageContext
- */
+/** @param {HTMLElement} root @param {object} ctx pageContext */
 export async function mountPanelsPage(root, ctx) {
   root.replaceChildren(ui.loading('正在准备插件面板…'))
+
+  // 1. 反代源由控制面下发；未启用独立端口时 dshBase=null，这里不猜地址。
+  let config
+  try {
+    config = await ctx.api.get('/api/config')
+  } catch (error) {
+    configFailure(root, ctx, '面板配置载入失败', `读取 /api/config 失败：${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
+
+  const rawBase = config && typeof config === 'object' ? config.dshBase : null
+  const dshBase = normalizeDshBase(rawBase)
+  if (dshBase === null) {
+    const message =
+      rawBase === null || rawBase === undefined
+        ? PANEL_NOT_CONFIGURED_MESSAGE
+        : `面板容器配置不合法（dshBase=${String(rawBase)}）。${PANEL_NOT_CONFIGURED_MESSAGE}`
+    configFailure(root, ctx, '面板容器未配置', message)
+    return
+  }
 
   let workspaceId = ''
   try {
@@ -54,38 +70,48 @@ export async function mountPanelsPage(root, ctx) {
     return
   }
 
-  const basePath = panelProxyPath(workspaceId)
-  if (basePath === null) {
-    root.replaceChildren(
-      ui.pageHeader(PAGE_TITLE),
-      ui.errorState({
-        error: new Error('工作区标识不合法，无法生成面板地址'),
-        message: '工作区标识不合法，无法生成面板地址；这里不会拼任何外部 URL。',
-        onRetry: () => void mountPanelsPage(root, ctx),
-      })
-    )
+  if (panelProxyUrl(dshBase, workspaceId) === null) {
+    configFailure(root, ctx, '工作区标识不合法', '工作区标识不合法，无法生成面板地址；这里不会拼任何外部 URL。')
     return
   }
 
-  const view = createPanelsView(ctx, workspaceId, basePath)
+  const view = createPanelsView(ctx, workspaceId, dshBase)
   root.replaceChildren(view.node)
   const main = root.closest('main')
   if (main) main.focus()
   void view.start()
 }
 
-function createPanelsView(ctx, workspaceId, basePath) {
+/** 配置缺失/非法时的整页失败卡片（此时还没有 workspace，不渲染清单与容器）。 */
+function configFailure(root, ctx, title, message) {
+  root.replaceChildren(
+    el('div', { class: 'stack' }, [
+      ui.pageHeader(PAGE_TITLE),
+      el('section', { class: 'page-card' }, [
+        el('div', { class: 'panel-failure', role: 'alert' }, [
+          ui.emptyState({
+            title,
+            body: message,
+            action: ui.button('重试', { variant: 'primary', onClick: () => void mountPanelsPage(root, ctx) }),
+            secondary: ui.linkButton('去插件市场', '#/plugins', { variant: 'ghost' }),
+          }),
+        ]),
+      ]),
+    ])
+  )
+}
+
+function createPanelsView(ctx, workspaceId, dshBase) {
   let state = 'idle'
   let loadSeq = 0
   let currentPath
   let timeoutTimer = null
-  let abortController = null
   let iframe = null
 
   const openButton = ui.button('在新标签打开', {
     variant: 'outline',
     disabled: true,
-    title: 'cookie 已种在本站；新标签直接打开面板容器',
+    title: 'cookie 已种在控制面；新标签直接打开独立源上的面板容器',
     onClick: openInNewTab,
   })
   const refreshButton = ui.button('刷新', {
@@ -127,10 +153,6 @@ function createPanelsView(ctx, workspaceId, basePath) {
     if (timeoutTimer !== null) {
       clearTimeout(timeoutTimer)
       timeoutTimer = null
-    }
-    if (abortController !== null) {
-      abortController.abort()
-      abortController = null
     }
     if (iframe !== null) {
       iframe.removeEventListener('load', handleFrameLoad)
@@ -193,7 +215,8 @@ function createPanelsView(ctx, workspaceId, basePath) {
       class: 'panel-iframe',
       src,
       title: IFRAME_TITLE,
-      sandbox: 'allow-scripts',
+      // 反代在独立端口（独立 origin）：允许同源脚本跑起来，同时仍碰不到主控制面页面。
+      sandbox: 'allow-scripts allow-same-origin',
       referrerpolicy: 'no-referrer',
     })
     iframe.addEventListener('load', handleFrameLoad)
@@ -201,9 +224,10 @@ function createPanelsView(ctx, workspaceId, basePath) {
   }
 
   function openInNewTab() {
-    // cookie 已经种在 Path=/w/<ws>/dsh/ 上，新标签直接可用。
-    if (typeof window !== 'undefined' && typeof window.open === 'function') {
-      window.open(basePath, '_blank', 'noopener')
+    // cookie 已经种在 Path=/w/<ws>/dsh/ 上；cookie 不区分端口，独立源的新标签也能用。
+    const url = panelProxyUrl(dshBase, workspaceId)
+    if (url !== null && typeof window !== 'undefined' && typeof window.open === 'function') {
+      window.open(url, '_blank', 'noopener')
     }
   }
 
@@ -236,54 +260,32 @@ function createPanelsView(ctx, workspaceId, basePath) {
     if (seq !== loadSeq || state !== 'loading') return
     openButton.disabled = false
 
-    const src = panelProxyPath(workspaceId, panelPath)
+    const src = panelProxyUrl(dshBase, workspaceId, panelPath)
     if (src === null) {
       showFailure(400, 'invalid_path')
       return
     }
 
-    // 2. 探测：只带 cookie（不带 Bearer），尽量贴近 iframe 的请求；
-    //    iframe 的 opaque origin 读不到状态码，所以先在这里判 401/403/404/502。
-    const controller = new AbortController()
-    abortController = controller
-    let response
+    // 2. 探活由控制面代做（同源、带 Bearer）：前端不再跨源 fetch 反代端口。
+    let status
     try {
-      response = await fetch(src, {
-        method: 'GET',
-        credentials: 'include',
-        cache: 'no-store',
-        signal: controller.signal,
-        headers: { accept: 'text/html' },
-      })
-    } catch {
+      status = await ctx.api.get(`/api/workspaces/${encodeURIComponent(workspaceId)}/dsh/status`)
+    } catch (error) {
       if (seq !== loadSeq || state !== 'loading') return
-      if (controller.signal.aborted) showFailure(0, 'timeout')
-      else showFailure(0, 'network')
-      return
-    }
-    abortController = null
-    if (seq !== loadSeq || state !== 'loading') return
-
-    if (!response.ok) {
-      let code = ''
-      try {
-        const body = await response.json()
-        code = body && body.error && typeof body.error.code === 'string' ? body.error.code : ''
-      } catch {
-        code = ''
+      if (isAuthError(error)) {
+        clearLoaders()
+        setState('failed')
+        ctx.requirePair()
+        return
       }
-      if (seq !== loadSeq || state !== 'loading') return
-      showFailure(response.status, code)
+      showFailure(statusOf(error), codeOf(error))
       return
     }
-
-    // 探测只用来判断状态；正文丢掉，iframe 会重新请求。
-    try {
-      if (response.body && typeof response.body.cancel === 'function') await response.body.cancel()
-    } catch {
-      // 已读/已关闭都无所谓。
-    }
     if (seq !== loadSeq || state !== 'loading') return
+    if (status === null || typeof status !== 'object' || status.available !== true) {
+      showFailure(502)
+      return
+    }
 
     mountIframe(src)
   }

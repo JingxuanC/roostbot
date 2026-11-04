@@ -1,12 +1,38 @@
-// 插件面板（ADR 0004 / plugin-marketplace.md §3 C 级）：路径拼接、状态与失败文案。
+// 插件面板（ADR 0004 / plugin-marketplace.md §3 C 级）：反代源、路径拼接、状态与失败文案。
 // 纯函数，不碰 DOM；等价于 packages/plugins/src/surface.ts 的约定，但前端不能直接 import TS。
 //
-// 安全边界：iframe 的 src 只能由本模块生成——固定 `/w/<workspaceId>/dsh/` 前缀，
-// panel.path 只允许 [A-Za-z0-9/_.-]，拒绝空段、`.`、`..` 与绝对路径，绝不接受任意 URL。
+// 安全边界：iframe 的 src 只能由本模块生成——反代源必须是 http(s) origin，
+// 路径固定为 `/w/<workspaceId>/dsh/`，panel.path 只允许 [A-Za-z0-9/_.-]，
+// 拒绝空段、`.`、`..` 与绝对路径，绝不接受任意 URL。
 
 const WORKSPACE_ID = /^[A-Za-z0-9_-]+$/
 const PANEL_PATH = /^[A-Za-z0-9/_.-]+$/
 const MAX_PANEL_PATH = 512
+
+/** 控制面未启用独立反代端口时的失败文案。 */
+export const PANEL_NOT_CONFIGURED_MESSAGE = '面板容器未配置（控制面未启用 ROOST_DSH_PROXY_PORT）。'
+
+/**
+ * 校验 GET /api/config 的 dshBase：只接受 http(s) origin（无路径/query/hash/凭据）。
+ * 返回规范化 origin（默认端口会被去掉）；不合法返回 null。
+ * @param {unknown} value
+ * @returns {string|null}
+ */
+export function normalizeDshBase(value) {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (raw === '') return null
+  let url
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  if (url.username !== '' || url.password !== '') return null
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') return null
+  return url.origin
+}
 
 /**
  * 面板代理地址。workspaceId 不合法或 panelPath 含非法字符/路径穿越时返回 null。
@@ -26,6 +52,20 @@ export function panelProxyPath(workspaceId, panelPath) {
   const segments = panelPath.split('/')
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null
   return `${base}${panelPath}`
+}
+
+/**
+ * 面板的完整 URL：合法 dshBase + 合法路径才返回；任一项不合法返回 null。
+ * @param {unknown} dshBase
+ * @param {string} workspaceId
+ * @param {string} [panelPath]
+ * @returns {string|null}
+ */
+export function panelProxyUrl(dshBase, workspaceId, panelPath) {
+  const origin = normalizeDshBase(dshBase)
+  const path = panelProxyPath(workspaceId, panelPath)
+  if (origin === null || path === null) return null
+  return `${origin}${path}`
 }
 
 /** idle / loading / ready / failed 的中文文案；未知状态原样说明。 */
