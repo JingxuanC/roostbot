@@ -17,7 +17,7 @@ const result = await ensureUserSandbox({
     ROOST_RUNTIME_TOKEN: process.env.ROOST_RUNTIME_TOKEN ?? '',
     ROOST_BOT_ID: process.env.ROOST_BOT_ID ?? 'selector',
     ROOST_STATE_FILE: '/workspace/.dsh/room-cursors.json',
-    ROOST_DSH_PROVIDER: 'deepseek',
+    ROOST_DSH_PROVIDER: 'deepseek-official',
     ROOST_DSH_MODEL: 'deepseek-chat',
     ROOST_WORKDIR: '/workspace'
   },

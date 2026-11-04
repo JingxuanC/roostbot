@@ -147,7 +147,9 @@ export async function startRoomAgent(options) {
 
   const initialized = await rpc.request('initialize', {
     cwd: options.workdir ?? '/workspace',
-    provider: options.provider ?? 'deepseek',
+    // SDK 只认已注册的 adapter route：DSH 的 DeepSeek 路由 id 是 `deepseek-official`
+    // （写成 `deepseek` 会得到 -32603 no adapter registered）。
+    provider: options.provider ?? 'deepseek-official',
     model: options.model ?? 'deepseek-chat'
   })
   log(`sdk ready: ${initialized?.serverInfo?.name ?? 'unknown'} ${initialized?.serverInfo?.version ?? ''}`)
