@@ -178,3 +178,29 @@ CREATE TABLE connector_calls (
 2. **批准粒度**：每个动作批一次，还是"本会话允许 Gmail 写"？
 3. **连接器目录进不进 marketplace**（第三方发布连接器）？倾向：v2 再谈，先只支持官方目录。
 4. **中国区**：飞书等走原生 MCP，OpenConnector 目录里个别 Trigger 不能当"已支持"。
+
+## 12. 实现状态（M6-6.1，2026-11-04）
+
+已落地控制面框架，但**没有接真实 OAuth 网关**。
+
+| 层 | 状态 | 说明 |
+|---|---|---|
+| 数据模型 | ✅ | `migrations/0016_connectors.sql`：`connections` / `connector_grants` / `connector_calls` |
+| 幂等索引 | ✅ | `connector_calls` 用 partial unique index：`(workspace_id, bot_id, idem) WHERE idem IS NOT NULL` |
+| store | ✅ | `packages/store/src/connectors.ts`：连接 upsert/get/list/delete、grant 覆盖/list/find、`recordCall`（idem 幂等） |
+| 事件 | ✅ | `domain='connector'`：`connector.connected` / `.disconnected` / `.grant.changed` / `.call`（成功与被拒都记，`deniedReason` 在 payload） |
+| 网关接口 | ✅（Stub） | `packages/connectors` 新增 `StubGatewayBackend`：目录为空，`authorize`/`call` 抛 `connector.not_configured`；API 映射 501 |
+| 用户 API | ✅ | `GET /api/connectors`、`POST /:slug/connect`、`GET /callback/:slug`、`DELETE /:slug`、`GET / PUT /:slug/grants` |
+| 内部 API | ✅ | `POST /api/internal/connectors/call`：连接/授权三层校验、只读直调、写动作走审批、idem 去重 |
+| memory port | ✅ | 全部接口无 `rawStore` 时 503 `runtime.not_configured` |
+
+实现细节与偏差：
+
+- **OAuth state** 保存在控制面进程内存（`Map`），10 分钟过期、绑定 `workspace/account/slug`、一次有效；服务重启或多副本部署会丢，需要换成共享存储（Redis/SQLite）。
+- **回调响应**：成功返回 `200 {connected:true}`；还没有前端回调页，所以没有 302。接前端时改为 302 到 `/connectors`。
+- **connect 的网关调用**只传 `slug`（沿用 §2 的 `authorize(slug)`）；真实网关需要 workspace/redirect 时在 v1 扩接口，而不是把凭据/工作区塞进 state。
+- **写动作**：`requiresApprovalForWrite(access, action)` 为真时先查 `approval_grants`（`kind='connector_action'`、`action=<slug>.<action>`、`target=<botId>`）；命中直接放行，否则落 pending 审批并返回 202，不调用网关。
+- **idem 重放**：`connector_calls` 只存 `ok/result_bytes/denied_reason`，不存结果正文，所以重放成功调用返回 `200 {ok:true,deduped:true}`（说明无法重放结果）；重放被拒调用返回 403 + 首次 `deniedReason`。
+- **断开**只删本地连接并写事件，**没有调用网关撤销 token**（`GatewayBackend` 尚无 revoke 方法）。
+
+遗留：真实网关（OpenConnector）适配器与 OAuth code→token 交换、网关侧 token 撤销、回调 302 前端页、state 共享存储。

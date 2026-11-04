@@ -19,7 +19,7 @@ test('按文件名升序执行迁移；再次打开不重复执行', () => {
     const dbPath = join(dir, 'workspace.db')
 
     const first = openStore(dbPath)
-    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql'])
+    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql', '0016_connectors.sql'])
     first.close()
 
     const second = openStore(dbPath)
@@ -62,6 +62,9 @@ test('核心表与索引都在', () => {
       'activations',
       'runs',
       'run_events',
+      'connections',
+      'connector_grants',
+      'connector_calls',
     ]) {
       assert.ok(tables.includes(name), `missing table ${name}`)
     }
@@ -90,6 +93,10 @@ test('核心表与索引都在', () => {
       'idx_activations_workspace_created',
       'idx_runs_activation',
       'idx_run_events_run_at',
+      'idx_connections_workspace',
+      'idx_connector_grants_workspace',
+      'idx_connector_calls_idem',
+      'idx_connector_calls_workspace_at',
     ]) {
       assert.ok(indexes.includes(name), `missing index ${name}`)
     }
@@ -203,7 +210,7 @@ test(':memory: 也能跑迁移（测试用）', () => {
   const store = openStore(':memory:')
   try {
     assert.equal(store.path, ':memory:')
-    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql'])
+    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql', '0012_attachments.sql', '0013_marketplace.sql', '0014_budget.sql', '0015_schedules.sql', '0016_connectors.sql'])
   } finally {
     store.close()
   }

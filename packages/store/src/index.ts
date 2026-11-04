@@ -287,3 +287,36 @@ export type {
   UpsertPublisherInput,
   UpsertVersionInput,
 } from './marketplace.ts'
+
+// ---- M6：连接器控制面（连接 / 按 Bot 授权 / 调用审计）------------------------
+export {
+  CONNECTOR_ACCESS,
+  CONNECTOR_BACKENDS,
+  CONNECTOR_ERROR_CODES,
+  CONNECTOR_SLUG_MAX,
+  CONNECTOR_SLUG_PATTERN,
+  CONNECTOR_STATUSES,
+  deleteConnection,
+  findCallByIdem,
+  findGrant,
+  getConnection,
+  isConnectorSlug,
+  listConnections,
+  listGrants,
+  recordCall,
+  setGrant,
+  upsertConnection,
+} from './connectors.ts'
+export type {
+  Connection,
+  ConnectorAccessLevel,
+  ConnectorBackendName,
+  ConnectorCallRow,
+  ConnectorConnectionStatus,
+  ConnectorGrantRow,
+  DeleteConnectionInput,
+  RecordCallInput,
+  RecordCallResult,
+  SetGrantInput,
+  UpsertConnectionInput,
+} from './connectors.ts'

@@ -97,6 +97,17 @@ import {
   handlePatchPluginInstall,
 } from './marketplace-routes.ts'
 import {
+  handleConnectorCallback,
+  handleConnectorConnect,
+  handleDeleteConnector,
+  handleInternalConnectorCall,
+  handleListConnectorGrants,
+  handleListConnectors,
+  handlePutConnectorGrant,
+} from './connectors-routes.ts'
+import { StubGatewayBackend } from '../../../packages/connectors/src/index.ts'
+import type { GatewayBackend } from '../../../packages/connectors/src/index.ts'
+import {
   createAttachmentsRuntime,
   handleInternalArtifactUpload,
   handleInternalAttachmentGc,
@@ -193,6 +204,8 @@ export interface ServerOptions {
   schedulerLoop?: boolean
   /** 结构化请求日志出口；默认写 stdout，测试可注入收集器。 */
   logSink?: (entry: HttpLogEntry) => void
+  /** 连接器网关后端；不配置时用 StubGatewayBackend（authorize/call 抛 connector.not_configured）。 */
+  connectorBackend?: GatewayBackend
 }
 
 export interface StartedServer {
@@ -241,6 +254,8 @@ interface HandlerContext extends AuthContext {
   schedulerEnabled: boolean
   /** 结构化请求日志出口。 */
   logSink: (entry: HttpLogEntry) => void
+  /** 连接器网关后端（默认 Stub）。 */
+  connectorBackend: GatewayBackend
 }
 
 type Clock = () => number
@@ -1743,6 +1758,66 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // 连接器控制面（connectors.md §9；M6-6.1）。
+  if (path === '/api/connectors') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListConnectors(ctx, req, res, url)
+    return
+  }
+
+  // 回调必须排在 /:slug 之前；它是 GET，且无 Bearer（OAuth provider 跳转）。
+  if (/^\/api\/connectors\/callback\/[^/]+$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleConnectorCallback(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/connectors\/[^/]+\/connect$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleConnectorConnect(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/connectors\/[^/]+\/grants$/.test(path)) {
+    if (method === 'GET') {
+      await handleListConnectorGrants(ctx, req, res, url)
+      return
+    }
+    if (method === 'PUT') {
+      await handlePutConnectorGrant(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (path === '/api/internal/connectors/call') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalConnectorCall(ctx, req, res)
+    return
+  }
+
+  if (/^\/api\/connectors\/[^/]+$/.test(path)) {
+    if (method !== 'DELETE') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleDeleteConnector(ctx, req, res, url)
+    return
+  }
+
   if (path === '/api/approvals') {
     if (method !== 'GET') {
       notFound(req, res, method, path)
@@ -2202,6 +2277,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     rateLimiter: new TokenBucketLimiter(),
     schedulerEnabled,
     logSink: options.logSink ?? writeHttpLog,
+    connectorBackend: options.connectorBackend ?? new StubGatewayBackend(),
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
     ...(options.rawStore === undefined
