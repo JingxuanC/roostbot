@@ -209,7 +209,7 @@
 
 - [ ] E1 删除或标注 legacy `apps/runtime/worker.ts`（headless 逐条 fork）
 - [x] E2 `bot-manifest` / `event-schema` 补 `src/`（TS 类型 + 校验 CLI + 测试）
-- [ ] E3 迁移 0004+（bots/rooms 扩展/rounds/sessions/marketplace）
+- [x] E3 迁移 0004–0018（bots/rooms/rounds/sessions/approvals/attachments/marketplace/budget/schedules/connectors/memories）
 - [ ] E4 用起来 `runtimes` / `capability_grants` / `invites` 表（或删除）
 - [ ] E5 planA-boot 收编为控制面接口
 - [ ] E6 runtime token 从 env 改为 provider
@@ -244,6 +244,7 @@
 
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
+- 2026-11-04 远端 31 个提交（M4 tail + M5/M6）合入：742 测试全过、verify.sh 与四个 M4 冒烟无回归；E3 迁移项标记完成。
 - 2026-11-04 头像链路打通：store 的 image 上限从 512 字符放宽到 512k 字符 + dataURL 校验，API body 上限 64KiB→1MiB；HTTP 350k 字符冒烟通过。
 - 2026-11-04 收尾修正：kickoff 轮未结束时用户消息并入同一轮（否则 cloud-run 的双 Bot 验收会只回一个）。
 - 2026-11-04 第二批子 agent：kickoff（DM+群）、Bot 建群+审批+配额、头像上传/审批页、轮次 stop/宽限/late rounds 全部落地并接线；367 测试 + 4 个 HTTP 冒烟（kickoff/审批/stop）全过。
