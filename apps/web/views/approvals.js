@@ -1,21 +1,28 @@
-// 「需要你」审批页（docs/build/m4-addendum.md §B/§C、docs/design/ui.md §4 深链 /w/<id>/needs）。
+// 「需要你」审批页（docs/build/m4-addendum.md §B/§C、docs/design/ui.md §3.3 / §12 待决 3）。
 //
 // 数据来自 GET /api/approvals；接口还没上线时 404/405/501 降级成「审批接口未就绪」，
 // 不报红、不白屏、也不假装有审批。批准/拒绝走 POST /api/approvals/:id {decision}。
+// 卡片显示「谁 / 要做什么 / 作用对象 / 影响什么」；批准只对这一次生效，
+// 长期授权只能去设置页显式开启（不在审批主按钮旁边）。
 // 所有用户输入只进 textContent / 属性，不拼 innerHTML。
 
 import { avatar, botAvatar, el } from '../lib/dom.js'
 import { isAuthError, isMissingRoute } from '../lib/api-client.js'
 import {
   approvalActions,
+  approvalDecisionHistory,
+  approvalFacts,
+  approvalListModel,
+  approvalRequester,
   approvalStatusLabel,
-  approvalSummary,
   approvalTimeLabel,
   canDecide,
 } from '../lib/approvals.js'
 import * as ui from '../lib/ui.js'
 
 const PAGE_TITLE = '需要你'
+const HISTORY_LIMIT = 20
+const PAGE_SUBTITLE = 'Bot 或用户的请求要你确认；批准只对这一次生效，长期授权要去设置里显式开启。'
 
 function listFrom(payload) {
   if (Array.isArray(payload)) return payload
@@ -31,14 +38,6 @@ function isNotReady(error) {
   return error.status === 503 && error.code === 'runtime.not_configured'
 }
 
-function requesterName(bots, approval) {
-  const explicit = typeof approval?.requesterName === 'string' ? approval.requesterName.trim() : ''
-  if (explicit !== '') return explicit
-  const id = typeof approval?.requester === 'string' ? approval.requester : ''
-  const bot = (bots || []).find((item) => item.id === id)
-  return bot && typeof bot.name === 'string' && bot.name.trim() !== '' ? bot.name : '一个 Bot'
-}
-
 function statusKind(status) {
   if (status === 'pending') return 'warn'
   if (status === 'approved') return 'ok'
@@ -47,13 +46,13 @@ function statusKind(status) {
 
 function notReadyView(ctx, root, error) {
   const header = ui.pageHeader(PAGE_TITLE, {
-    subtitle: 'Bot 发起的请求要你确认；批准建群后，房间会出现在左侧。',
+    subtitle: PAGE_SUBTITLE,
     actions: [ui.button('重试', { variant: 'ghost', onClick: () => void mountApprovalsPage(root, ctx) })],
   })
   const board = el('div', { class: 'page-card' })
   const state = ui.emptyState({
     title: '审批接口未就绪',
-    body: '控制面还没有可用的 GET /api/approvals（或返回 405/501）。Bot 建群请求暂时不会出现在这里；界面不会假装有审批，也不会自动批准。接口上线后点「重试」即可。',
+    body: '控制面还没有可用的 GET /api/approvals（或返回 405/501）。Bot 建群等请求暂时不会出现在这里；界面不会假装有审批，也不会自动批准。接口上线后点「重试」即可。',
     action: ui.button('重试', {
       variant: 'primary',
       onClick: () => void mountApprovalsPage(root, ctx),
@@ -74,10 +73,10 @@ function notReadyView(ctx, root, error) {
 
 /**
  * @param {HTMLElement} root
- * @param {object} ctx {api, store, navigate, ensureWorkspaceId, loadBots, loadRooms, requirePair, hasToken}
+ * @param {object} ctx {api, store, navigate, ensureWorkspaceId, loadBots, loadRooms, requirePair, hasToken, refreshNeedsCount}
  */
 export async function mountApprovalsPage(root, ctx) {
-  root.replaceChildren(ui.loading('正在载入待审批…'))
+  root.replaceChildren(ui.loading('正在载入审批…'))
 
   // 不靠 ctx.hasToken() 判断：会话通常在 HttpOnly cookie 里（auth.md §7），
   // 前端看不到 token 不代表没配对。直接请求；401 时 requirePair() 会带回去配对页。
@@ -108,8 +107,9 @@ export async function mountApprovalsPage(root, ctx) {
   try {
     const params = new URLSearchParams()
     if (workspaceId !== '') params.set('workspaceId', workspaceId)
-    params.set('status', 'pending')
-    const data = await ctx.api.get(`/api/approvals?${params.toString()}`)
+    // 不带 status：一次取回待处理 + 最近已决策，页面才能在没有 pending 时仍看见历史。
+    const query = params.toString()
+    const data = await ctx.api.get(`/api/approvals${query === '' ? '' : `?${query}`}`)
     approvals = listFrom(data).filter(
       (item) => item !== null && typeof item === 'object' && !Array.isArray(item)
     )
@@ -137,40 +137,55 @@ export async function mountApprovalsPage(root, ctx) {
   }
 
   root.replaceChildren(approvalsView(ctx, root, bots, approvals))
+  if (typeof ctx.refreshNeedsCount === 'function') void ctx.refreshNeedsCount()
   const main = root.closest('main')
   if (main) main.focus()
 }
 
 function approvalsView(ctx, root, bots, approvals) {
+  const model = approvalListModel(approvals, { limit: HISTORY_LIMIT })
   const refreshButton = ui.button('刷新', {
     variant: 'ghost',
     onClick: () => void mountApprovalsPage(root, ctx),
   })
   const header = ui.pageHeader(PAGE_TITLE, {
-    subtitle: 'Bot 发起的请求要你确认；批准建群后，房间会出现在左侧。',
-    actions: [refreshButton],
+    subtitle: PAGE_SUBTITLE,
+    actions: [ui.linkButton('设置', '#/settings', { variant: 'ghost' }), refreshButton],
   })
 
   const board = el('div', { class: 'page-card approvals-board' })
   const countLine = el('p', { class: 'section-desc approvals-count', role: 'status' })
-  const list = el('div', { class: 'needs-body approval-list' })
+  const pendingHeading = el('h2', { class: 'section-title approval-section-title', text: '待处理' })
+  const pendingList = el('div', { class: 'needs-body approval-list' })
+  const pendingEmpty = el('p', {
+    class: 'section-desc approvals-count',
+    text: '没有待批准的请求；下面是最近已决策的记录。',
+  })
+  const decidedHeading = el('h2', { class: 'section-title approval-section-title', text: '最近已决策' })
+  const decidedList = el('div', { class: 'needs-body approval-list approval-history-list' })
   const empty = ui.emptyState({
     title: '没有待批准的请求',
-    body: 'Bot 建群等需要人工确认的请求会出现在这里；没有就什么都不显示，不拿样例凑数。',
+    body: 'Bot 建群等需要人工确认的请求会出现在这里；已处理过的记录也会保留，不拿样例凑数。',
     action: ui.linkButton('Bot 列表', '#/bots', { variant: 'ghost' }),
+    secondary: ui.linkButton('设置', '#/settings', { variant: 'ghost' }),
   })
-  empty.hidden = approvals.length > 0
 
   function syncCount() {
-    const pending = approvals.filter((approval) => approval.status === 'pending').length
-    if (approvals.length === 0) {
-      countLine.textContent = ''
-      return
-    }
+    const pendingCount = approvals.filter((approval) => approval.status === 'pending').length
+    const historyCount = decidedList.childElementCount
+    const total = approvals.length
+    pendingHeading.textContent = `待处理（${pendingCount}）`
+    decidedHeading.textContent = `最近已决策（${historyCount}）`
     countLine.textContent =
-      pending === 0
-        ? `没有待批准的请求（共 ${approvals.length} 条记录）。`
-        : `${pending} 条待批准（共 ${approvals.length} 条记录）。`
+      total === 0
+        ? ''
+        : `${pendingCount} 条待批准 · ${historyCount} 条最近已决策（共 ${total} 条记录）。`
+    pendingHeading.hidden = total === 0
+    pendingList.hidden = pendingCount === 0
+    pendingEmpty.hidden = !(total > 0 && pendingCount === 0)
+    decidedHeading.hidden = historyCount === 0
+    decidedList.hidden = historyCount === 0
+    empty.hidden = total > 0
   }
 
   function memberLabel(botId) {
@@ -184,11 +199,11 @@ function approvalsView(ctx, root, bots, approvals) {
     return next
   }
 
-  async function decide(approval, action, buttons, statusBadge, errorNode, noteNode, actionRow) {
+  async function decide(approval, action, refs) {
     if (!canDecide(approval)) return
-    ui.setError(errorNode, '')
-    ui.setStatus(noteNode, '')
-    for (const button of buttons) button.disabled = true
+    ui.setError(refs.error, '')
+    ui.setStatus(refs.note, '')
+    for (const button of refs.buttons) button.disabled = true
     try {
       const result = await ctx.api.post(`/api/approvals/${encodeURIComponent(approval.id)}`, {
         decision: action.decision,
@@ -198,21 +213,36 @@ function approvalsView(ctx, root, bots, approvals) {
         saved && (saved.status === 'approved' || saved.status === 'rejected') ? saved.status : action.decision
       approval.status = nextStatus
       approval.decidedAt = (saved && saved.decidedAt) || Date.now()
-      replaceStatusBadge(statusBadge, nextStatus)
-      actionRow.remove()
+      if (saved) {
+        for (const key of ['decidedBy', 'action', 'target', 'consequence']) {
+          if (saved[key] !== undefined) approval[key] = saved[key]
+        }
+      }
+      refs.statusBadge = replaceStatusBadge(refs.statusBadge, nextStatus)
+      refs.actionRow.remove()
+      refs.card.classList.add('is-decided')
+      const history = approvalDecisionHistory(approval)
+      refs.impact.textContent = history ? history.text : '已处理（状态未知）'
+      refs.impact.classList.add('approval-history')
+      decidedList.prepend(refs.card)
+      while (decidedList.childElementCount > HISTORY_LIMIT && decidedList.lastElementChild) {
+        decidedList.lastElementChild.remove()
+      }
+
       if (nextStatus === 'approved') {
         const room = result && result.room && typeof result.room === 'object' ? result.room : null
         const roomName = room && typeof room.name === 'string' && room.name.trim() !== '' ? room.name : ''
         ui.setStatus(
-          noteNode,
+          refs.note,
           roomName === ''
-            ? '已批准：控制面已按请求创建房间；左侧房间列表正在刷新。'
-            : `已批准：已创建房间「${roomName}」，左侧列表正在刷新。`
+            ? '已允许（一次）：控制面已按请求创建房间；左侧房间列表正在刷新。'
+            : `已允许（一次）：已创建房间「${roomName}」，左侧列表正在刷新。`
         )
       } else {
-        ui.setStatus(noteNode, '已拒绝：不会创建房间。')
+        ui.setStatus(refs.note, '已拒绝（一次）：不会创建房间。')
       }
       syncCount()
+      if (typeof ctx.refreshNeedsCount === 'function') void ctx.refreshNeedsCount()
       // 批准会建房：刷新侧栏/房间列表，失败也不影响这条审批已经提交。
       if (typeof ctx.loadRooms === 'function') {
         try {
@@ -227,51 +257,66 @@ function approvalsView(ctx, root, bots, approvals) {
         ctx.requirePair()
         return
       }
-      for (const button of buttons) button.disabled = false
+      for (const button of refs.buttons) button.disabled = false
       if (isNotReady(cause)) {
         ui.setStatus(
-          noteNode,
+          refs.note,
           `审批接口未就绪（HTTP ${cause.status ?? '?'}）：这次没有提交成功，也没有发生任何状态变化。`,
           'error'
         )
         return
       }
       if (cause && cause.status === 409) {
-        ui.setStatus(noteNode, '这条审批已经被处理过了；刷新列表可以看到最新状态。', 'error')
+        ui.setStatus(refs.note, '这条审批已经被处理过了；刷新列表可以看到最新状态。', 'error')
         return
       }
-      ui.setError(errorNode, `提交失败：${cause instanceof Error ? cause.message : String(cause)}`)
+      ui.setError(refs.error, `提交失败：${cause instanceof Error ? cause.message : String(cause)}`)
     }
   }
 
   function approvalCard(approval) {
-    const summary = approvalSummary(approval)
-    const card = el('article', { class: 'need-card approval-card' })
-    const requester = typeof approval.requester === 'string' ? approval.requester : ''
-    const bot = bots.find((item) => item.id === requester)
+    const facts = approvalFacts(approval)
+    const requester = approvalRequester(approval, bots)
+    const pending = canDecide(approval)
+    const card = el('article', {
+      class: `need-card approval-card${pending ? '' : ' is-decided'}`,
+    })
 
     const head = el('p', { class: 'need-head' })
-    head.append(el('span', { class: 'need-icon is-warn', 'aria-hidden': 'true', text: '⚠' }))
-    head.append(bot ? botAvatar(bot, 20) : avatar(requester, 20))
+    head.append(
+      el('span', {
+        class: `need-icon ${pending ? 'is-warn' : 'is-done'}`,
+        'aria-hidden': 'true',
+        text: pending ? '⚠' : '✓',
+      })
+    )
+    head.append(requester.bot ? botAvatar(requester.bot, 20) : avatar(requester.id || requester.name, 20))
     head.append(
       el('span', {
         class: 'need-who',
-        text: requesterName(bots, approval),
-        title: requester === '' ? '' : `Bot：${requester}`,
+        text: requester.name,
+        title:
+          requester.id === ''
+            ? ''
+            : requester.kind === 'bot'
+              ? `Bot：${requester.id}`
+              : requester.kind === 'user'
+                ? `用户：${requester.id}`
+                : `请求方：${requester.id}`,
       })
     )
-    head.append(ui.badge(summary.kindLabel, 'accent'))
+    head.append(ui.badge(facts.kindLabel, 'accent'))
     let statusBadge = ui.badge(approvalStatusLabel(approval.status), statusKind(approval.status))
     head.append(statusBadge)
     card.append(head)
 
-    card.append(el('h2', { class: 'need-title', text: summary.title }))
+    card.append(el('h2', { class: 'need-title', text: facts.title }))
 
     const dl = el('dl', { class: 'need-meta' })
-    for (const field of summary.fields) {
+    for (const field of facts.facts) {
       const value =
-        field.label === '成员' && summary.memberIds.length > 0
-          ? summary.memberIds.map(memberLabel).join('、')
+        field.label === '成员' && facts.memberIds.length > 0
+          ? facts.memberIds.map(memberLabel).join('、')
           : field.value
       const row = el('div')
       row.append(el('dt', { text: field.label }), el('dd', { text: value }))
@@ -280,32 +325,37 @@ function approvalsView(ctx, root, bots, approvals) {
     card.append(dl)
 
     const createdAt = approval.createdAt ?? approval.created_at
-    card.append(
-      el('p', {
-        class: 'need-impact',
-        text: `请求时间：${approvalTimeLabel(createdAt)} · 批准后由控制面按请求创建房间`,
-      })
-    )
+    const history = approvalDecisionHistory(approval)
+    const impact = el('p', {
+      class: `need-impact${history ? ' approval-history' : ''}`,
+      text:
+        history !== null
+          ? history.text
+          : `请求时间：${approvalTimeLabel(createdAt)} · 批准只对这一次生效；长期授权请到「设置」里显式开启。`,
+    })
+    card.append(impact)
 
     const error = ui.inlineError()
     const note = ui.statusLine('')
     card.append(error)
 
-    if (canDecide(approval)) {
+    const refs = { buttons: [], statusBadge, error, note, actionRow: null, impact, card }
+    if (pending) {
       const actionRow = el('div', { class: 'need-actions' })
-      const buttons = []
       for (const action of approvalActions(approval)) {
         const button = ui.button(action.label, {
           variant: action.variant,
           size: 'sm',
-          title: action.decision === 'approved' ? '批准后按请求创建房间' : '拒绝后不会创建房间',
+          title:
+            action.decision === 'approved'
+              ? '只批准这一次；不会创建长期授权'
+              : '拒绝这一次；不会创建房间',
         })
-        button.addEventListener('click', () => {
-          void decide(approval, action, buttons, statusBadge, error, note, actionRow)
-        })
-        buttons.push(button)
+        button.addEventListener('click', () => void decide(approval, action, refs))
+        refs.buttons.push(button)
         actionRow.append(button)
       }
+      refs.actionRow = actionRow
       card.append(actionRow)
     }
 
@@ -313,8 +363,9 @@ function approvalsView(ctx, root, bots, approvals) {
     return card
   }
 
-  for (const approval of approvals) list.append(approvalCard(approval))
-  board.append(countLine, list, empty)
+  for (const approval of model.pending) pendingList.append(approvalCard(approval))
+  for (const approval of model.decided) decidedList.append(approvalCard(approval))
+  board.append(countLine, pendingHeading, pendingEmpty, pendingList, decidedHeading, decidedList, empty)
   syncCount()
 
   return el('div', { class: 'stack' }, [header, board])

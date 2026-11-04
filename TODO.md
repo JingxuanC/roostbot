@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：64 / 152 · 进行中：3
+- 完成：65 / 152 · 进行中：3
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -122,7 +122,7 @@
 - [x] 5.4.1 `approvals` 表（单次/长期、动作、目标、后果）
 - [x] 5.4.2 审批 API（列表/批准/拒绝 + 运行时申请/轮询）
 - [ ] 5.4.3 房间/工具/Bot 建群接入审批
-- [ ] 5.4.4 需要你页真实数据 + 卡片渲染
+- [x] 5.4.4 需要你页真实数据 + 卡片渲染（三要素 + 已决策历史 + 真实角标）
 - [x] 5.4.5 审批决策事件与审计（`approval.requested` / `approval.decided` 恰好一次）
 - [x] 5.4.6 长期授权（Allow always）与撤销（`approval_grants`，仅设置里显式创建）
 
@@ -253,3 +253,4 @@
 - 2026-11-04 M5 审批闭环（后端 agent）：迁移 0011（approvals 增 action/target/consequence + `approval_grants`）、`approval.requested/decided` 事件（savepoint 保证恰好一次）、运行时 `POST/GET /api/internal/approvals`（命中长期授权直接放行）、用户侧 `/api/approval-grants`（仅 owner/admin 显式创建/撤销）；406 测试全绿。
 - 2026-11-04 M5 多端（前端 agent）：SSE 显式重连（1s→30s 退避，重连前 `after=lastSeq` 补拉）、`LIVE.seen` 统一去重与按 seq 乱序插入、离线提示与 online/visibilitychange/pageshow 补拉；`apps/web` 61 测试 + CDP 断网实测通过。
 - 2026-11-04 M6 存储与产物（后端 agent）：`LocalVolumeStore`（内容寻址/原子写/去重/HMAC 签名读取）、迁移 0012（attachments/attachment_refs/artifacts/message_attachments，`message_seq` 对齐 events.seq）、raw 上传（产物 50MB / 附件 10MB）、消息级文件路由（Range/206、`?raw=1`、失败一律 404）、`attachment.gc`、EXIF 剥离与尺寸解析；431 测试全绿。缩略图尽力而为（有 sips/convert 才生成），PDF 首页缩略图未做。
+- 2026-11-04 M5 审批前端（前端 agent）：卡片展示 action/target/consequence + 请求方，已决策留历史行；「需要你」角标改真实 pending 数；新增 `#/settings` 长期授权管理（列表/创建/撤销，403 提示仅 owner/admin）。`apps/web` 70 测试 + CDP 手工验收通过。

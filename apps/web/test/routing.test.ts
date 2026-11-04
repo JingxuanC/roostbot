@@ -43,6 +43,13 @@ test('需要你 / 审批页有独立路由，且不带参数', () => {
   assert.equal(routeMatch('#/approvals/x').name, 'notFound')
 })
 
+test('设置页有独立路由，且不带参数', () => {
+  assert.equal(routeMatch('#/settings').name, 'settings')
+  assert.deepEqual(routeMatch('#/settings').params, {})
+  assert.equal(routeMatch('#/settings/').name, 'settings')
+  assert.equal(routeMatch('#/settings/x').name, 'notFound')
+})
+
 test('尾斜杠与不带 # 的写法都能解析', () => {
   assert.equal(routeMatch('#/bots/').name, 'bots')
   assert.equal(routeMatch('bots/bot_1').name, 'bot')
@@ -63,5 +70,6 @@ test('未知路径与坏编码都是 notFound，不抛异常', () => {
 test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('bots'), true)
   assert.equal(isKnownRoute('approvals'), true)
+  assert.equal(isKnownRoute('settings'), true)
   assert.equal(isKnownRoute('nope'), false)
 })

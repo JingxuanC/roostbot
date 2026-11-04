@@ -1168,6 +1168,22 @@ button {
   text-decoration: none;
 }
 
+/* 不显眼的设置入口：长期授权不能放在审批主按钮旁边，避免误点。 */
+.nav-muted-link {
+  margin: var(--space-sm) 0 var(--space-md);
+  padding: 0 var(--space-sm);
+}
+
+.nav-muted-link a {
+  color: var(--roost-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.nav-muted-link a:hover {
+  color: var(--roost-ink);
+}
+
 /* ---- 房间头：设置入口 + Bot 列表入口 ---- */
 
 .room-head-main {
@@ -2157,6 +2173,89 @@ button {
 
 .approval-card .need-meta dd {
   font-family: var(--font-sans);
+}
+
+.approval-card.is-decided {
+  border-left-color: var(--roost-border);
+  opacity: 0.82;
+}
+
+.need-icon.is-done {
+  background: color-mix(in srgb, var(--roost-ok) 16%, transparent);
+  color: var(--roost-ok);
+}
+
+.approval-section-title {
+  margin: var(--space-sm) 0 0;
+  color: var(--roost-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.approval-history {
+  color: var(--roost-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.approval-history-list {
+  margin-top: calc(-1 * var(--space-sm));
+}
+
+/* ------------------------------------------------------------------ 设置页：长期授权 */
+
+.settings-board {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.grant-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grant-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--roost-bg);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+}
+
+.grant-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.grant-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.grant-key {
+  color: var(--roost-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.grant-meta dt {
+  width: 56px;
+}
+
+.grant-actions {
+  flex: none;
 }
 
 /* ------------------------------------------------------------------ Bot 列表：已删除筛选（禁用态） */

@@ -32,6 +32,7 @@ import * as ui from './lib/ui.js'
 import { mountApprovalsPage } from './views/approvals.js'
 import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
 import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
+import { mountSettingsPage } from './views/settings.js'
 
 // ---------------------------------------------------------------------------
 // 一、固定样例
@@ -1023,10 +1024,51 @@ function pageContext() {
     loadRoom,
     requirePair,
     hasToken,
+    refreshNeedsCount,
     refreshSidebar() {
       renderSidebarRooms()
       renderSidebarBots()
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 「需要你」角标：连上控制面后按 workspace 拉真实 pending 数（简单 fetch，不新增 SSE）
+// ---------------------------------------------------------------------------
+
+let needsCountSeq = 0
+
+/** 把真实 pending 数写到侧栏/房间头/抽屉标题；0 时隐藏角标，不显示样例 2。 */
+function setNeedsCount(count) {
+  const value = Number.isInteger(count) && count > 0 ? count : 0
+  const countNode = $('#needs-count')
+  if (countNode) {
+    countNode.textContent = value > 0 ? `(${value})` : ''
+    countNode.hidden = value === 0
+  }
+  const small = $('#needs-btn-sm')
+  if (small) small.textContent = value > 0 ? `需要你 (${value})` : '需要你'
+  const title = $('#needs-title')
+  if (title) title.textContent = `需要你 · ${value}`
+}
+
+/**
+ * 刷新真实 pending 数。预览模式（未配对/未连上）直接跳过：保留原有样例行为。
+ * 失败保持原样，不把角标清零、也不打断当前页面。
+ */
+async function refreshNeedsCount() {
+  if (!LIVE.active && !hasToken()) return
+  const seq = ++needsCountSeq
+  try {
+    const workspaceId = await ensureWorkspaceId()
+    const params = new URLSearchParams({ workspaceId, status: 'pending' })
+    const data = await api.get(`/api/approvals?${params.toString()}`)
+    if (seq !== needsCountSeq) return
+    const list = Array.isArray(data?.approvals) ? data.approvals : []
+    const pending = list.filter((item) => item && item.status === 'pending').length
+    setNeedsCount(pending)
+  } catch {
+    // 角标只是提示：401/未就绪/网络失败都不改样例数字，也不弹错。
   }
 }
 
@@ -1094,18 +1136,25 @@ async function renderRoute() {
     case 'bots':
       setTitle('Bot')
       await mountBotsPage(main, ctx)
+      void refreshNeedsCount()
       break
     case 'botNew':
       setTitle('新建 Bot')
       await mountBotsPage(main, ctx, { create: true })
+      void refreshNeedsCount()
       break
     case 'bot':
       setTitle('Bot 设置')
       await mountBotSettingsPage(main, ctx, route.params.id)
+      void refreshNeedsCount()
       break
     case 'approvals':
       setTitle('需要你')
       await mountApprovalsPage(main, ctx)
+      break
+    case 'settings':
+      setTitle('设置')
+      await mountSettingsPage(main, ctx)
       break
     case 'roomNew':
       setTitle('新建房间')
@@ -1145,13 +1194,17 @@ function toEvent(message, roomId) {
   }
 }
 
-/** 「需要你」目前是固定样例：预览时显示，连上控制面后隐藏（没有接口就不假装有待办）。 */
+/**
+ * 「需要你」入口：预览时点开是固定样例抽屉；连上控制面后按钮显示真实 pending 角标，
+ * 点击直接去 #/approvals（抽屉里没有真实数据可渲染，不再拿样例凑数）。
+ */
 function setNeedsMode(live) {
   const btn = $('#needs-btn')
   const btnSm = $('#needs-btn-sm')
   const panel = $('#needs')
-  if (btn) btn.hidden = live
-  if (btnSm) btnSm.hidden = live
+  // 两种模式都要保留入口：预览看样例，实时看真实角标并跳审批页。
+  if (btn) btn.hidden = false
+  if (btnSm) btnSm.hidden = false
   if (panel && live) {
     panel.hidden = true
     for (const button of [btn, btnSm]) if (button) button.setAttribute('aria-expanded', 'false')
@@ -1224,6 +1277,7 @@ function applyLiveRoomChrome(room) {
   renderSidebarRooms()
   renderSidebarBots()
   setNeedsMode(true)
+  void refreshNeedsCount()
   updateWhoAnswers()
   renderRoundStatus()
   renderWorking()
@@ -1231,6 +1285,8 @@ function applyLiveRoomChrome(room) {
 
 function enterPreviewRoom() {
   resetRoomChrome()
+  // 从实时房间切回预览时，把样例抽屉与样例角标（2）恢复回来。
+  renderNeeds()
   LIVE.room = PREVIEW_ROOM
   LIVE.roomId = ROOM.id
   ROOM.name = PREVIEW_ROOM.name
@@ -1884,7 +1940,14 @@ function setupNeedsPanel() {
 
   for (const button of buttons) {
     if (!button) continue
-    button.addEventListener('click', () => setOpen(panel.hidden, button))
+    button.addEventListener('click', () => {
+      // 连上控制面后抽屉不再展示样例，直接去真实审批页。
+      if (LIVE.active) {
+        navigate('#/approvals')
+        return
+      }
+      setOpen(panel.hidden, button)
+    })
   }
   const close = $('#needs-close')
   if (close) close.addEventListener('click', () => setOpen(false))

@@ -8,6 +8,7 @@
 //   #/bots              Bot 列表（+ 新建入口）
 //   #/bots/new          新建 Bot
 //   #/bots/:id          Bot 设置
+//   #/settings          设置（长期授权）
 //   兼容旧地址 #room    房间预览（假数据）
 
 const ROUTES = new Set([
@@ -19,6 +20,7 @@ const ROUTES = new Set([
   'botNew',
   'bot',
   'approvals',
+  'settings',
   'notFound',
 ])
 
@@ -51,6 +53,8 @@ export function routeMatch(hash) {
   if (path === '/') return route('pair')
   // 需要你 / 待审批（addendum §C）：固定一层，不带参数。
   if (path === '/approvals') return route('approvals')
+  // 设置（长期授权）：固定一层，不带参数。
+  if (path === '/settings') return route('settings')
 
   const segments = path.split('/').filter(Boolean)
   const decoded = []

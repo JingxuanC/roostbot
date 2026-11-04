@@ -1,8 +1,11 @@
 // 审批的纯逻辑（docs/build/m4-addendum.md §B/§C、docs/build/m4-contract.md §2）。
 //
 // 审批行来自 GET /api/approvals：
-//   {id, workspaceId, kind, requester, payload, status, createdAt, decidedAt, decidedBy}
+//   {id, workspaceId, kind, requester, requesterKind, payload, status,
+//    createdAt, decidedAt, decidedBy, action, target, consequence}
 // kind=create_room 的 payload：{name, purpose, memberBotIds}。
+// 长期授权来自 GET /api/approval-grants：
+//   {id, workspaceId, kind, action, target, grantedBy, grantedAt, revokedAt}
 // 这个模块只把行整理成渲染模型，不发请求、不碰 DOM；接口缺失时由视图降级。
 
 const KIND_LABELS = {
@@ -120,6 +123,167 @@ export function approvalSummary(approval) {
     memberCount: memberIds.length,
     fields,
   }
+}
+
+/**
+ * 卡片主展示：优先用接口给的 action / target / consequence（要做什么 / 作用对象 / 影响什么）。
+ * 三个都没给时回退到 approvalSummary 的 payload 字段；部分缺失时只展示已有的，
+ * 不把 undefined 打到界面上。标题优先用 action，让人一眼看到「要做什么」。
+ */
+export function approvalFacts(approval) {
+  const summary = approvalSummary(approval)
+  const row = plainObject(approval) ? approval : {}
+  const action = asText(row.action)
+  const target = asText(row.target)
+  const consequence = asText(row.consequence)
+
+  const facts = []
+  if (action !== '') facts.push({ label: '要做什么', value: action })
+  if (target !== '') facts.push({ label: '作用对象', value: target })
+  if (consequence !== '') facts.push({ label: '影响什么', value: consequence })
+
+  const usedPrimaryFields = facts.length > 0
+  return {
+    ...summary,
+    action,
+    target,
+    consequence,
+    title: usedPrimaryFields && action !== '' ? action : summary.title,
+    facts: usedPrimaryFields ? facts : summary.fields,
+    usedPrimaryFields,
+  }
+}
+
+/**
+ * 请求方展示：bot 用 bots 列表解析名字（头像由视图用 botAvatar 渲染）；
+ * user 显示「用户 · <id>」；未知 kind 中性显示 id，不冒充 Bot/用户。
+ */
+export function approvalRequester(approval, bots = []) {
+  const row = plainObject(approval) ? approval : {}
+  const id = asText(row.requester)
+  const kind = asText(row.requesterKind)
+  const list = Array.isArray(bots) ? bots : []
+  const bot = id === '' ? null : list.find((item) => plainObject(item) && asText(item.id) === id) || null
+  const botName = bot ? asText(bot.name) : ''
+
+  if (kind === 'user') {
+    return { kind: 'user', id, name: id === '' ? '用户' : `用户 · ${id}`, bot: null }
+  }
+  if (kind === 'bot') {
+    return { kind: 'bot', id, name: botName !== '' ? botName : '一个 Bot', bot }
+  }
+  if (kind !== '') {
+    return { kind, id, name: id === '' ? '未知请求方' : `请求方 · ${id}`, bot: null }
+  }
+  return { kind: 'unknown', id, name: id === '' ? '未知请求方' : `请求方 · ${id}`, bot: null }
+}
+
+const DECIDED_LABELS = {
+  approved: '已允许（一次）',
+  rejected: '已拒绝（一次）',
+}
+
+/**
+ * 已决策卡片的一行历史：状态 + 决策人 + 时间。
+ * pending 返回 null（由视图渲染按钮）；未知终态原样兜底，不显示 undefined。
+ */
+export function approvalDecisionHistory(approval) {
+  const row = plainObject(approval) ? approval : {}
+  const status = asText(row.status)
+  if (status === '' || status === 'pending') return null
+
+  const label = DECIDED_LABELS[status] || `已处理（${approvalStatusLabel(status)}）`
+  const decidedBy = asText(row.decidedBy)
+  const decidedAt = row.decidedAt ?? row.decided_at
+  const parts = [label, decidedBy === '' ? '决策人未知' : `决策人 ${decidedBy}`, approvalTimeLabel(decidedAt)]
+  return { status, label, decidedBy, decidedAt, text: parts.join(' · ') }
+}
+
+function timeValue(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === 'string' && value.trim() !== '') {
+    const asNumber = Number(value)
+    if (Number.isFinite(asNumber)) return asNumber
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return Number.NEGATIVE_INFINITY
+}
+
+function compareTimeDesc(left, right) {
+  const a = timeValue(left)
+  const b = timeValue(right)
+  if (a === b) return 0
+  return b > a ? 1 : -1
+}
+
+/**
+ * 审批列表模型：pending 在前（新请求优先），已决策按 decidedAt 倒序、最多 limit 条。
+ * 同时展示历史，避免「没有待批准」时整页空白。
+ */
+export function approvalListModel(approvals, options = {}) {
+  const limit =
+    Number.isSafeInteger(options.limit) && options.limit >= 0 ? options.limit : 20
+  const rows = (Array.isArray(approvals) ? approvals : []).filter(plainObject)
+  const pending = rows.filter((row) => row.status === 'pending')
+  const decided = rows.filter((row) => row.status !== 'pending')
+
+  pending.sort(
+    (left, right) =>
+      compareTimeDesc(left.createdAt ?? left.created_at, right.createdAt ?? right.created_at) ||
+      asText(left.id).localeCompare(asText(right.id))
+  )
+  decided.sort(
+    (left, right) =>
+      compareTimeDesc(
+        left.decidedAt ?? left.decided_at ?? left.createdAt ?? left.created_at,
+        right.decidedAt ?? right.decided_at ?? right.createdAt ?? right.created_at
+      ) || asText(left.id).localeCompare(asText(right.id))
+  )
+
+  return { pending, decided: decided.slice(0, limit) }
+}
+
+/**
+ * 长期授权展示模型：kind / action / target / 授权人 / 时间。
+ * action/target 为空表示只匹配「请求里同样没填」的情况，界面显示（未指定）而不是留白。
+ */
+export function approvalGrantsView(grants) {
+  const rows = (Array.isArray(grants) ? grants : []).filter(plainObject).map((grant) => {
+    const kind = asText(grant.kind)
+    const action = asText(grant.action)
+    const target = asText(grant.target)
+    return {
+      id: asText(grant.id),
+      kind,
+      kindLabel: approvalKindLabel(kind),
+      action,
+      target,
+      actionLabel: action === '' ? '（未指定）' : action,
+      targetLabel: target === '' ? '（未指定）' : target,
+      grantedBy: asText(grant.grantedBy) || '未知',
+      grantedAt: grant.grantedAt,
+      grantedAtLabel: approvalTimeLabel(grant.grantedAt),
+    }
+  })
+  return { rows, count: rows.length }
+}
+
+/**
+ * 组装 POST /api/approval-grants 的正文：空 action/target 不发（服务端等价于 NULL，精确匹配）。
+ * workspaceId 或 kind 为空返回 null，由视图报错，不发出注定失败的请求。
+ */
+export function approvalGrantPayload(input = {}) {
+  const workspaceId = asText(input.workspaceId)
+  const kind = asText(input.kind)
+  if (workspaceId === '' || kind === '') return null
+  const payload = { workspaceId, kind }
+  const action = asText(input.action)
+  const target = asText(input.target)
+  if (action !== '') payload.action = action
+  if (target !== '') payload.target = target
+  return payload
 }
 
 /**
