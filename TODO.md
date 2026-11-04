@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：103 / 152 · 进行中：1
+- 完成：104 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -222,7 +222,7 @@
 
 ## 文档待写
 
-- [ ] D1 `docs/design/observability.md`（指标/日志/审计/告警）
+- [x] D1 `docs/design/observability.md`（指标/日志/审计/告警）
 - [x] D2 `docs/design/deployment.md`（部署/升级/备份/回滚）
 - [x] D3 `docs/design/slo.md`（SLO 与降级）
 - [x] D4 `docs/design/compliance.md`（数据驻留/导出/删除/保留）
