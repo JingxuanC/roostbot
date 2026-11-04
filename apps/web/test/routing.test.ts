@@ -66,6 +66,15 @@ test('插件市场：列表与详情都带独立路由', () => {
   assert.equal(routeMatch('#/plugins/%E4').name, 'notFound')
 })
 
+test('插件面板：固定一层，不带参数', () => {
+  const match = routeMatch('#/panels')
+  assert.equal(match.name, 'panels')
+  assert.deepEqual(match.params, {})
+  assert.equal(routeMatch('#/panels/').name, 'panels')
+  assert.equal(routeMatch('panels').name, 'panels')
+  assert.equal(routeMatch('#/panels/market').name, 'notFound')
+})
+
 test('尾斜杠与不带 # 的写法都能解析', () => {
   assert.equal(routeMatch('#/bots/').name, 'bots')
   assert.equal(routeMatch('bots/bot_1').name, 'bot')
@@ -88,6 +97,7 @@ test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('approvals'), true)
   assert.equal(isKnownRoute('plugins'), true)
   assert.equal(isKnownRoute('plugin'), true)
+  assert.equal(isKnownRoute('panels'), true)
   assert.equal(isKnownRoute('settings'), true)
   assert.equal(isKnownRoute('nope'), false)
 })

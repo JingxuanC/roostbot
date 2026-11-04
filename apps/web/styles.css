@@ -2960,3 +2960,115 @@ button {
     flex: 1 1 140px;
   }
 }
+
+/* ==================================================================
+ * M5-5.2：插件面板（ADR 0004；iframe 容器 + 面板清单）
+ * 沿用现有 token；iframe 独立源，样式只作用于父页面的外壳。
+ * ================================================================== */
+
+.panel-catalog .section-head {
+  margin-bottom: var(--space-xs);
+}
+
+.panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.panel-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--roost-bg);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+}
+
+.panel-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-item-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+}
+
+.panel-item-name {
+  color: var(--roost-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.panel-item-code,
+.panel-item-plugin {
+  font-size: 12px;
+}
+
+.panel-item-invalid {
+  color: var(--roost-warn, var(--roost-muted));
+  font-size: 12px;
+}
+
+.panel-state {
+  margin: 0;
+  padding: var(--space-xs) 0 0;
+  color: var(--roost-muted);
+  font-size: 12px;
+}
+
+.panel-frame-card {
+  padding: var(--space-md);
+}
+
+.panel-frame-body {
+  margin-top: var(--space-sm);
+}
+
+.panel-frame-stage {
+  position: relative;
+  height: min(72vh, 720px);
+  min-height: 420px;
+  overflow: hidden;
+  background: var(--roost-bg);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+}
+
+.panel-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--roost-bg);
+}
+
+.panel-frame-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  background: var(--roost-bg);
+  color: var(--roost-muted);
+  font-size: 13px;
+}
+
+.panel-frame-overlay .spinner {
+  width: 20px;
+  height: 20px;
+}
+
+.panel-failure .state {
+  margin: 0;
+}
