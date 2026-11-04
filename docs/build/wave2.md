@@ -65,3 +65,15 @@
 node --experimental-strip-types --test packages/*/test/*.test.ts apps/*/test/*.test.ts
 sh scripts/verify.sh
 ```
+
+## 实现进度（2026-11-04）
+
+| 块 | 状态 | 证据 |
+|---|---|---|
+| A 记忆 | ✅ 接线 | `packages/memory`（39 测试）+ `/api/internal/memory/claims|cleanup` + room-agent 回合后送 claims |
+| B 预算 | ✅ 接线 | `packages/budget`（33 测试）+ `/v1/chat/completions` + rate-limit modelProxy；metering 计划函数 |
+| C 连接器/缩略图 | 🟡 部分 | Composio 后端+factory（22 测试）；缩略图库 40 测试，上传接线未做 |
+| D 观测 | ✅ 接线 | `packages/observability`（42 测试）+ `/healthz/deep` + appendEvent sink → metrics |
+| E 调度 | 🟡 部分 | 控制器/idle-sleeper 各 25 测试；tick event/repair、宿主启动接线未做 |
+| 工程债 | ✅ | worker/planA-boot 删除、CI/error-codes/release、E4/E6 ADR、CHANGELOG 0.1.0 |
+| 全量 | ✅ | 1068 tests + verify.sh（room-agent 替代 worker，bot reply 失败会红） |

@@ -16,7 +16,7 @@
 
 ## 总览
 
-- 调用点：**574** 个
+- 调用点：**575** 个
 - 唯一 code：**93** 个
 - 覆盖模块：**20** 个文件
 - 有中文文案（`ERROR_TEXT`）：**23** 个；其余回退调用点 message
@@ -176,7 +176,7 @@
 | --- | --- | --- | ---: |
 | `method_not_allowed` | 405 | — | 1 |
 
-### `marketplace-install-routes.ts`（51 个调用点）
+### `marketplace-install-routes.ts`（49 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -192,7 +192,6 @@
 | `plugin.job_pending` | 409 | — | 2 |
 | `plugin.job_state` | 409 | — | 3 |
 | `plugin.not_found` | 404 | — | 2 |
-| `plugin.preflight` | 409 | — | 2 |
 | `plugin.version_not_found` | 404 | — | 2 |
 | `rate_limited` | 429 | 操作太频繁，请稍后再试 | 1 |
 | `runtime.not_configured` | 503 | — | 1 |
@@ -292,7 +291,7 @@
 | `schedule.not_found` | 404 | — | 4 |
 | `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 
-### `server.ts`（78 个调用点）
+### `server.ts`（81 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -301,6 +300,7 @@
 | `forbidden_origin` | 403 | 写操作来源不被允许 | 1 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 4 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 17 |
+| `model_proxy_not_configured` | 501 | — | 1 |
 | `not_found` | 404 | — | 27 |
 | `pairing_code_expired` | 401 | 配对码已过期，请重新生成 | 1 |
 | `pairing_code_invalid` | 401 | 配对码不对 | 1 |
@@ -313,7 +313,7 @@
 | `room_not_found` | 404 | 找不到这个房间 | 2 |
 | `round.conflict` | 409 | — | 1 |
 | `round.not_found` | 404 | — | 1 |
-| `runtime.not_configured` | 503 | — | 7 |
+| `runtime.not_configured` | 503 | — | 9 |
 | `runtime.start_failed` | 502 | — | 1 |
 | `session_create_failed` | 500 | — | 1 |
 | `session_expired` | 401 | 会话已过期，请重新配对 | 1 |
@@ -371,6 +371,7 @@
 | `memory.invalid` | 400 | `memories-routes.ts` |
 | `memory.not_found` | 404 | `memories-routes.ts` |
 | `method_not_allowed` | 405 | `health-deep.ts` |
+| `model_proxy_not_configured` | 501 | `server.ts` |
 | `no_workspace` | 409 | `bots-routes.ts`<br>`rooms-routes-ext.ts` |
 | `not_found` | 404 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`dsh-proxy-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`memories-routes.ts`<br>`plugins-sync-routes.ts`<br>`rooms-routes-ext.ts`<br>`schedules-routes.ts`<br>`server.ts` |
 | `pairing_code_expired` | 401 | `server.ts` |
@@ -388,7 +389,6 @@
 | `plugin.job_pending` | 409 | `marketplace-install-routes.ts` |
 | `plugin.job_state` | 409 | `marketplace-install-routes.ts` |
 | `plugin.not_found` | 404 | `marketplace-install-routes.ts`<br>`marketplace-routes.ts` |
-| `plugin.preflight` | 409 | `marketplace-install-routes.ts` |
 | `plugin.preflight_failed` | 400 | `marketplace-routes.ts` |
 | `plugin.publisher_unverified` | 403 | `marketplace-routes.ts` |
 | `plugin.tier` | 400 | `marketplace-routes.ts` |

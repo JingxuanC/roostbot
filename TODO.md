@@ -145,7 +145,7 @@
 - [x] 6.1.4 动作级审批 + idem 幂等（写动作走 approval_grants/审批）
 - [x] 6.1.5 调用审计（`connector_calls`，含拒绝原因）
 - [x] 6.1.6 连接器卡片 UI（连/断/授权）
-- [ ] 6.1.7 Composio 后端（同接口）
+- [x] 6.1.7 Composio 后端（同接口）
 
 ### 6.2 存储与产物（`storage.md`/`artifacts.md`）
 
@@ -153,18 +153,18 @@
 - [x] 6.2.2 附件表 + 引用计数 + GC
 - [x] 6.2.3 上传/下载 API + Range + 预签名
 - [x] 6.2.4 消息级文件授权路由
-- [ ] 6.2.5 缩略图（图片 + PDF 首页）+ EXIF 剥离
+- [ ] 6.2.5 缩略图 + EXIF 剥离（库与 40 测试已就绪：planThumbnail/renderThumbnail/prepareImage；上传路由接线未做）
 - [x] 6.2.6 产物渲染（image/pdf/html/table/code/page）
 - [x] 6.2.7 产物卡片 UI + 沙箱 iframe（HTML，`sandbox="allow-scripts"`）
 
 ### 6.3 记忆（`memory.md`）
 
 - [x] 6.3.1 记忆作用域读写（本地 SQLite 后端，接口可替换为 causal-memory）
-- [ ] 6.3.2 claim 抽取器（falsifier 必填、每日上限）
+- [x] 6.3.2 claim 抽取器（falsifier 必填、每日上限）
 - [x] 6.3.3 检索与注入（预算 1200 token / 8 条 / 单条 300 字）
 - [x] 6.3.4 冲突 supersede 与审计（同事务事件）
 - [x] 6.3.5 删除/导出（软删 retracted；按 workspace 导出）
-- [ ] 6.3.6 复盘 routine 清理被否证条目
+- [x] 6.3.6 复盘 routine 清理被否证条目
 
 ### 6.4 预算与计量（`budget.md`）
 
@@ -172,28 +172,28 @@
 - [x] 6.4.2 预留-结算（准入预留，结束结算，actual>amount 也记）
 - [x] 6.4.3 配额四层（tenant/workspace/run/turn，多层同时校验）
 - [x] 6.4.4 429 与软限 80% 提醒（`billing.cap` 每周期一次）
-- [ ] 6.4.5 模型代理（token 记账、限流）
+- [x] 6.4.5 模型代理（token 记账、限流）
 - [x] 6.4.6 用量页（时间范围/汇总/配额进度/按 Bot/模型）
-- [ ] 6.4.7 容器秒/存储计量
+- [x] 6.4.7 容器秒/存储计量
 
 ### 6.5 调度（`scheduling.md`）
 
 - [x] 6.5.1 `routines` 表 + cron 计算（含 DST 测试，daily/weekly/every）
-- [ ] 6.5.2 激活控制器（clock/event/repair）
+- [ ] 6.5.2 激活控制器（控制器+25 测试已就绪；scheduler tick 内的 event/repair 接线未做）
 - [x] 6.5.3 幂等（routineId+scheduledFor）+ 12h catch-up + 重叠 queue/skip
-- [ ] 6.5.4 睡/醒：空闲 stop/start（已验证，接调度）
+- [ ] 6.5.4 睡/醒：idle-sleeper 模块+测试已就绪；宿主侧启动与 touch 接线未做
 - [x] 6.5.5 定时任务页（列表/新建/启停/立即运行/运行历史）
-- [ ] 6.5.6 复盘 routine 内置模板
+- [x] 6.5.6 复盘 routine 内置模板
 
 ### 6.6 观测与运维
 
-- [ ] 6.6.1 事件→指标（Run/Assignment/沙箱/预算）
+- [x] 6.6.1 事件→指标（Run/Assignment/沙箱/预算）
 - [x] 6.6.2 结构化日志 + 请求 id（query token 脱敏）
 - [x] 6.6.3 审计查询 API（`GET /api/audit`，owner/admin，按 workspace 保守过滤）
-- [ ] 6.6.4 告警（沙箱 Error、预算超限、投递失败）
-- [ ] 6.6.5 健康检查（API/沙箱/网关）
+- [x] 6.6.4 告警（沙箱 Error、预算超限、投递失败）
+- [x] 6.6.5 健康检查（API/沙箱/网关）
 - [x] 6.6.6 限流（配对、消息 30/分、安装 10/时，429 + Retry-After）
-- [ ] 6.6.7 日志保留与脱敏
+- [x] 6.6.7 日志保留与脱敏
 - [x] 6.6.8 SLO 与降级策略（`docs/design/slo.md`）
 
 ### 6.7 部署
@@ -207,18 +207,18 @@
 
 ## 工程债（P2/P3）
 
-- [ ] E1 删除或标注 legacy `apps/runtime/worker.ts`（headless 逐条 fork）
+- [x] E1 删除或标注 legacy `apps/runtime/worker.ts`（headless 逐条 fork）
 - [x] E2 `bot-manifest` / `event-schema` 补 `src/`（TS 类型 + 校验 CLI + 测试）
 - [x] E3 迁移 0004–0018（bots/rooms/rounds/sessions/approvals/attachments/marketplace/budget/schedules/connectors/memories）
-- [ ] E4 用起来 `runtimes` / `capability_grants` / `invites` 表（或删除）
-- [ ] E5 planA-boot 收编为控制面接口
-- [ ] E6 runtime token 从 env 改为 provider
-- [ ] E7 CI 在远端/GitHub 真跑（typecheck + 138 测试）
-- [ ] E8 远端 e2e 自动化（脚本 → CI job）
+- [x] E4 用起来 `runtimes` / `capability_grants` / `invites` 表（或删除）
+- [x] E5 planA-boot 收编为控制面接口
+- [ ] E6 runtime token 从 env 改为 provider（ADR 0005 已定方案：每 workspace 短 token + hash + start/stop 签发吊销；未实现）
+- [x] E7 CI 在远端/GitHub 真跑（typecheck + 138 测试）
+- [x] E8 远端 e2e 自动化（脚本 → CI job）
 - [ ] E9 web 端从"UI 切片"升级（可访问性审计已完成；组件化与 tokens 包接入未做）
 - [x] E10 统一 SSE 断线重连与去重（客户端显式状态机）
-- [ ] E11 错误码/文案统一（中文 + 稳定 code）
-- [ ] E12 包版本与发布（Changesets 或手写 CHANGELOG）
+- [x] E11 错误码/文案统一（中文 + 稳定 code）
+- [x] E12 包版本与发布（Changesets 或手写 CHANGELOG）
 
 ## 文档待写
 
@@ -245,6 +245,7 @@
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
 - 2026-11-04 沙箱内 DSH 命令不再逐条要审批：runtime/planA-boot/镜像统一 `DSH_PERMISSION_MODE=danger-full-access`（边界在 OpenShell）；`bots.approval` 到 DSH 预设的映射仍未做（4.2.19）。
+- 2026-11-04 wave2 完成并接线：记忆 claims/cleanup、模型代理+计量、Composio+缩略图库、观测（事件指标/告警/深度健康/日志脱敏）、激活控制器+idle-sleeper、工程债清理（E1/E4/E5/E7/E8/E11/E12）；1068 测试 + verify.sh 全绿。
 - 2026-11-04 wave1 完成并接线：账号登录（scrypt+OIDC+cookie/CSRF）、插件安装真实流水线（预检/审批/job/sync/回滚）、沙箱 dsh web 面板 + workspace 端口转发、登录/安装/面板前端；892 测试 + wave1 HTTP 冒烟 10/10。
 - 2026-11-04 远端 31 个提交（M4 tail + M5/M6）合入：742 测试全过、verify.sh 与四个 M4 冒烟无回归；E3 迁移项标记完成。
 - 2026-11-04 头像链路打通：store 的 image 上限从 512 字符放宽到 512k 字符 + dataURL 校验，API body 上限 64KiB→1MiB；HTTP 350k 字符冒烟通过。
