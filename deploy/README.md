@@ -99,9 +99,13 @@ sudo systemctl reload nginx
 - `/w/` 必须在**另一个端口或域名**上，才是独立 origin；只改上游端口没用。
 - `/metrics` 无鉴权，示例配置只允许回环/内网。
 
-**当前限制**：控制面写操作只接受回环 Origin（`403 forbidden_origin`），
-`/api/config` 也固定返回 `http://<Host>:<ROOST_DSH_PROXY_PORT>`。公网域名 + TLS 的完整可用性
-需要后续实现公开 Origin 白名单与 DSH base URL；不要把 Origin 改写成回环地址来绕过 CSRF。
+**公网 Origin**：反代必须覆盖 `Host`（`proxy_set_header Host $host`）并设置
+`X-Forwarded-Proto $scheme`；控制面的写操作 CSRF 校验接受「Origin 与反代给出的
+scheme+Host 完全一致」的同源请求。跨域前端需要在 `ROOST_ALLOWED_ORIGINS`
+里列精确 origin（逗号分隔，不接受 `*` 与 `null`）。不要把 Origin 改写成回环地址来绕过 CSRF。
+
+**DSH 面板地址**：`/api/config` 按 `X-Forwarded-Proto` + `Host` 推导 `dshBase`；TLS 端口不是 443 时
+设置 `ROOST_DSH_PROXY_PUBLIC_PORT`（例如 8443），或用 `ROOST_DSH_PUBLIC_ORIGIN` 直接指定完整 origin。
 
 ## 6. 首次配对
 
@@ -247,9 +251,9 @@ curl -fsS http://127.0.0.1:8787/healthz
 | 现象 | 检查 |
 |---|---|
 | 启动即退出 | `PORT` 是否合法；`ROOST_DSH_PROXY_PORT` 是否与主端口冲突；数据库是否可写 |
-| `/healthz` 200 但接口 500 | `/healthz` 不查数据库；看 journald 与 `PRAGMA integrity_check` |
-| 写入 403 `forbidden_origin` | 浏览器从非回环 Origin 发 POST；走 SSH 隧道或等 Origin 白名单 |
+| `/healthz` 503 `db:error` | SQLite 打不开或损坏；看 journald 与 `PRAGMA integrity_check` |
+| 写入 403 `forbidden_origin` | Origin 与反代 scheme+Host 不一致；检查 `Host`/`X-Forwarded-Proto`，跨域前端加到 `ROOST_ALLOWED_ORIGINS` |
 | SSE 延迟/成批 | 反代缓冲没关；检查 `proxy_buffering off` 与 `X-Accel-Buffering` |
 | DSH 面板 502 | 沙箱内 `dsh web` 未起，或宿主到 `127.0.0.1:4099` 不可达 |
-| 面板空白/混合内容 | TLS 下 `/api/config` 返回 http；当前未闭环 |
+| 面板空白/混合内容 | `/api/config` 的 `dshBase` 不是 https；设置 `ROOST_DSH_PROXY_PUBLIC_PORT` 或 `ROOST_DSH_PUBLIC_ORIGIN` |
 | 备份 `database is locked` | 长时间写事务；重试，不要改成 `cp` |

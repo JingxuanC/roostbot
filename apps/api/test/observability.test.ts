@@ -176,7 +176,33 @@ test('/metrics 业务 gauge 从 SQLite 现查', async (t) => {
   const health = await harness.call('GET', '/healthz')
   assert.equal(health.status, 200)
   assert.equal(health.json.store, 'sqlite')
+  assert.equal(health.json.db, 'ok')
   assert.equal(typeof health.json.scheduler, 'boolean')
+})
+
+test('/healthz：SQLite 探库失败返回 503，且不泄漏错误详情', async (t) => {
+  const harness = await startSqliteHarness()
+  t.after(() => harness.close())
+
+  const healthy = await harness.call('GET', '/healthz')
+  assert.equal(healthy.status, 200)
+  assert.equal(healthy.json.ok, true)
+  assert.equal(healthy.json.db, 'ok')
+
+  const store = harness.rawStore
+  assert.ok(store)
+  // 模拟数据库损坏/不可用：prepare 直接抛错。
+  store.db.prepare = () => {
+    throw new Error('boom secret detail')
+  }
+  t.mock.method(console, 'error', () => {})
+
+  const failed = await harness.call('GET', '/healthz')
+  assert.equal(failed.status, 503)
+  assert.equal(failed.json.ok, false)
+  assert.equal(failed.json.db, 'error')
+  assert.equal(failed.json.store, 'sqlite')
+  assert.equal(failed.text.includes('boom secret detail'), false)
 })
 
 test('/healthz 保持向后兼容并带 dsh 端口形状', async (t) => {
@@ -187,6 +213,7 @@ test('/healthz 保持向后兼容并带 dsh 端口形状', async (t) => {
   assert.equal(plainHealth.json.ok, true)
   assert.equal(typeof plainHealth.json.uptimeMs, 'number')
   assert.equal(plainHealth.json.store, 'memory')
+  assert.equal(plainHealth.json.db, 'memory')
   assert.equal(plainHealth.json.scheduler, false)
   assert.deepEqual(plainHealth.json.dsh, { webPort: 4099, proxyPort: null })
 

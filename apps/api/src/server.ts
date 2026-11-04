@@ -7,6 +7,11 @@
 // - 只依赖 port.ts 的 StorePort。真实存储在 packages/store，由 Lead 写适配器接进来。
 // - 所有响应都是 JSON + cache-control: no-store；错误统一 { ok: false, error: { code, message: human } }。
 // - 默认监听 127.0.0.1（回环）：这是本机控制面，不是公网入口。
+//
+// 安全边界：公网部署时由反向代理终止 TLS。反代必须覆盖 Host（`proxy_set_header Host $host`）
+// 并设置 `X-Forwarded-Proto $scheme`（必要时也覆盖 `X-Forwarded-Host`）；同源 CSRF 判断
+// 就建立在“Origin 与反代给出的 Host 完全一致”之上。控制面不得直接暴露公网，否则客户端
+// 可以同时伪造 Origin、Host 与 X-Forwarded-* 绕过校验。
 import { createHash, randomBytes, randomInt } from 'node:crypto'
 import http from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
@@ -256,6 +261,8 @@ interface HandlerContext extends AuthContext {
   logSink: (entry: HttpLogEntry) => void
   /** 连接器网关后端（默认 Stub）。 */
   connectorBackend: GatewayBackend
+  /** 公网写操作 Origin 白名单（ROOST_ALLOWED_ORIGINS），启动时标准化。 */
+  allowedOrigins: readonly string[]
 }
 
 type Clock = () => number
@@ -303,7 +310,7 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_body: '请求内容不完整或格式不对',
   invalid_json: '请求体不是合法的 JSON',
   payload_too_large: '请求体过大',
-  forbidden_origin: '写操作只允许来自本机回环页面',
+  forbidden_origin: '写操作来源不被允许',
   pairing_forbidden: '没有权限签发配对码',
   devices_unavailable: '设备管理需要 SQLite 存储',
   device_not_found: '找不到这个设备会话',
@@ -379,9 +386,113 @@ function decodeSegment(value: string): string | null {
   }
 }
 
-/** 写操作只接受回环 Origin；没有 Origin（非浏览器客户端）也放行。 */
-function isAllowedOrigin(origin: string | undefined): boolean {
+export interface OriginContext {
+  /** 已标准化的公网 Origin 白名单（来自 ROOST_ALLOWED_ORIGINS）。 */
+  allowedOrigins?: readonly string[]
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
+
+/** 请求实际使用的 scheme：只认 X-Forwarded-Proto 的 http/https，其余一律按 http。 */
+function requestScheme(req: Pick<IncomingMessage, 'headers'>): 'http' | 'https' {
+  const raw = firstHeaderValue(req.headers['x-forwarded-proto'])
+  const proto = raw?.split(',')[0]?.trim().toLowerCase()
+  return proto === 'https' ? 'https' : 'http'
+}
+
+/** 把 Origin 标准化为 scheme://host[:port]；只接受纯 origin，拒绝路径、query、userinfo。 */
+function normalizeOrigin(value: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(value.trim())
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  if (parsed.username !== '' || parsed.password !== '') return null
+  if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') return null
+  // URL.origin 已经做小写 host、省略默认端口。
+  return parsed.origin
+}
+
+/**
+ * 解析 ROOST_ALLOWED_ORIGINS：逗号分隔的精确 origin。
+ * 不接受 `*` 与 `null`（通配会直接废掉 CSRF 防护）。
+ */
+export function parseAllowedOrigins(raw: string | undefined): readonly string[] {
+  if (raw === undefined) return []
+  const result: string[] = []
+  for (const part of raw.split(',')) {
+    const candidate = part.trim()
+    if (candidate === '' || candidate === '*' || candidate.toLowerCase() === 'null') continue
+    const normalized = normalizeOrigin(candidate)
+    if (normalized !== null) result.push(normalized)
+  }
+  return result
+}
+
+/** 规范化 Host 头：小写、去默认端口、保留 IPv6 方括号；非法值返回 null。 */
+function normalizeHostHeader(host: string, scheme: 'http' | 'https'): string | null {
+  const trimmed = host.trim().toLowerCase()
+  if (trimmed === '') return null
+
+  let hostname: string
+  let port: string | undefined
+  if (trimmed.startsWith('[')) {
+    const end = trimmed.indexOf(']')
+    if (end < 0) return null
+    hostname = trimmed.slice(0, end + 1)
+    const rest = trimmed.slice(end + 1)
+    if (rest !== '') {
+      if (!/^:\d{1,5}$/.test(rest)) return null
+      port = rest.slice(1)
+    }
+  } else {
+    const index = trimmed.lastIndexOf(':')
+    if (index >= 0) {
+      hostname = trimmed.slice(0, index)
+      port = trimmed.slice(index + 1)
+    } else {
+      hostname = trimmed
+    }
+  }
+  if (hostname === '') return null
+  if (port !== undefined) {
+    const value = Number(port)
+    if (!/^\d{1,5}$/.test(port) || value < 1 || value > 65535) return null
+    if (value === (scheme === 'https' ? 443 : 80)) port = undefined
+  }
+  return port === undefined ? hostname : `${hostname}:${port}`
+}
+
+/** Origin 与请求自身的 scheme + Host（或 X-Forwarded-Host）完全一致。 */
+function isSameOrigin(req: Pick<IncomingMessage, 'headers'>, origin: URL): boolean {
+  const scheme = requestScheme(req)
+  if (origin.protocol !== `${scheme}:`) return false
+  const hostHeader = firstHeaderValue(req.headers['x-forwarded-host']) ?? req.headers.host
+  if (hostHeader === undefined) return false
+  const normalizedHost = normalizeHostHeader(hostHeader, scheme)
+  return normalizedHost !== null && origin.host === normalizedHost
+}
+
+/**
+ * 写操作 Origin 校验（CSRF）：
+ * - 没有 Origin（非浏览器客户端）放行；
+ * - `Origin: null` 拒绝；
+ * - 回环 Origin 放行；
+ * - 同源（Origin 与 X-Forwarded-Proto + Host 一致）放行；
+ * - 命中 ROOST_ALLOWED_ORIGINS 精确白名单放行。
+ */
+export function isAllowedOrigin(
+  req: Pick<IncomingMessage, 'headers'>,
+  ctx?: OriginContext
+): boolean {
+  const origin = firstHeaderValue(req.headers.origin)
   if (origin === undefined || origin === '') return true
+  if (origin.trim().toLowerCase() === 'null') return false
+
   let parsed: URL
   try {
     parsed = new URL(origin)
@@ -389,7 +500,12 @@ function isAllowedOrigin(origin: string | undefined): boolean {
     return false
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-  return LOOPBACK_HOSTS.has(parsed.hostname)
+  if (LOOPBACK_HOSTS.has(parsed.hostname)) return true
+  if (isSameOrigin(req, parsed)) return true
+
+  const allowed = ctx?.allowedOrigins ?? parseAllowedOrigins(process.env.ROOST_ALLOWED_ORIGINS)
+  const normalized = normalizeOrigin(origin)
+  return normalized !== null && allowed.includes(normalized)
 }
 
 export interface ParsedBody {
@@ -851,15 +967,41 @@ async function handleCreateWorkspace(ctx: HandlerContext, req: IncomingMessage, 
 // ---- 客户端配置 --------------------------------------------------------------
 
 /**
- * GET /api/config（无需鉴权）：告诉前端反代源地址。
- * 用请求 Host 的主机名（去端口、保留 IPv6 方括号）+ 实际反代端口拼出 dshBase；
- * 没有启用反代端口时返回 null。主机名不合法回退 127.0.0.1，避免把任意 Host 透出成 URL。
+ * GET /api/config（无需鉴权）：告诉前端 DSH 面板的公开源地址。
+ * 优先级：
+ *   1. ROOST_DSH_PUBLIC_ORIGIN（完整 http/https origin，不带路径/query）；
+ *   2. X-Forwarded-Proto（缺省 http）+ Host 主机名 + ROOST_DSH_PROXY_PUBLIC_PORT（缺省实际反代端口）；
+ *   3. 未启用反代端口且没有 PUBLIC_ORIGIN 时返回 null。
+ * https + 443 / http + 80 省略端口；Host 主机名不合法回退 127.0.0.1，避免把任意 Host 透出成 URL。
  */
 function handleGetConfig(ctx: HandlerContext, req: IncomingMessage, res: ServerResponse): void {
-  const port = ctx.serverState.dshProxyPort
-  const dshBase =
-    port === undefined || port <= 0 ? null : `http://${hostnameFromHostHeader(req.headers.host)}:${port}`
-  sendJson(res, 200, { dshBase })
+  sendJson(res, 200, { dshBase: resolveDshBase(req, ctx.serverState) })
+}
+
+/** 解析公网端口环境变量：非法值按未配置处理。 */
+function readPublicPort(raw: string | undefined): number | null {
+  if (raw === undefined) return null
+  const trimmed = raw.trim()
+  if (!/^\d{1,5}$/.test(trimmed)) return null
+  const value = Number(trimmed)
+  return value >= 1 && value <= 65535 ? value : null
+}
+
+export function resolveDshBase(
+  req: Pick<IncomingMessage, 'headers'>,
+  state: Pick<ServerState, 'dshProxyPort'>
+): string | null {
+  const publicOrigin = normalizeOrigin(process.env.ROOST_DSH_PUBLIC_ORIGIN ?? '')
+  if (publicOrigin !== null) return publicOrigin
+
+  const actualPort = state.dshProxyPort
+  if (actualPort === undefined || actualPort <= 0) return null
+
+  const port = readPublicPort(process.env.ROOST_DSH_PROXY_PUBLIC_PORT) ?? actualPort
+  const scheme = requestScheme(req)
+  const hostname = hostnameFromHostHeader(firstHeaderValue(req.headers.host))
+  const defaultPort = scheme === 'https' ? 443 : 80
+  return port === defaultPort ? `${scheme}://${hostname}` : `${scheme}://${hostname}:${port}`
 }
 
 /** 从 Host 头取主机名：去掉端口，IPv6 字面量保留方括号；非法值回退 127.0.0.1。 */
@@ -1339,6 +1481,18 @@ function safeDecode(value: string): string | null {
   }
 }
 
+/** 健康检查探库：SQLite 执行 SELECT 1；失败只记日志，不把错误细节透给客户端。 */
+function checkDatabase(rawStore: Store | undefined): 'memory' | 'ok' | 'error' {
+  if (rawStore === undefined) return 'memory'
+  try {
+    rawStore.db.prepare('SELECT 1').get()
+    return 'ok'
+  } catch (err) {
+    console.error('roost api: healthz database check failed', err)
+    return 'error'
+  }
+}
+
 function notFound(req: IncomingMessage, res: ServerResponse, method: string, path: string): void {
   req.resume()
   sendError(res, 404, 'not_found', `no route for ${method} ${path}`)
@@ -1352,15 +1506,20 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
   // 不受控制面"写操作只允许回环 Origin"的CSRF 规则约束。
   const isDshPath = isDshProxyPath(url.pathname)
 
-  // auth.md §7：控制面写操作要求 Origin 校验。本机回环之外一律拒绝。
+  // auth.md §7：控制面写操作要求 Origin 校验（回环 / 同源 / 显式白名单）。
   if (
     !isDshPath &&
     method !== 'GET' &&
     method !== 'HEAD' &&
-    !isAllowedOrigin(req.headers.origin)
+    !isAllowedOrigin(req, ctx)
   ) {
     req.resume()
-    sendError(res, 403, 'forbidden_origin', `write requests must come from a loopback origin, got ${req.headers.origin}`)
+    sendError(
+      res,
+      403,
+      'forbidden_origin',
+      `write requests must come from a loopback, same-origin, or allow-listed origin, got ${req.headers.origin}`
+    )
     return
   }
 
@@ -1374,8 +1533,10 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       notFound(req, res, method, path)
       return
     }
-    sendJson(res, 200, {
-      ok: true,
+    const db = checkDatabase(ctx.rawStore)
+    sendJson(res, db === 'error' ? 503 : 200, {
+      ok: db !== 'error',
+      db,
       uptimeMs: Math.max(0, ctx.now() - ctx.startedAt),
       store: ctx.rawStore === undefined ? 'memory' : 'sqlite',
       scheduler: ctx.schedulerEnabled,
@@ -2278,6 +2439,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     schedulerEnabled,
     logSink: options.logSink ?? writeHttpLog,
     connectorBackend: options.connectorBackend ?? new StubGatewayBackend(),
+    allowedOrigins: parseAllowedOrigins(process.env.ROOST_ALLOWED_ORIGINS),
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
     ...(options.rawStore === undefined

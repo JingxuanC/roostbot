@@ -7,9 +7,15 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 import { randomBytes } from 'node:crypto'
 import test from 'node:test'
+import type { IncomingMessage } from 'node:http'
 
-import { hashSessionToken, hostnameFromHostHeader } from '../src/server.ts'
-import { startSqliteHarness } from './helpers.ts'
+import {
+  hashSessionToken,
+  hostnameFromHostHeader,
+  isAllowedOrigin,
+  parseAllowedOrigins,
+} from '../src/server.ts'
+import { startHarness, startSqliteHarness } from './helpers.ts'
 import type { Harness } from './helpers.ts'
 
 const OWNER = 'acc_dsh_origin_owner'
@@ -47,6 +53,75 @@ async function deadPort(): Promise<number> {
   const port = typeof address === 'object' && address !== null ? address.port : 0
   await new Promise<void>((resolve) => probe.close(() => resolve()))
   return port
+}
+
+/** 直接构造请求头：用来模拟反代设置的 Host / X-Forwarded-Proto。 */
+function originReq(
+  origin: string | undefined,
+  headers: Record<string, string> = {},
+): Pick<IncomingMessage, 'headers'> {
+  return {
+    headers: {
+      ...(origin === undefined ? {} : { origin }),
+      ...headers,
+    },
+  } as unknown as Pick<IncomingMessage, 'headers'>
+}
+
+/** 临时设置环境变量；startServer 在启动时读取白名单，配置推导在请求时读取。 */
+async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const saved = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(vars)) {
+    saved.set(key, process.env[key])
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return await fn()
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+/** 走原生 http.request 才能覆盖 Host 头（fetch 不允许设置 Host）。 */
+function rawRequest(
+  harness: Harness,
+  method: string,
+  path: string,
+  headers: Record<string, string>,
+  body?: string,
+): Promise<{ status: number; json: any }> {
+  const target = new URL(harness.baseUrl)
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: target.hostname,
+        port: Number(target.port),
+        method,
+        path,
+        headers: {
+          ...headers,
+          ...(body === undefined
+            ? {}
+            : { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) }),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8')
+          resolve({ status: res.statusCode ?? 0, json: text === '' ? null : JSON.parse(text) })
+        })
+      },
+    )
+    req.on('error', reject)
+    if (body !== undefined) req.write(body)
+    req.end()
+  })
 }
 
 async function createSession(harness: Harness, accountId: string): Promise<string> {
@@ -187,6 +262,195 @@ test('hostnameFromHostHeader：去端口、保留 IPv6 方括号、非法回退'
   assert.equal(hostnameFromHostHeader('bad host:80'), '127.0.0.1')
   assert.equal(hostnameFromHostHeader('[broken'), '127.0.0.1')
   assert.equal(hostnameFromHostHeader('a.b/c:80'), '127.0.0.1')
+})
+
+test('isAllowedOrigin：回环 / 同源 / 白名单放行，跨源与 null 拒绝', () => {
+  // 回环 Origin 继续允许。
+  assert.equal(isAllowedOrigin(originReq('http://127.0.0.1:5173')), true)
+  assert.equal(isAllowedOrigin(originReq('http://localhost:8787')), true)
+  assert.equal(isAllowedOrigin(originReq('http://[::1]:8787')), true)
+
+  // 同源 https：Origin 与 X-Forwarded-Proto + Host 完全一致。
+  assert.equal(
+    isAllowedOrigin(
+      originReq('https://roost.example.com', { host: 'roost.example.com', 'x-forwarded-proto': 'https' }),
+    ),
+    true,
+  )
+  // 非默认端口；Host 大小写不影响比较。
+  assert.equal(
+    isAllowedOrigin(
+      originReq('https://roost.example.com:8443', {
+        host: 'Roost.Example.com:8443',
+        'x-forwarded-proto': 'https',
+      }),
+    ),
+    true,
+  )
+  // 默认端口可省略：Origin:443 与 Host:443 等价。
+  assert.equal(
+    isAllowedOrigin(
+      originReq('https://roost.example.com:443', {
+        host: 'roost.example.com:443',
+        'x-forwarded-proto': 'https',
+      }),
+    ),
+    true,
+  )
+  // 缺省 X-Forwarded-Proto 按 http。
+  assert.equal(
+    isAllowedOrigin(originReq('http://roost.example.com', { host: 'roost.example.com' })),
+    true,
+  )
+
+  // 跨源、scheme 不一致、端口不一致都拒绝。
+  assert.equal(
+    isAllowedOrigin(
+      originReq('https://evil.example', { host: 'roost.example.com', 'x-forwarded-proto': 'https' }),
+    ),
+    false,
+  )
+  assert.equal(
+    isAllowedOrigin(
+      originReq('http://roost.example.com', { host: 'roost.example.com', 'x-forwarded-proto': 'https' }),
+    ),
+    false,
+  )
+  assert.equal(
+    isAllowedOrigin(
+      originReq('https://roost.example.com:8443', {
+        host: 'roost.example.com',
+        'x-forwarded-proto': 'https',
+      }),
+    ),
+    false,
+  )
+
+  // Origin: null 永远拒绝（即使白名单里有其它条目）。
+  assert.equal(
+    isAllowedOrigin(originReq('null'), { allowedOrigins: ['https://roost.example.com'] }),
+    false,
+  )
+
+  // 显式白名单精确命中才放行。
+  assert.equal(
+    isAllowedOrigin(originReq('https://panel.example.com'), {
+      allowedOrigins: ['https://panel.example.com'],
+    }),
+    true,
+  )
+  assert.equal(isAllowedOrigin(originReq('https://panel.example.com'), { allowedOrigins: [] }), false)
+
+  // 通配与 null 条目被忽略。
+  assert.deepEqual(parseAllowedOrigins('https://a.example, *,null, https://b.example/'), [
+    'https://a.example',
+    'https://b.example',
+  ])
+
+  // 非浏览器客户端没有 Origin，继续放行。
+  assert.equal(isAllowedOrigin(originReq(undefined)), true)
+})
+
+test('写操作：同源 Origin 与 ROOST_ALLOWED_ORIGINS 白名单不再 403', async (t) => {
+  const sameOrigin = await startHarness()
+  t.after(() => sameOrigin.close())
+
+  const viaSameOrigin = await rawRequest(
+    sameOrigin,
+    'POST',
+    '/api/pairing/code',
+    {
+      origin: 'https://roost.example.com',
+      host: 'roost.example.com',
+      'x-forwarded-proto': 'https',
+    },
+    JSON.stringify({ accountId: 'acc_same_origin' }),
+  )
+  assert.equal(viaSameOrigin.status, 200, JSON.stringify(viaSameOrigin.json))
+
+  await withEnv({ ROOST_ALLOWED_ORIGINS: 'https://panel.example.com' }, async () => {
+    // 白名单在启动时读取，必须在 startHarness 之前设置。
+    const allowListed = await startHarness()
+    t.after(() => allowListed.close())
+    const viaAllowList = await rawRequest(
+      allowListed,
+      'POST',
+      '/api/pairing/code',
+      { origin: 'https://panel.example.com', host: '127.0.0.1' },
+      JSON.stringify({ accountId: 'acc_allow_list' }),
+    )
+    assert.equal(viaAllowList.status, 200, JSON.stringify(viaAllowList.json))
+  })
+})
+
+test('GET /api/config：X-Forwarded-Proto=https + Host + 公网端口推导 https', async (t) => {
+  const upstream = await startUpstream()
+  t.after(() => upstream.close())
+
+  await withEnv(
+    { ROOST_DSH_PUBLIC_ORIGIN: undefined, ROOST_DSH_PROXY_PUBLIC_PORT: '8443' },
+    async () => {
+      const harness = await startSqliteHarness({ dshWebPort: upstream.port, dshProxyPort: 0 })
+      t.after(() => harness.close())
+      const config = await rawRequest(harness, 'GET', '/api/config', {
+        host: 'roost.example.com',
+        'x-forwarded-proto': 'https',
+      })
+      assert.equal(config.status, 200)
+      assert.equal(config.json.dshBase, 'https://roost.example.com:8443')
+    },
+  )
+})
+
+test('GET /api/config：PUBLIC_ORIGIN 优先、非法值回退、https+443 省略端口', async (t) => {
+  const upstream = await startUpstream()
+  t.after(() => upstream.close())
+
+  await withEnv(
+    {
+      ROOST_DSH_PUBLIC_ORIGIN: 'https://panel.example.com:9443',
+      ROOST_DSH_PROXY_PUBLIC_PORT: '8443',
+    },
+    async () => {
+      const harness = await startSqliteHarness({ dshWebPort: upstream.port, dshProxyPort: 0 })
+      t.after(() => harness.close())
+      const config = await rawRequest(harness, 'GET', '/api/config', {
+        host: 'roost.example.com',
+        'x-forwarded-proto': 'https',
+      })
+      assert.equal(config.json.dshBase, 'https://panel.example.com:9443')
+    },
+  )
+
+  // 带路径的 PUBLIC_ORIGIN 不是合法 origin，忽略后回退自动推导。
+  await withEnv(
+    {
+      ROOST_DSH_PUBLIC_ORIGIN: 'https://panel.example.com/path',
+      ROOST_DSH_PROXY_PUBLIC_PORT: '8443',
+    },
+    async () => {
+      const harness = await startSqliteHarness({ dshWebPort: upstream.port, dshProxyPort: 0 })
+      t.after(() => harness.close())
+      const config = await rawRequest(harness, 'GET', '/api/config', {
+        host: 'roost.example.com',
+        'x-forwarded-proto': 'https',
+      })
+      assert.equal(config.json.dshBase, 'https://roost.example.com:8443')
+    },
+  )
+
+  await withEnv(
+    { ROOST_DSH_PUBLIC_ORIGIN: undefined, ROOST_DSH_PROXY_PUBLIC_PORT: '443' },
+    async () => {
+      const harness = await startSqliteHarness({ dshWebPort: upstream.port, dshProxyPort: 0 })
+      t.after(() => harness.close())
+      const config = await rawRequest(harness, 'GET', '/api/config', {
+        host: 'roost.example.com',
+        'x-forwarded-proto': 'https',
+      })
+      assert.equal(config.json.dshBase, 'https://roost.example.com')
+    },
+  )
 })
 
 test('GET /api/workspaces/:id/dsh/status：可达 true、不可达 false、非成员 404', async (t) => {

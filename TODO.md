@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：102 / 152 · 进行中：1
+- 完成：103 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -200,7 +200,7 @@
 
 - [x] 6.7.1 部署文档（控制面 + 沙箱 + 网关）
 - [x] 6.7.2 systemd/launchd 单元 + 日志轮转（journald；macOS 轮转需外部配置）
-- [ ] 6.7.3 反代与 TLS（同源、无 CORS）
+- [x] 6.7.3 反代与 TLS（同源无 CORS；公网 Origin 同源校验 + 白名单）
 - [x] 6.7.4 备份/恢复（SQLite `.backup` + 附件 tar，已往返验证）
 - [x] 6.7.5 升级与回滚流程
 - [x] 6.7.6 多环境配置（dev/staging/prod）
@@ -270,3 +270,4 @@
 - 2026-11-04 M6 定时任务页（前端 agent）：`#/schedules` 列表/新建（cron 与 daily/weekly/every 示例）/启停/删除/立即运行，运行历史独立加载与停止；400/409/403/503 分别降级。全仓 587 测试全绿（前端 156）。容器执行与睡眠唤醒未接。
 - 2026-11-04 M6 部署与文档（部署 agent）：`deploy/`（systemd/launchd、nginx 同源反代、env.example、backup/restore 已往返验证）、`deployment.md`/`slo.md`/`compliance.md`/`attachments-ui.md`、runtime-contract 补 DSH Web 与 Sandbox 会话。**发现两个部署阻塞**：公网 Origin 不被 `isAllowedOrigin` 接受、`/api/config` 不推导 https/8443；6.7.3 暂不勾，随后端修复。
 - 2026-11-04 M6 连接器 UI（前端 agent）：`#/connectors` 卡片（连接/断开/状态）、按 Bot 的 read/write/actions 授权表单、空目录与 501 网关未配置降级。全仓 601 测试全绿（前端 170）。
+- 2026-11-04 公网部署阻塞修复（后端 agent）：CSRF Origin 校验支持「同源（X-Forwarded-Proto + Host）」与 `ROOST_ALLOWED_ORIGINS` 精确白名单，仍拒绝 `null`/`*`；`/api/config` 推导 https 与 `ROOST_DSH_PROXY_PUBLIC_PORT`/`ROOST_DSH_PUBLIC_ORIGIN`；`/healthz` 执行 `SELECT 1`，失败 503 `db:error`。436 后端测试全绿；deploy/README 已同步。

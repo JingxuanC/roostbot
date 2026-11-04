@@ -38,6 +38,9 @@ OpenShell 沙箱（每个 workspace 一个，固定名 user-<8hex>）
 |---|---|---|
 | 控制面主端口 | `PORT=8787` | `/`、`/api/*`、`/healthz`、`/metrics`、SSE |
 | DSH 反代端口 | `ROOST_DSH_PROXY_PORT=4098` | 只服务 `/w/:workspaceId/dsh/*`；`0` 关闭 |
+| DSH 公网端口 | `ROOST_DSH_PROXY_PUBLIC_PORT=8443` | `/api/config` 推导 `dshBase` 时使用的对外端口；未配置用实际反代端口 |
+| DSH 公开 origin | `ROOST_DSH_PUBLIC_ORIGIN` | 完整 `http(s)://host[:port]`，配置后直接作为 `dshBase`，优先于自动推导 |
+| 公网 Origin 白名单 | `ROOST_ALLOWED_ORIGINS` | 逗号分隔精确 origin；留空=仅回环与同源。不接受 `*` / `null` |
 | 沙箱内 dsh web | `DSH_WEB_PORT=4099` | 反代目标固定 `127.0.0.1:4099` |
 | SQLite | `ROOST_DB=/var/lib/roost/roost.db` | 文件库自动开 WAL；`memory` 仅演示 |
 | 附件卷 | `ROOST_ATTACHMENTS_DIR=/var/lib/roost/attachments` | 内容寻址，目录 0700 / 文件 0600 |
@@ -109,22 +112,45 @@ sudo launchctl print system/com.roost.api
 | TLS | 在反代终止；控制面仍只监听回环 |
 | DSH 独立 origin | 必须让浏览器看到**不同端口或不同 host**；只把 `/w/` 指到 4098 不会改变浏览器 origin |
 
-### 4.1 当前实现的三个限制
+### 4.1 公网 Origin 与 CSRF
 
-1. **DSH 面板的 TLS 未闭环**：`GET /api/config` 固定返回 `http://<Host>:<ROOST_DSH_PROXY_PORT>`，
-   不会根据 `X-Forwarded-Proto` 推导 `https`，也不认识 nginx 的 8443。TLS 部署下前端 iframe
-   会拿到 http 地址（混合内容被浏览器拦截）。需要后续增加“公开 DSH base URL”配置；当前未实现。
-2. **DSH 反代目标假设同机**：控制面固定连 `127.0.0.1:4099`。`dsh web` 在 OpenShell 沙箱里，
-   宿主到沙箱的 4099 端口转发/代理不在本仓库实现内；只有二者网络命名空间可达时面板才工作。
-3. **公网域名写入会被 CSRF 校验拒绝**：`isAllowedOrigin()` 只接受回环 Origin。浏览器从
-   `https://roost.example.com` 发 POST 会得到 `403 forbidden_origin`。当前没有可配置的
-   公开 origin 白名单。**不要**在 nginx 里把 Origin 改写成回环地址——那等于关闭 CSRF 防护。
+控制面写操作（非 GET/HEAD）接受三类 Origin：
 
-### 4.2 可用的访问方式
+1. **回环 Origin**：本机页面（`http://127.0.0.1:*` / `localhost` / `[::1]`）。
+2. **同源**：Origin 的 `scheme://host[:port]` 与请求的 `X-Forwarded-Proto`（缺省 http）+
+   `Host`（或 `X-Forwarded-Host`）完全一致。比较前统一小写并省略默认端口（443/80）。
+3. **显式白名单**：`ROOST_ALLOWED_ORIGINS` 中逗号分隔的精确 origin 命中。不接受 `*` 与 `null`。
+
+`Origin: null` 一律拒绝（`/w/.../dsh/*` 反代路径本就豁免控制面 Origin 校验）。没有 Origin 的
+非浏览器客户端继续放行，CSRF 防护本身不变。
+
+前提：反代必须覆盖 `Host`（`proxy_set_header Host $host`）并设置
+`X-Forwarded-Proto $scheme`，必要时覆盖 `X-Forwarded-Host`。控制面只监听回环，不要把 8787
+直接暴露公网——否则客户端能同时伪造 Origin 与这些头，同源判断就失效。
+
+### 4.2 DSH 面板地址推导
+
+`GET /api/config` 的 `dshBase` 按以下顺序确定：
+
+1. `ROOST_DSH_PUBLIC_ORIGIN`：完整 `http(s)://host[:port]`，带路径/query 视为非法并忽略；
+2. `X-Forwarded-Proto`（http/https，缺省 http）+ `Host` 主机名 + `ROOST_DSH_PROXY_PUBLIC_PORT`
+   （未配置时用实际反代端口 `ROOST_DSH_PROXY_PORT`）；
+3. 未启用反代端口且没有 `ROOST_DSH_PUBLIC_ORIGIN` 时返回 `null`。
+
+`https + 443` / `http + 80` 会自动省略端口。示例：`X-Forwarded-Proto=https`、
+`Host=roost.example.com`、`ROOST_DSH_PROXY_PUBLIC_PORT=8443` → `https://roost.example.com:8443`，
+TLS 页面加载 iframe 不会触发混合内容拦截。
+
+### 4.3 剩余限制
+
+**DSH 反代目标假设同机**：控制面固定连 `127.0.0.1:4099`。`dsh web` 在 OpenShell 沙箱里，
+宿主到沙箱的 4099 端口转发/代理不在本仓库实现内；只有二者网络命名空间可达时面板才工作。
+
+### 4.4 可用的访问方式
 
 - 本机：`http://127.0.0.1:8787/`。
 - 远程：SSH 隧道（`ssh -L 8787:127.0.0.1:8787 host`）或 VPN；浏览器仍看到回环 Origin。
-- 公网域名：在实现 Origin 白名单之前不承诺可用；若必须公网只读，GET 路由可用，写操作不行。
+- 公网域名：按本节配置反代头与 `ROOST_ALLOWED_ORIGINS`（同源通常无需白名单）后，读写均可用。
 
 ## 5. 数据目录与权限
 
@@ -239,10 +265,11 @@ curl -fsS http://127.0.0.1:8787/healthz
 | 面 | 当前行为 | 建议 |
 |---|---|---|
 | 控制面监听 | 默认 `127.0.0.1:8787` | 只让反代/SSH 隧道访问 |
-| 写操作 Origin | 只接受回环 Origin；无 Origin 的非浏览器客户端放行 | 公网域名在实现白名单前不可写 |
+| 写操作 Origin | 回环、同源（Origin 与 X-Forwarded-Proto+Host 一致）、显式白名单；无 Origin 放行，`null` 拒绝 | 反代必须覆盖 Host 与 X-Forwarded-Proto；白名单只写精确 origin |
+| `/api/config` | 按 PUBLIC_ORIGIN 或 X-Forwarded-Proto+Host+公网端口推导 `dshBase` | 只监听回环，Host 由反代控制 |
 | 内部接口 | `ROOST_RUNTIME_TOKEN` 未配置=关闭（404） | 生产必填；不要与用户 token 混用 |
 | `/metrics` | 无鉴权 | 只允许监控网段，或直接抓 8787 |
-| `/healthz` | 无鉴权，不查数据库 | 作为进程存活探针，不当作“数据库可用”证明 |
+| `/healthz` | 无鉴权；SQLite 模式执行 `SELECT 1`，失败返回 503 | 可作存活+基本可用性探针；不替代完整业务检查 |
 | SSE | 支持 `?access_token=` | 反代访问日志去掉 query；不要把 URL 贴到工单 |
 | DSH 反代 | 独立端口，Bearer 或 15 分钟 HttpOnly cookie | 必须与主站不同 origin；不要并入主站路径 |
 | 沙箱 | 凭据由 OpenShell provider 注入，runtime token 走 env | 不要写进镜像层或卷 |
@@ -252,11 +279,11 @@ curl -fsS http://127.0.0.1:8787/healthz
 | 现象 | 可能原因 | 处理 |
 |---|---|---|
 | 启动即退出 | `PORT` 非法、数据库不可写、`ROOST_DSH_PROXY_PORT` 与主端口相同/被占用 | 看 journald；`ss -ltnp` 查端口 |
-| `/healthz` 200 但接口 500 | SQLite 磁盘满/权限/损坏 | `/healthz` 不查库；看日志与 `PRAGMA integrity_check` |
-| 写入 403 `forbidden_origin` | 浏览器从公网域名发 POST | 走回环/隧道；或等 Origin 白名单实现 |
+| `/healthz` 503 `db:error` | SQLite 磁盘满/权限/损坏 | 查日志里的具体错误与 `PRAGMA integrity_check` |
+| 写入 403 `forbidden_origin` | 反代没覆盖 Host / 没设置 X-Forwarded-Proto，或 Origin 不在回环/同源/白名单 | 检查 `proxy_set_header Host $host`、`X-Forwarded-Proto $scheme`；必要时加 `ROOST_ALLOWED_ORIGINS`；不要改写 Origin |
 | SSE 延迟/成批到达 | 反代缓冲 | 确认 `proxy_buffering off` 与 `X-Accel-Buffering: no` |
 | DSH 面板 502 `dsh.unavailable` | `dsh web` 未起或 4099 不可达 | 查沙箱进程与端口转发 |
-| 面板空白/混合内容 | `/api/config` 返回 http，页面是 https | 当前 TLS 下未支持；走 HTTP 回环或等代码支持 |
+| 面板空白/混合内容 | `/api/config` 仍返回 http，页面是 https | 确认反代传 `X-Forwarded-Proto https`，或显式配置 `ROOST_DSH_PUBLIC_ORIGIN` / `ROOST_DSH_PROXY_PUBLIC_PORT` |
 | 限流突然失效 | 控制面重启（内存令牌桶清空） | 预期行为；不要把限流当持久配额 |
 | 备份失败 `database is locked` | 长时间写事务 | 重试；`.backup` 会自己重试，不要改为 cp |
 
