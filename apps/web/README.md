@@ -1,91 +1,131 @@
-# apps/web — 网页端第一版 UI 切片
+# apps/web — 网页端（M4）
 
-> **这是第一版 UI 切片，不是最终设计。** 视觉按 `docs/design/ui.md` §6 的 token 实现，
-> 但信息架构、状态、投递方式等只覆盖了配对与房间两页；消息、审批、发送全部是固定样例。
-> 它是用来"看和摸"的，不是能用的产品。
+零依赖、零构建：`index.html` + `app.js` + `styles.css`，原生 ES module，没有 npm 包、没有打包器、没有 TypeScript 源码。
 
-零依赖、无需构建：三个文件（`index.html` / `app.js` / `styles.css`），普通 ES module，没有 npm 包、没有打包器、没有 TypeScript。
+M4 在原来的配对页 / 房间页之上加了 Bot 与建群/房间设置，并把数据接到控制面的 M4 API。
+纯逻辑（路由、谁回答、@ 解析、API 客户端）抽在 `lib/` 里，用 `node:test` 覆盖；视图在 `views/`。
+
+## 路由（hash）
+
+| 路由 | 视图 |
+|---|---|
+| `#/` | 配对（默认） |
+| `#/bots` | Bot 列表 + 新建入口 |
+| `#/bots/new` | 新建 Bot |
+| `#/bots/:id` | Bot 设置（身份 / 人设 / 技能 / 工具 / 审批 / 记忆 / 模型 / 状态 / 删除） |
+| `#/rooms/new` | 建群（名称可空、公告、成员多选、host、谁回答三选一） |
+| `#/rooms/:id` | 房间 |
+| `#/rooms/:id/settings` | 房间设置（名称 / 公告 / 成员增删 / 谁回答 / 删除） |
+| `#room` | 旧的房间预览地址，仍然可用（固定样例，不请求） |
+
+未知地址渲染「找不到这个页面」，不会白屏。刷新任何 hash 地址都能重新渲染；受保护页面在
+会话失效时回到配对页，配对成功后回到原地址。
 
 ## 怎么起
 
 ```bash
-# 任选一个静态服务器，根目录指向 apps/web
-npx serve apps/web                       # → http://localhost:3000
-python3 -m http.server 8000 --directory apps/web   # → http://localhost:8000
+# 推荐：控制面同源伺服本目录（一个进程就是完整应用）
+node --experimental-strip-types apps/api/src/main.ts
+# → http://127.0.0.1:8787
+
+# 或任意静态服务器（只能看配对页与 #room 预览；API 要另配 ?api=）
+npx serve apps/web
+python3 -m http.server 8000 --directory apps/web
 ```
 
-打开 `http://localhost:8000/` 是配对页；`http://localhost:8000/#room` 直接进房间（假数据）。
-页面上的「预览房间（假数据，不配对）」按钮等价于后者。
+**不要直接双击 `index.html`**：`file://` 下浏览器会按 CORS 拦掉 ES module。页面里有一小段普通脚本会在 1.2 秒后提示。
 
-API 地址：
-
-- 默认**同源**（`fetch('/api/pairing/claim')`），适合由控制面自己伺服这个目录；
-- 或加查询参数：`http://localhost:8000/?api=http://127.0.0.1:8787`。
-
-**不要直接双击 `index.html`**：`file://` 下浏览器会按 CORS 拦掉 ES module（`app.js` 不执行）。
-页面里有一小段普通脚本会在 1.2 秒后提示这件事。必须用静态服务器。
+API 地址：默认同源；`?api=http://127.0.0.1:8787` 可指定（受 CORS 限制，见「已知缺口」）。
 
 ## 哪些是真的、哪些是假的
 
 | 部分 | 状态 |
 |---|---|
-| 配对码输入（6 位、自动聚焦、粘贴自动分段、错误就地显示） | **真**：会 `POST /api/pairing/claim`，服务端的 `message` 原样显示 |
-| 会话 token | **只在内存变量里**，不写 `localStorage` / `sessionStorage`、不进 URL、不渲染；刷新即丢（`auth.md` §7：正式做法是 HttpOnly cookie） |
-| 房间名、消息、工具调用、审批卡 | **假数据**，写死在 `app.js` 的 `ROOM` 里 |
-| 发送消息 | **只追加本地用户气泡，不发请求** |
-| 审批按钮 | **不发请求**，点一下只会说明"审批接口尚未实现" |
-| 投递方式 / 回复给（`ui.md` §3.2 要求可见） | **没做**：发送本身不发请求，放两个假下拉会更不诚实，见「已知缺口」 |
+| 配对码（6 位、粘贴分段、错误就地显示） | **真**：`POST /api/pairing/claim` |
+| Bot 列表 / 新建 / 设置 / 暂停 / 删除 | **真**：`GET/POST/PATCH/DELETE /api/bots` |
+| 建群 / 房间设置 / 成员增删 / 谁回答 | **真**：`POST/PATCH /api/rooms`、`/members` |
+| 房间消息 / 发送 / SSE | **真**：`GET/POST /api/rooms/:id/messages`、`/stream` |
+| 「谁会回答」提示 | **真**：从 `room.responder` 推导（`lib/rooms.js`） |
+| `@` 成员菜单 | **真**：方向键 + 回车插入；中文名前缀消歧（`lib/mentions.js`） |
+| 轮次状态（谁在说 / 排队 / 失败 / 静默） | **真**（有数据才渲染）：`room.round.slots` + SSE `round`/`status`/`speaking`；接口暂未接轮次时整块隐藏 |
+| 房间删除 | 按钮会真的发 `DELETE /api/rooms/:id`；契约与当前控制面都没有这个接口，所以会如实显示 404 错误 |
+| 「需要你」抽屉 / 审批卡 | **样例**。预览房间时显示；连上控制面后隐藏，避免假装有待办 |
+| 预览房间（`#room`）的消息、工具调用、审批卡 | **固定样例**，发送只追加本地气泡 |
 
-消息样例的形状贴着 `docs/design/events.md` §3 的信封（`domain` / `kind` / `actor` / `audience` / `payload`），
-私聊额外带 `peer`（名字、动作、完成条件），对应 `packages/messaging/src/provenance.ts` 的 `PeerLabel`。
-折叠规则也照抄了 `collapsedByDefault()`：房间与通知不折叠，其余默认折叠。
+## 会话 token 与刷新
 
-## Bot 图标
+token 仍然**只在内存变量里**（`app.js` 的 `sessionToken`）：不写 `localStorage` / `sessionStorage`、
+不进 URL、不渲染（对齐 `docs/design/auth.md` §7；正式做法应是 HttpOnly cookie）。
 
-`app.js` 里有一份 `packages/identity/src/glyph.ts` 的**等价重写**（fnv1a → 6 族 × 8 调色板 × 4 旋转 × 4 装饰点，输出 SVG）。
-不 import `.ts`，因为浏览器跑不了 TypeScript，而这个目录不允许有构建步骤。
-为 `chief` / `data-officer` / `selector` / `risk-officer` 四个 id 渲染，深色配色。
-**两份实现必须同步**：改 `packages/identity/src/glyph.ts` 的算法时，这里要跟着改，否则同一个 Bot 在两处长得不一样。
+所以刷新页面会丢 token：受保护页面收到 401 时，前端把当前 hash 记到 `pendingRoute`，回到配对页并
+显示说明；重新配对成功后自动回到刚才的地址。这是有意的诚实行为，不是白屏 bug。
 
-## 无障碍
+## 文件
 
-- 配对码用 `<fieldset>` + `<legend>`（`配对码`），每个格子另有 `aria-label="第 N 位"`；第一个带 `autocomplete="one-time-code"`。
-- 所有按钮都是原生 `<button>`，可 Tab 到达、可 Enter/Space 触发；可见焦点环（`2px` 主色 + 偏移）。
-- 折叠行（Bot 私聊、工具调用）是 `<button aria-expanded aria-controls>`，展开后正文才进入可访问树；展开用 `hidden`，不是只靠 CSS。
-- 「需要你」抽屉：`aria-expanded` + `aria-controls`，Esc 关闭，焦点移入面板、关闭后回原位。
-- 消息区 `role="log"`，初始渲染后才设 `aria-live="polite"`，避免读屏一次念完整个房间。
-- 只做深色：`<meta name="color-scheme" content="dark">`，没有浅色主题（浅色 token 在 `packages/tokens` 里已有，但这一版没实现）。
-- 图片/图标：图标是装饰性的（旁边有名字），因此 `role="presentation" aria-hidden="true"`，不重复念名字。
+```
+index.html          三个视图的静态骨架（配对 / 房间 / 路由页外壳）
+app.js              入口：状态、路由、房间页、SSE、输入区、@ 菜单
+styles.css          设计 token + 组件样式（深色一套）
+lib/glyph.js        程序化图标（packages/identity/src/glyph.ts 的等价重写，无 DOM）
+lib/dom.js          el / avatar / $（所有用户输入只进 textContent / value）
+lib/api-client.js   createApiClient / ApiError；错误读 {ok:false,error:{code,message}}
+lib/routing.js      routeMatch(hash)
+lib/rooms.js        whoAnswersLabel(room)、slot 状态、轮次条目
+lib/mentions.js     parseMentionQuery / insertMention / memberNameConflict
+lib/ui.js           表单与加载/空/错误态组件
+views/bots.js       Bot 列表、新建、设置
+views/rooms.js      建群、房间设置
+test/*.test.ts      node:test（DOM 无关）
+```
 
-## 与 packages/tokens 的关系
+`app.js` 仍然只被 `index.html` 以一个 `<script type="module">` 引入；其余都是它 import 的模块。
 
-`styles.css` 顶部的颜色、间距、圆角、字号是**手工复制**自 `packages/tokens/src/index.ts`（深色一套）。
-零构建意味着不能 import 那个 `.ts`；两处必须保持一致，改 token 时同步改 CSS 变量。
-`cssVars()` 的输出采用 `--roost-*` 命名，这里沿用同一套名字，方便以后接上。
+## 纯逻辑与测试
 
-## 已知缺口（对照设计文档）
+```bash
+export PATH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/primary-runtime/dependencies/node/bin:$PATH"
+node --experimental-strip-types --test apps/web/test/*.test.ts
+node --check apps/web/app.js
+```
 
-1. **`ui.md` §3.2 的「投递方式 / 回复给」两个下拉没做**：发送是本地模拟，做出来就是假控件。
-2. **`ui.md` §3.10 的展开状态按设备记**：没做持久化（本切片不写任何本地存储）。
-3. **`ui.md` §5 的状态**：流式光标、停止、离线细条、预算横幅、沙箱拒绝都还没有（没有后端事件流）。
-4. **`ui.md` §4 多端**：窄屏只是把左栏藏起来，「需要你」挪到房间头；没有底部 Tab、没有深链 `/w/<id>/room/<id>`。
-5. **`bot-identity.md` §7 状态环 / §8 群聊拼合**：没做，只在头部用一个小圆点表示"正在工作"。
-6. **房间的「折叠 Bot 之间的对话」开关（`messaging.md` §14.2）**：没做，私聊按默认折叠渲染。
-7. **配对成功的响应体没有写进文档**：`apps/api` 现在返回 `{ deviceId, sessionToken, expiresAt }`，
-   而 `auth.md` §10 只给了路径。这里对 `200` 与空 body 都放行，读 `sessionToken` 存内存（不落盘）。
-   建议把响应体补进 `auth.md`——顺带定一下 `auth.md` §7「token 放 HttpOnly cookie」与现状（JSON 里返回 token）哪个算数。
-8. **服务端错误文案是英文**：`apps/api` 返回 `{ ok: false, error: { code, message } }`，`message` 是英文
-   （`pairing code is not valid` 之类）。按本页规则"失败显示服务端 message"，界面会原样显示英文；
-   而 `auth.md` §8 规定的是中文话术（「配对码已过期，请重新生成」）。要么服务端出中文，要么前端按 `error.code` 映射。
-9. **跨源 `?api=` 现在会被浏览器拦掉**：`apps/api` 没有 CORS 头，且 `Content-Type: application/json` 会触发预检，
-   预检直接 404。所以 `?api=http://127.0.0.1:8787` 只在给控制面加了 CORS（含 `Access-Control-Allow-Headers: content-type`）
-   或由控制面同源伺服本目录时才可用；页面会如实报"连不上 API"。本切片已用真实 `apps/api` 验证过同源流程。
-10. **设计稿里没有的两个诚实标注**：房间顶部那条"假数据预览"提示条，和配对页的"预览房间（假数据，不配对）"按钮。
-    它们是为这一版切片加的，接上真 room API 后应删除。
-11. **「需要你」在 `ui.md` §3.3 是一整页**，这里先做成右侧抽屉（不打断房间阅读）；位置与形态待设计确认。
+覆盖点：
 
-## 后续（沿用本目录原来的 v0 范围）
+- `routeMatch`：配对 / 房间 / 建群 / 设置 / Bot / 旧 `#room` / 解码 / 未知路径。
+- `whoAnswersLabel`：`member:<bot>`、`everyone`、`mentions`、`auto`、没有成员、旧 `replyMode`。
+- `parseMentionQuery`：`@` 候选、前缀匹配、`@数据官` 不匹配 `@数据官2`、邮箱不触发、大小写。
+- `memberNameConflict`：完全同名（去空白/忽略大小写）才算冲突，前缀不算。
+- `createApiClient`：Bearer、JSON 正文、`{ok:false}` 中文 message、HTTP 500、网络失败、204。
 
-1. 配对页（已做）、房间（已做壳）
-2. Bot 详情、时间线、用量、设置
-3. 真实事件流（SSE）+ 本地 store；届时再决定技术栈（Vite + React 仍是候选，但当前切片证明不需要构建也能先跑）
+## 与契约/设计的偏差（有意的）
+
+1. **`notice` vs `bulletin`**：M4 契约的 API 字段是 `notice`，设计文档 `rooms.md` 用 `bulletin`。
+   前端按契约发 `notice`，读的时候 `notice || bulletin` 兼容。
+2. **房间删除**：任务要求设置页有删除，但 `m4-contract.md` §2 与 `rooms.md` §8 都没有
+   `DELETE /api/rooms/:id`。按钮真的发请求，失败就把服务端 message 显示在原地，不假装成功。
+3. **换 host**：契约的 `PATCH /api/rooms/:id` 没有 `hostBotId`，所以设置页只显示 host 徽章，不提供换 host。
+   移除 host 是允许的（服务端会自动把另一个成员设为 host）。
+4. **「需要你」在实时房间里隐藏**：接口未做，保留固定样例会假装有待办。预览房间仍显示样例。
+5. **轮次状态**：控制面当前 `GET /api/rooms/:id` 的 `round` 还是 `null`，所以真实房间里这块通常不出现；
+   一旦接口返回 `slots`（或 SSE 推 `round`/`status`/`speaking`），就会渲染，无需改前端。
+6. **配对后没有房间**：不再自动建一个空房间（M4 要求 ≥2 个成员），而是去 `#/bots` 并说明「先建两个 Bot，再建群」。
+7. **`auto` responder**：契约里有 `auto`，v1 界面只给 member / everyone / mentions 三选一；
+   遇到已有的 `auto` 房间会显示提示，保存时必须显式选三种之一。
+8. **`?api=` 跨源**：控制面仍不回 CORS 头，跨源预检会失败；页面会如实报「连不上 API」。
+   同源伺服（默认）是当前唯一顺畅的用法。
+
+## 无障碍与移动端
+
+- 路由页有 `main` 地标；按钮/链接都是原生元素，键盘可达；焦点环沿用全局 `:focus-visible`。
+- @ 菜单是 `role="listbox"` + `option`，输入框带 `aria-expanded` / `aria-activedescendant`；
+  方向键循环、回车插入、Esc 关闭、Tab 离开；IME 组合输入时不吃回车。
+- 房间页成员/轮次状态是 `role="status"`，只在有数据时出现。
+- 窄屏（≤860px）沿用原媒体查询：左栏收起、房间头露出「需要你」与「Bot」入口；路由页单列。
+- 只做深色：`<meta name="color-scheme" content="dark">`。
+
+## 仍然没有的
+
+- 「需要你」的真实接口、审批与提问交互（样例保留在预览里）。
+- 轮次引擎完整接入后的历史轮次、停止当前成员、重发去重提示。
+- Bot 头像上传 / 生成（程序化 glyph 是默认）；定时 routine；插件/用量/连接器页。
+- 客户端状态持久化（刷新只保留 hash，不保留 token 与草稿）。
+- 移动端底部 Tab（当前用页面顶部导航 + 房间头入口）。

@@ -8,7 +8,7 @@
 
 - 完成：8 / 149 · 进行中：41（M4 全部在实现中）
 - 8 项为清单建立前完成，见末尾「已完成」
-- TODO 总数从 149 增至 151（新增 4.2.16 / 4.2.17 收尾项）
+- TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
 - 统计：`node scripts/todo-stats.mjs`
 
@@ -23,8 +23,8 @@
 - [x] 4.1.3 `GET /api/bots` / `GET /api/bots/:id`
 - [x] 4.1.4 `PATCH /api/bots/:id`（人设版本留痕、能力区仅 admin）
 - [~] 4.1.5 `DELETE /api/bots/:id`（软删 7 天）
-- [~] 4.1.6 创建后 kickoff（模型生成自我介绍 + 问用途）
-- [~] 4.1.7 头像：程序化 glyph 默认 + 上传（≥256 WebP，剥 EXIF）
+- [x] 4.1.6 创建后 kickoff（模型生成自我介绍 + 问用途）
+- [x] 4.1.7 头像：程序化 glyph 默认 + 上传（≥256 WebP，剥 EXIF）
 - [~] 4.1.8 `bot.created/updated/deleted` 事件
 
 **验收**：见 4.5.1。
@@ -42,12 +42,13 @@
 - [x] 4.2.9 @ 调用（每成员 2 次、host 4 次、每轮额外 4、仅 host @all）
 - [x] 4.2.10 `[PASS]` 静默 + failed/missed/working/approval 状态
 - [x] 4.2.11 回复超时 240s
-- [ ] 4.2.16 工作宽限 15s / late rounds ≤10 / 轮内 stop（引擎与 runtime 尚未接）
+- [x] 4.2.16 工作宽限 15s / late rounds ≤10 / 轮内 stop（引擎与 runtime 尚未接）
 - [x] 4.2.12 prompt 侧增量 24 / 更早 8
 - [ ] 4.2.17 房间日志裁剪到 60 条、首看 12（events 是事实源，裁剪做成投影）
+- [ ] 4.2.18 `DELETE /api/rooms/:id`（前端房间设置已有按钮，后端还没有接口，404 时会如实报错）
 - [x] 4.2.13 内部接口：`GET /internal/rooms/:id/round`、`POST /internal/rounds/:id/advance`
-- [~] 4.2.14 建群 kickoff（无首句时 host 问"这个群要做什么"）
-- [~] 4.2.15 Bot 建群：`POST /internal/rooms` + 一次人工确认 + 每日上限 3
+- [x] 4.2.14 建群 kickoff（无首句时 host 问"这个群要做什么"）
+- [x] 4.2.15 Bot 建群：`POST /internal/rooms` + 一次人工确认 + 每日上限 3
 
 **验收**：见 4.5.2。
 
@@ -77,7 +78,7 @@
 
 ### 4.5 M4 验收
 
-- [ ] 4.5.1 新建 Bot → 出现"自我介绍 + 问用途"的 kickoff 消息
+- [x] 4.5.1 新建 Bot → 出现"自我介绍 + 问用途"的 kickoff 消息
 - [x] 4.5.2 建群拉 2 个 Bot → 两个 Bot 都能按 responder 回答
 - [ ] 4.5.3 远端真实模型两轮对话（记得上一句）→ 沙箱重启后仍记得
 - [ ] 4.5.4 以上全部在浏览器里完成（不靠 curl / 手工脚本）
@@ -243,4 +244,5 @@
 
 - 2026-11-04 建立清单（149 项：M4 41 · M5 35 · M6 47 · 工程债 12 · 文档 6 · 已完成 8）。
 - 2026-11-04 M4 拆给 4 个子 agent 并行实现（数据/API、轮次引擎、前端、runtime），Lead 验收并集成轮次接口。
+- 2026-11-04 第二批子 agent：kickoff（DM+群）、Bot 建群+审批+配额、头像上传/审批页、轮次 stop/宽限/late rounds 全部落地并接线；367 测试 + 4 个 HTTP 冒烟（kickoff/审批/stop）全过。
 - 2026-11-04 M4 主体完成：bots CRUD/建群/成员/responder/轮次引擎/内部接口/workspace start-local/前端四视图；本地 HTTP 冒烟 14/14、本地双 Bot E2E 通过。剩：kickoff、软删、Bot 建群、profile sync、远端真实模型双 Bot、浏览器全流程（见 4.1.5/4.1.6/4.2.14/4.2.15/4.3.4/4.5.1/4.5.3/4.5.4）。

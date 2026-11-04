@@ -3,13 +3,18 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import { ROUND_LIMITS } from '../../contract/src/index.ts'
 import { BASE, DATA, HOST, MEMBERS, OPS, member } from './helpers.ts'
 import {
+  SLOT_STOP_NOTE,
   advanceSlot,
   applyMentions,
+  classifyGrace,
   classifyReply,
   createRound,
   finishRound,
+  lateRoundAllowed,
+  markSlotStopped,
   nextSlot,
   spokenTurns,
   startSlot,
@@ -252,4 +257,129 @@ test('turnLimit 按出现过的人数算，不随插入的额外 slot 一起抬�
   })
   const distinct = createRound({ roomId: 'room_1', startSeq: 11, at: BASE, slots: [HOST, DATA, OPS] })
   assert.equal(turnLimit(round), turnLimit(distinct))
+})
+
+// ---- 轮次收尾（docs/build/m4-addendum.md §D）：stop / grace / late rounds ----
+
+test('markSlotStopped：speaking → left，清 speaking，只动该 slot', () => {
+  const round = startSlot(round3(), 1)
+  const untouched = [round.slots[0], round.slots[2]]
+  const next = markSlotStopped(round, 1)
+  assert.equal(next.slots[1].status, 'left')
+  assert.equal(next.slots[1].note, SLOT_STOP_NOTE)
+  assert.equal(next.speaking, undefined)
+  assert.equal(next.state, 'running')
+  // 其它 slot 原对象复用，状态/内容完全没变
+  assert.equal(next.slots[0], untouched[0])
+  assert.equal(next.slots[2], untouched[1])
+  assert.deepEqual(next.slots.map(slot => slot.status), ['waiting', 'left', 'waiting'])
+  // 不可变：入参还是原样（还在说）
+  assert.equal(round.slots[1].status, 'speaking')
+  assert.equal(round.speaking, 'b_data')
+  // 被停止的 slot 计一次 turn（与 advanceSlot 的口径一致）
+  assert.equal(next.turns, round.turns + 1)
+})
+
+test('markSlotStopped：waiting → left，轮次继续、下一个 slot 照常开', () => {
+  const round = round3()
+  const next = markSlotStopped(round, 0)
+  assert.equal(next.slots[0].status, 'left')
+  assert.deepEqual(next.slots.slice(1).map(slot => slot.status), ['waiting', 'waiting'])
+  assert.equal(nextSlot(next), 1)
+  const speaking = startSlot(next, 1)
+  assert.equal(speaking.speaking, 'b_data')
+})
+
+test('markSlotStopped：已说完 / 越界 / 非 running 原样返回；已有 note 保留', () => {
+  const round = round3()
+  assert.equal(markSlotStopped(round, 9), round)
+  assert.equal(markSlotStopped(round, -1), round)
+  const done = { ...round, state: 'done' as const }
+  assert.equal(markSlotStopped(done, 0), done)
+  const posted = advanceSlot(round, 0, { kind: 'posted', text: '说完了' })
+  assert.equal(markSlotStopped(posted, 0), posted)
+  assert.equal(markSlotStopped(posted, 0).turns, posted.turns)
+
+  const noted = createRound({
+    roomId: 'room_1',
+    startSeq: 11,
+    at: BASE,
+    slots: [{ botId: 'b_host', name: '主持', status: 'speaking', note: '被 @ 叫到' }]
+  })
+  const stopped = markSlotStopped(noted, 0)
+  assert.equal(stopped.slots[0].status, 'left')
+  assert.match(stopped.slots[0].note ?? '', /被 @ 叫到/)
+  assert.match(stopped.slots[0].note ?? '', /用户停止/)
+
+  // 同一成员还有一个 slot 在说：停掉排队中的那个，不能把 speaking 清掉
+  const duplicate = createRound({
+    roomId: 'room_1',
+    startSeq: 11,
+    at: BASE,
+    slots: [
+      { botId: 'b_host', name: '主持', status: 'speaking' },
+      { botId: 'b_host', name: '主持', status: 'waiting' }
+    ]
+  })
+  const duplicateRound = { ...duplicate, speaking: 'b_host' }
+  const partial = markSlotStopped(duplicateRound, 1)
+  assert.equal(partial.slots[0].status, 'speaking')
+  assert.equal(partial.speaking, 'b_host')
+})
+
+test('classifyGrace：240s 内继续等，工作中再宽限 15s，用完报 working', () => {
+  assert.equal(classifyGrace({ elapsedMs: 0, working: true }), 'continue')
+  assert.equal(classifyGrace({ elapsedMs: ROUND_LIMITS.replyTimeoutMs - 1, working: true }), 'continue')
+  // 到点仍在工作：宽限期里继续等（最后一毫秒还没用完）
+  assert.equal(classifyGrace({ elapsedMs: ROUND_LIMITS.replyTimeoutMs, working: true }), 'continue')
+  assert.equal(classifyGrace({ elapsedMs: 240_000 + 15_000 - 1, working: true }), 'continue')
+  // 15s 宽限边界：整 15s 用完 → 按 working 收尾（不阻塞轮次）
+  assert.equal(classifyGrace({ elapsedMs: 240_000 + 15_000, working: true }), 'working')
+  assert.equal(classifyGrace({ elapsedMs: 240_000 + 15_001, working: true }), 'working')
+  // 到点已经不在工作（会话掉线）→ timeout
+  assert.equal(classifyGrace({ elapsedMs: 240_000, working: false }), 'timeout')
+})
+
+test('classifyGrace：自定义 limits 按毫秒生效；宽限期外的工作/掉线区分', () => {
+  const limits = { replyTimeoutMs: 1_000, workGraceMs: 15_000 }
+  assert.equal(classifyGrace({ elapsedMs: 999, working: true, limits }), 'continue')
+  assert.equal(classifyGrace({ elapsedMs: 1_000, working: true, limits }), 'continue')
+  assert.equal(classifyGrace({ elapsedMs: 15_999, working: true, limits }), 'continue')
+  assert.equal(classifyGrace({ elapsedMs: 16_000, working: true, limits }), 'working')
+  // 不在工作：没到点继续等，到点（且没有结果）记 timeout
+  assert.equal(classifyGrace({ elapsedMs: 239_999, working: false }), 'continue')
+  assert.equal(classifyGrace({ elapsedMs: 999_999, working: false }), 'timeout')
+  assert.equal(classifyGrace({ elapsedMs: Number.NaN, working: true }), 'continue')
+})
+
+test('lateRoundAllowed：默认上限 10 轮（晚到结果还能回群的轮距）', () => {
+  const room = { id: 'room_1' }
+  const round = { id: 'rnd_1', roomId: 'room_1' }
+  assert.equal(lateRoundAllowed(room, round), true)
+  assert.equal(lateRoundAllowed(room, round, { lateRounds: 0 }), true)
+  assert.equal(lateRoundAllowed(room, round, { lateRounds: 10 }), true)
+  assert.equal(lateRoundAllowed(room, round, { lateRounds: 11 }), false)
+})
+
+test('lateRoundAllowed：自定义 limit 与跨房间拒绝', () => {
+  const room = { id: 'room_1' }
+  const round = { id: 'rnd_1', roomId: 'room_1' }
+  assert.equal(lateRoundAllowed(room, round, { lateRounds: 2, limit: 2 }), true)
+  assert.equal(lateRoundAllowed(room, round, { lateRounds: 3, limit: 2 }), false)
+  assert.equal(lateRoundAllowed({ id: 'room_2' }, round, { lateRounds: 0 }), false)
+  assert.equal(lateRoundAllowed(null, round), false)
+  assert.equal(lateRoundAllowed(room, null), false)
+})
+
+test('lateRoundAllowed：按 room.rounds 的位置差推断轮距', () => {
+  const rounds = Array.from({ length: 12 }, (_, index) => ({ id: `rnd_${index}` }))
+  const room = { id: 'room_1', rounds }
+  // 落后 11 轮 → 不允许；落后 10 轮 / 同轮 → 允许
+  assert.equal(lateRoundAllowed(room, { id: 'rnd_0', roomId: 'room_1' }), false)
+  assert.equal(lateRoundAllowed(room, { id: 'rnd_1', roomId: 'room_1' }), true)
+  assert.equal(lateRoundAllowed(room, { id: 'rnd_11', roomId: 'room_1' }), true)
+  // 房间有轮次列表但这轮已不在列表里（太旧）→ 保守拒绝
+  assert.equal(lateRoundAllowed(room, { id: 'rnd_gone', roomId: 'room_1' }), false)
+  // 显式轮距优先于推断
+  assert.equal(lateRoundAllowed(room, { id: 'rnd_0', roomId: 'room_1' }, { lateRounds: 0 }), true)
 })

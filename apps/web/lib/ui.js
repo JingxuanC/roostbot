@@ -123,6 +123,9 @@ export function radioGroup(options = {}) {
   return {
     node: group,
     getValue: () => inputs.find((control) => control.checked)?.value ?? '',
+    setValue: (value) => {
+      for (const control of inputs) control.checked = control.value === value
+    },
   }
 }
 

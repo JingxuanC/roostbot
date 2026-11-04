@@ -18,6 +18,7 @@ const ROUTES = new Set([
   'bots',
   'botNew',
   'bot',
+  'approvals',
   'notFound',
 ])
 
@@ -48,6 +49,8 @@ export function routeMatch(hash) {
   const path = normalizeHash(hash)
   const route = (name, params = {}) => ({ name, params, path })
   if (path === '/') return route('pair')
+  // 需要你 / 待审批（addendum §C）：固定一层，不带参数。
+  if (path === '/approvals') return route('approvals')
 
   const segments = path.split('/').filter(Boolean)
   const decoded = []

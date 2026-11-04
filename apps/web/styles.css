@@ -2018,3 +2018,158 @@ button {
   font-size: 13px;
   text-align: center;
 }
+
+/* ------------------------------------------------------------------ 头像上传 */
+
+.avatar-img {
+  display: block;
+  object-fit: cover;
+}
+
+.avatar-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-lg);
+}
+
+.avatar-editor-preview {
+  flex: none;
+  padding: 3px;
+  background: var(--roost-bg);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-md);
+}
+
+.avatar-editor-side {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.avatar-file {
+  padding: 5px;
+  font-size: 12px;
+}
+
+.avatar-file::file-selector-button {
+  margin-right: var(--space-sm);
+  padding: 4px var(--space-sm);
+  border: 1px solid var(--roost-border);
+  border-radius: var(--radius-sm);
+  background: var(--roost-surface);
+  color: var(--roost-ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ 房间来源 */
+
+.room-link .room-name-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-origin {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--roost-accent) 38%, var(--roost-border));
+  border-radius: 999px;
+  color: var(--roost-accent);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.room-head .room-origin {
+  margin-left: 0;
+}
+
+/* ------------------------------------------------------------------ 审批页 */
+
+.approvals-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin: calc(-1 * var(--space-sm)) 0 var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px dashed var(--roost-border);
+  border-radius: var(--radius-md);
+  color: var(--roost-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.approvals-link:hover {
+  color: var(--roost-ink);
+  border-color: var(--roost-accent);
+}
+
+.approvals-link-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.approvals-board {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.approvals-count {
+  margin: 0;
+}
+
+.approval-list {
+  gap: var(--space-md);
+}
+
+.approval-card {
+  border-left: 2px solid color-mix(in srgb, var(--roost-warn) 55%, var(--roost-border));
+}
+
+.approval-card .need-title {
+  font-size: 14px;
+}
+
+.approval-card .need-meta dd {
+  font-family: var(--font-sans);
+}
+
+/* ------------------------------------------------------------------ Bot 列表：已删除筛选（禁用态） */
+
+.bot-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--roost-border);
+}
+
+.bot-filter-row .field-hint {
+  margin: 0;
+}
+
+.filter-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--roost-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--roost-ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

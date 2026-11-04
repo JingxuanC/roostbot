@@ -17,6 +17,7 @@ interface RoundRow {
   turns: number | bigint
   started_at: number | bigint
   ended_at: number | bigint | null
+  stopping: number | bigint | null
 }
 
 function parseSlots(json: string, roundId: string): RoundSlot[] {
@@ -127,6 +128,26 @@ export function seenSeq(store: Store, roomId: string, botId: string): number {
     | { seq: number | bigint }
     | undefined
   return row === undefined || row === null ? 0 : toNumber(row.seq)
+}
+
+/** 记录“用户要求停止当前 slot”（0-based）；advance/收轮时清空。 */
+export function setStopping(store: Store, roundId: string, slotIndex: number | null): void {
+  assertOpen(store)
+  store.db
+    .prepare('UPDATE room_rounds SET stopping = ? WHERE id = ?')
+    .run(
+      slotIndex === null ? null : Number(slotIndex),
+      asNonEmptyString(roundId, 'round.id', 'INVALID_INPUT')
+    )
+}
+
+export function getStopping(store: Store, roundId: string): number | null {
+  assertOpen(store)
+  const row = store.db
+    .prepare('SELECT stopping FROM room_rounds WHERE id = ?')
+    .get(asNonEmptyString(roundId, 'round.id', 'INVALID_INPUT')) as { stopping: number | bigint | null } | undefined
+  if (row === undefined || row === null || row.stopping === null) return null
+  return toNumber(row.stopping)
 }
 
 export function setBotSession(store: Store, roomId: string, botId: string, sessionId: string): void {

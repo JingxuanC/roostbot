@@ -105,7 +105,7 @@
       <aside class="sidebar" aria-label="导航">
         <div class="brand">
           <span class="brand-name">Roost</span>
-          <span class="brand-tag">v0</span>
+          <span class="brand-tag">M4</span>
         </div>
 
         <button
@@ -118,6 +118,12 @@
           <span>需要你</span>
           <span class="needs-count" id="needs-count">(2)</span>
         </button>
+
+        <!-- 真实审批入口：预览抽屉是样例，这个页面读 GET /api/approvals。 -->
+        <a id="approvals-link" class="approvals-link" href="#/approvals">
+          <span>待审批</span>
+          <span class="approvals-link-hint" aria-hidden="true">查看 →</span>
+        </a>
 
         <h2 class="nav-title" id="rooms-title">房间</h2>
         <ul class="room-list" id="room-list" aria-labelledby="rooms-title"></ul>
@@ -136,6 +142,7 @@
         <header class="room-head">
           <div class="room-head-main">
             <h1 class="room-name" id="room-name">量化研究组</h1>
+            <span id="room-origin" class="room-origin" hidden></span>
             <a id="room-settings-link" class="room-settings-link" href="#" hidden>设置</a>
           </div>
           <div class="head-right">
@@ -213,6 +220,7 @@
         <a class="brand-link" href="#/">Roost</a>
         <nav class="page-nav" aria-label="导航">
           <a href="#/bots">Bot</a>
+          <a href="#/approvals">需要你</a>
           <a href="#/rooms/new">新建房间</a>
           <a href="#/">配对</a>
         </nav>

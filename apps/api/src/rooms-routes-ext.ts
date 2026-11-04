@@ -26,10 +26,14 @@ import {
   sendJson,
 } from './server.ts'
 import type { StorePort } from './port.ts'
+import type { Store } from '../../../packages/store/src/types.ts'
+import { openKickoffRound } from './kickoff.ts'
 
 export interface RoomsExtContext {
   store: StorePort
   now: () => number
+  /** 原始 SQLite store：kickoff 轮需要它；memory 模式下为 undefined。 */
+  rawStore?: Store
 }
 
 /** 契约里的 error code 是点号形式；这里把 store 的大写码翻译过去。 */
@@ -79,7 +83,15 @@ export async function handleCreateRoomExtended(
         name,
         now: ctx.now(),
       })
-      sendJson(res, 201, { room: roomJson(room) })
+      // 建群后没有用户第一句：host 开场问“这个群要做什么”。
+    if (ctx.rawStore !== undefined) {
+      try {
+        openKickoffRound(ctx.rawStore, room.id, ctx.now())
+      } catch (error) {
+        console.error('roost api: failed to open room kickoff', error)
+      }
+    }
+    sendJson(res, 201, { room: roomJson(room) })
     } catch (err) {
       sendRoomFailure(res, err)
     }
@@ -146,6 +158,14 @@ export async function handleCreateRoomExtended(
       ...(responder === undefined ? {} : { responder }),
       now: ctx.now(),
     })
+    // 建群后没有用户第一句：host 开场问“这个群要做什么”。
+    if (ctx.rawStore !== undefined) {
+      try {
+        openKickoffRound(ctx.rawStore, room.id, ctx.now())
+      } catch (error) {
+        console.error('roost api: failed to open room kickoff', error)
+      }
+    }
     sendJson(res, 201, { room: roomJson(room) })
   } catch (err) {
     sendRoomFailure(res, err)

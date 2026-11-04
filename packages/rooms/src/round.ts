@@ -219,6 +219,125 @@ export function advanceSlot(round: RoomRound, slotIndex: number, result: SlotRes
   return next
 }
 
+/**
+ * 用户停止当前 slot 时写进 note 的文案。契约的 SlotStatus 没有 `stopped`
+ * （docs/build/m4-addendum.md §D），所以状态落成已有的 `left`（“已离开”），
+ * 用 note 标注是用户停止；不扩 contract。
+ */
+export const SLOT_STOP_NOTE = '用户停止'
+
+/**
+ * 停止一个 slot（用户点了“停止当前成员”）：waiting/speaking → left。
+ * - 只动目标 slot，其它 slot 原样复用（同一轮里下一个人继续，docs/design/rooms.md §10）；
+ * - 当前说话的 slot 被停时清掉 round.speaking；
+ * - 被消费的 slot 计一次 turn，与 advanceSlot 口径一致（missed/failed 也计数）；
+ * - 已经 posted/passed/... 的 slot、非 running 轮次、越界下标原样返回（幂等）。
+ */
+export function markSlotStopped(round: RoomRound, slotIndex: number): RoomRound {
+  if (round.state !== 'running') return round
+  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= round.slots.length) return round
+  const current = round.slots[slotIndex]
+  if (current.status !== 'waiting' && current.status !== 'speaking') return round
+  const note =
+    current.note === undefined || current.note.trim() === '' ? SLOT_STOP_NOTE : `${current.note}；${SLOT_STOP_NOTE}`
+  const slots = round.slots.map((slot, index) =>
+    index === slotIndex ? { ...slot, status: 'left' as const, note } : slot
+  )
+  const next: RoomRound = { ...round, slots, turns: round.turns + 1 }
+  // 只有停的正是“当前在说”的那个 slot 才清 speaking；同一成员还有别的 slot 在说时不动。
+  if (current.status === 'speaking' && round.speaking === current.botId) delete next.speaking
+  return next
+}
+
+/** classifyGrace 的判定：继续等 / 报 working（不阻塞轮次） / 记超时。 */
+export type GraceVerdict = 'working' | 'timeout' | 'continue'
+
+export interface GraceLimits {
+  /** 单成员回复超时，默认 ROUND_LIMITS.replyTimeoutMs（240s）。 */
+  replyTimeoutMs?: number
+  /** 工作中宽限，默认 ROUND_LIMITS.workGraceMs（15s）。 */
+  workGraceMs?: number
+}
+
+export interface GraceInput {
+  /** 从投递 prompt 到现在的毫秒数。 */
+  elapsedMs: number
+  /** 该成员会话现在是否还在工作（session.status 是 working/审批等未结束状态）。 */
+  working: boolean
+  limits?: GraceLimits
+}
+
+/**
+ * 宽限判定（docs/design/rooms.md §3：超时 240s，工作中宽限 15s）：
+ * - `replyTimeoutMs` 以内 → `continue`：正常等结果；
+ * - 到点仍在工作 → 再宽限 `workGraceMs`：这段窗口内仍返回 `continue`（等它收尾，
+ *   晚到的结果还能按本轮结果处理）；
+ * - 宽限期用完还在工作 → `working`：advance `{kind:'working'}`，轮次不阻塞，
+ *   结果按 lateRounds 规则晚到回群；
+ * - 到点已经不在工作（没有 idle/结果，会话掉线）→ `timeout`：按 missed 收尾。
+ * `continue` 是“继续等”的判定，调用方在等结果的循环里用；不是“继续下一 slot”。
+ */
+export function classifyGrace(input: GraceInput): GraceVerdict {
+  const replyTimeoutMs = positiveNumber(input.limits?.replyTimeoutMs) ?? ROUND_LIMITS.replyTimeoutMs
+  const workGraceMs = nonNegativeNumber(input.limits?.workGraceMs) ?? ROUND_LIMITS.workGraceMs
+  const elapsedMs =
+    typeof input.elapsedMs === 'number' && Number.isFinite(input.elapsedMs) ? Math.max(0, input.elapsedMs) : 0
+  if (elapsedMs < replyTimeoutMs) return 'continue'
+  if (input.working !== true) return 'timeout'
+  return elapsedMs < replyTimeoutMs + workGraceMs ? 'continue' : 'working'
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+export interface LateRoundOptions {
+  /** 该轮之后又开了几轮（调用方算好的轮距）；省略时从 room.rounds 推断。 */
+  lateRounds?: number
+  /** 上限，默认 ROUND_LIMITS.lateRounds（10）。 */
+  limit?: number
+}
+
+/** 判断晚到结果是否还允许回群所需的房间信息（真实的 Room 也结构兼容）。 */
+export interface LateRoundRoom {
+  id?: string
+  /** 最近轮次（新的在后）；用来算轮距，省略时按同轮处理。 */
+  rounds?: Array<{ id?: string }>
+}
+
+/**
+ * 晚到的结果还能不能回群（docs/design/rooms.md §3：late rounds ≤ 10）。
+ * 轮距 = `round` 之后又开了几轮：显式 `lateRounds` 优先，其次按 `room.rounds` 的位置差推断；
+ * 房间带了轮次列表但这轮已经不在列表里（太旧）→ 不允许。
+ * 跨房间的轮次一律不允许。返回 true 只表示“轮距还在上限内”，是否真的落库由调用方决定。
+ */
+export function lateRoundAllowed(
+  room: LateRoundRoom | null | undefined,
+  round: Pick<RoomRound, 'id' | 'roomId'> | null | undefined,
+  options: LateRoundOptions = {}
+): boolean {
+  if (room === null || room === undefined || round === null || round === undefined) return false
+  const roomId = typeof room.id === 'string' && room.id !== '' ? room.id : undefined
+  const roundRoomId = typeof round.roomId === 'string' && round.roomId !== '' ? round.roomId : undefined
+  if (roomId !== undefined && roundRoomId !== undefined && roomId !== roundRoomId) return false
+  const limit = nonNegativeInteger(options.limit) ?? ROUND_LIMITS.lateRounds
+  const explicit = nonNegativeInteger(options.lateRounds)
+  if (explicit !== undefined) return explicit <= limit
+  const rounds = Array.isArray(room.rounds) ? room.rounds : []
+  if (rounds.length === 0) return true
+  const index = rounds.findIndex(item => item?.id === round.id)
+  if (index === -1) return false
+  return rounds.length - 1 - index <= limit
+}
+
 export interface FinishRoundOptions {
   /** 用户/系统停止本轮：state=stopped。 */
   stopped?: boolean

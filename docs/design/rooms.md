@@ -271,4 +271,5 @@ POST /api/internal/rounds/:id/advance        ← 报告 slot 状态（posted/pas
 - `apps/runtime`：room-agent 按 assignments 派发、单 Bot 回退、退避、session resume
 - `apps/web`：Bot 列表/新建/设置、建群、房间设置、谁会回答、@ 菜单
 - 本地验收：HTTP 冒烟 14/14、双 Bot 假模型 E2E、全量 297 测试
-- 未接：kickoff、Bot 建群审批、profile sync、工作宽限/late rounds、日志裁剪、远端真实模型双 Bot
+- 已接：kickoff（DM/群）、Bot 建群审批+配额、轮内 stop（stopping 字段）、宽限与 late rounds
+- 未接：profile sync、日志裁剪、远端真实模型双 Bot

@@ -349,7 +349,7 @@ export function createStorePort(store: Store): StorePort {
       const detail = getRoomDetailInStore(store, input.roomId)
       if (detail === null) return null
       if (!isWorkspaceMember(store, detail.room.workspaceId, input.accountId)) return null
-      return detailToRecord(detail)
+      return detailToRecord(detail, roomIsDm(store, detail.room.id))
     },
 
     async createRoomExt(input: CreateRoomExtPortInput): Promise<RoomRecord> {
@@ -366,7 +366,7 @@ export function createStorePort(store: Store): StorePort {
         createdByKind: 'user',
         createdAt: input.now,
       })
-      return detailToRecord(detail)
+      return detailToRecord(detail, roomIsDm(store, detail.room.id))
     },
 
     async updateRoom(input: UpdateRoomPortInput): Promise<RoomRecord> {
@@ -382,7 +382,7 @@ export function createStorePort(store: Store): StorePort {
         ...(input.notice === undefined ? {} : { notice: input.notice }),
         ...(responder === undefined ? {} : { responder }),
       })
-      return detailToRecord(updated)
+      return detailToRecord(updated, roomIsDm(store, updated.room.id))
     },
 
     async addRoomMembers(input: RoomMemberMutationInput): Promise<RoomRecord> {
@@ -392,7 +392,7 @@ export function createStorePort(store: Store): StorePort {
       addRoomMembersInStore(store, { roomId: input.roomId, botIds: input.botIds })
       const updated = getRoomDetailInStore(store, input.roomId)
       if (updated === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
-      return detailToRecord(updated)
+      return detailToRecord(updated, roomIsDm(store, updated.room.id))
     },
 
     async removeRoomMember(input: RemoveRoomMemberPortInput): Promise<RoomRecord> {
@@ -402,7 +402,7 @@ export function createStorePort(store: Store): StorePort {
       removeRoomMemberInStore(store, { roomId: input.roomId, botId: input.botId })
       const updated = getRoomDetailInStore(store, input.roomId)
       if (updated === null) throw new StoreError('ROOM_NOT_FOUND', `unknown room ${input.roomId}`)
-      return detailToRecord(updated)
+      return detailToRecord(updated, roomIsDm(store, updated.room.id))
     },
   }
 }
@@ -419,7 +419,7 @@ interface RoomRow {
 function toRoomRecord(store: Store, row: RoomRow): RoomRecord {
   // 详情把 M4 的扩展列和成员一起带出来；读不到就退回 0003 的基础形状。
   const detail = getRoomDetailInStore(store, row.id)
-  if (detail !== null) return detailToRecord(detail)
+  if (detail !== null) return detailToRecord(detail, roomIsDm(store, detail.room.id))
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -432,7 +432,12 @@ function toRoomRecord(store: Store, row: RoomRow): RoomRecord {
   }
 }
 
-function detailToRecord(detail: RoomDetail): RoomRecord {
+function roomIsDm(store: Store, roomId: string): boolean {
+  const row = store.db.prepare('SELECT dm FROM rooms WHERE id = ?').get(roomId) as { dm?: number | bigint } | undefined
+  return row !== undefined && row !== null && Number(row.dm ?? 0) === 1
+}
+
+function detailToRecord(detail: RoomDetail, dm = false): RoomRecord {
   const notice = detail.extras.notice ?? detail.room.notice
   return {
     id: detail.room.id,
@@ -447,6 +452,7 @@ function detailToRecord(detail: RoomDetail): RoomRecord {
     createdByKind: detail.extras.createdByKind,
     ...(detail.extras.createdBy === null ? {} : { createdBy: detail.extras.createdBy }),
     members: detail.members.map((member) => ({ ...member })),
+    ...(dm ? { dm: true } : {}),
   }
 }
 

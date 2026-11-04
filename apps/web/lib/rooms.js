@@ -50,6 +50,25 @@ export function memberName(member) {
   return member && typeof member.name === 'string' ? member.name : ''
 }
 
+/**
+ * 房间来源徽章（docs/build/m4-addendum.md §C）：只给 Bot 建的房间打标。
+ * 用户建的房间没有徽章，避免把「正常」也做成噪音。
+ */
+export function roomOriginLabel(room) {
+  if (!room || room.createdByKind !== 'bot') return ''
+  return '由 Bot 创建'
+}
+
+/**
+ * 徽章的 title：必须带 createdBy（addendum §C）。没有 createdBy 时也不编一个，
+ * 只写「由 Bot 创建」。
+ */
+export function roomOriginTitle(room) {
+  if (roomOriginLabel(room) === '') return ''
+  const createdBy = room && typeof room.createdBy === 'string' ? room.createdBy.trim() : ''
+  return createdBy === '' ? '由 Bot 创建' : `由 Bot 创建 · 创建者 ${createdBy}`
+}
+
 export function memberById(room, botId) {
   if (typeof botId !== 'string' || botId === '') return null
   return roomMembers(room).find((member) => member.botId === botId) || null

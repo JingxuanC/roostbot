@@ -3,6 +3,7 @@
 // （svgNode 是唯一 innerHTML，输入是 lib/glyph.js 以固定算法生成的常量标记。）
 
 import { glyphSvg } from './glyph.js'
+import { isAvatarDataUrl } from './avatar.js'
 
 export const $ = (selector, root = document) => root.querySelector(selector)
 
@@ -40,6 +41,29 @@ export function svgNode(markup) {
 export function avatar(botId, size) {
   const wrap = el('span', { class: `avatar avatar-${size}` })
   wrap.append(svgNode(glyphSvg(botId, { size })))
+  return wrap
+}
+
+/**
+ * Bot 的头像：有合法上传图片就显示图片，否则退回程序化 glyph。
+ * dataURL 先过 isAvatarDataUrl（类型/大小/base64 形状），不是用户给什么就塞什么。
+ */
+export function botAvatar(bot, size = 24) {
+  const id = typeof bot === 'string' ? bot : bot && typeof bot.id === 'string' ? bot.id : ''
+  const avatarValue = bot && typeof bot === 'object' && bot.avatar && typeof bot.avatar === 'object' ? bot.avatar : null
+  const image = avatarValue && typeof avatarValue.image === 'string' ? avatarValue.image : ''
+  if (!isAvatarDataUrl(image)) return avatar(id, size)
+  const wrap = el('span', { class: `avatar avatar-${size}` })
+  wrap.append(
+    el('img', {
+      class: 'avatar-img',
+      src: image,
+      alt: '',
+      width: size,
+      height: size,
+      decoding: 'async',
+    })
+  )
   return wrap
 }
 

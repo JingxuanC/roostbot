@@ -7,6 +7,7 @@
 import type { RoomRound, RoundAssignment, SlotResult } from '../../../contract/src/index.ts'
 import { activeRound, botSession, getRound, markSeen, saveRound, seenSeq, setBotSession } from '../../../packages/store/src/rounds.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
+import { kickoffPromptFor } from './kickoff.ts'
 import { readMessages, sendMessage } from '../../../packages/store/src/rooms.ts'
 import {
   advanceSlot,
@@ -105,6 +106,11 @@ export function rememberSession(store: Store, roomId: string, botId: string, ses
   setBotSession(store, roomId, botId, sessionId)
 }
 
+function dmOf(store: Store, roomId: string): boolean {
+  const row = store.db.prepare('SELECT dm FROM rooms WHERE id = ?').get(roomId) as { dm?: number | bigint } | undefined
+  return row !== undefined && row !== null && Number(row.dm ?? 0) === 1
+}
+
 function lineOf(message: { actor: { kind: string; id: string }; text: string }): { who: string; text: string } {
   return { who: message.actor.kind === 'user' ? '用户' : message.actor.id, text: message.text }
 }
@@ -124,14 +130,18 @@ export function assignmentsForRound(store: Store, roomId: string): RoundAssignme
     if (member === undefined) return
     const seen = seenSeq(store, roomId, slot.botId)
     const unseen = messages.filter((message) => message.seq >= round.startSeq && message.seq > seen && message.botId !== slot.botId)
-    const prompt = buildMemberPrompt({
-      room: engine as never,
-      member: { ...member, name: member.name ?? slot.name ?? member.botId } as never,
-      round,
-      earlier: earlier.slice(-8).map(lineOf),
-      delta: unseen.slice(-24).map(lineOf),
-      working: []
-    })
+    const memberShape = { ...member, name: member.name ?? slot.name ?? member.botId }
+    const kickoffRoom = { ...detail.room, dm: dmOf(store, roomId), notice: engine.notice ?? null }
+    const prompt = round.startSeq === 0
+      ? kickoffPromptFor(kickoffRoom as never, memberShape as never)
+      : buildMemberPrompt({
+          room: engine as never,
+          member: memberShape as never,
+          round,
+          earlier: earlier.slice(-8).map(lineOf),
+          delta: unseen.slice(-24).map(lineOf),
+          working: []
+        })
     assignments.push({
       roundId: round.id,
       roomId,

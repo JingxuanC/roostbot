@@ -105,3 +105,28 @@ export {
 
 export { getWorkspaceRuntime, saveWorkspaceRuntime } from './workspace-runtime.ts'
 export type { RuntimePhase, WorkspaceRuntime } from './workspace-runtime.ts'
+
+export { createDmRoom, findDmRoom } from './dm.ts'
+export type { CreateDmRoomInput, DmRoom } from './dm.ts'
+
+export {
+  APPROVAL_ERROR_CODES,
+  APPROVAL_STATUSES,
+  createApproval,
+  decideApproval,
+  getApproval,
+  hasPendingApproval,
+  listApprovals,
+  storeErrorTag,
+} from './approvals.ts'
+export type { Approval, ApprovalStatus, DecideApprovalInput } from './approvals.ts'
+
+export {
+  BOT_ROOM_APPROVAL_KIND,
+  BOT_ROOM_DAILY_LIMIT,
+  approveBotRoom,
+  countBotRoomsToday,
+  rejectBotRoom,
+  requestBotRoom,
+  startOfLocalDay,
+} from './bot-rooms.ts'

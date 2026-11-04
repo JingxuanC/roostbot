@@ -36,7 +36,13 @@ import {
   handlePatchRoom,
   handleRemoveRoomMember
 } from './rooms-routes-ext.ts'
+import {
+  handleBotCreateRoom,
+  handleDecideApproval,
+  handleListApprovals,
+} from './bot-rooms-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
+import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
 import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
@@ -620,7 +626,8 @@ export function roomJson(room: RoomRecord): Record<string, unknown> {
     ...(room.hostBotId === undefined ? {} : { hostBotId: room.hostBotId }),
     ...(room.purpose === undefined ? {} : { purpose: room.purpose }),
     ...(room.createdByKind === undefined ? {} : { createdByKind: room.createdByKind }),
-    ...(room.createdBy === undefined ? {} : { createdBy: room.createdBy })
+    ...(room.createdBy === undefined ? {} : { createdBy: room.createdBy }),
+    ...(room.dm === true ? { dm: true } : {})
   }
 }
 
@@ -1047,6 +1054,79 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleInternalRooms(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/turns\/[^/]+\/stop$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/rooms\/([^/]+)\/turns\/([^/]+)\/stop$/.exec(path)
+    const roomId = match === null ? null : safeDecode(match[1]!)
+    if (roomId === null) {
+      sendError(res, 404, 'not_found', 'malformed room path')
+      return
+    }
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message)
+      return
+    }
+    if (ctx.rawStore === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'round engine needs the SQLite store')
+      return
+    }
+    try {
+      const room = await ctx.store.getRoom({ accountId: auth.session.accountId, roomId })
+      if (room === null) {
+        sendError(res, 404, 'room_not_found', `unknown room ${roomId}`)
+        return
+      }
+      const round = activeRound(ctx.rawStore, roomId)
+      if (round === null) {
+        sendError(res, 404, 'round.not_found', 'no running round')
+        return
+      }
+      const speaking = round.slots.findIndex((slot) => slot.status === 'speaking')
+      const waiting = round.slots.findIndex((slot) => slot.status === 'waiting')
+      const slotIndex = speaking >= 0 ? speaking : waiting
+      if (slotIndex < 0) {
+        sendError(res, 409, 'round.conflict', 'round has no running slot to stop')
+        return
+      }
+      setStopping(ctx.rawStore, round.id, slotIndex)
+      sendJson(res, 202, { roundId: round.id, stopping: slotIndex })
+    } catch (error) {
+      sendError(res, 500, 'internal_error', error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  if (path === '/api/internal/bot-rooms') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleBotCreateRoom(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (path === '/api/approvals') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListApprovals(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (/^\/api\/approvals\/[^/]+$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleDecideApproval(ctx as RoomRouteContext, req, res, url)
     return
   }
 

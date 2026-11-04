@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { activeRound, latestRound } from '../../../packages/store/src/rounds.ts'
+import { activeRound, getStopping, latestRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { applyAdvance, assignmentsForRound } from './round-orchestrator.ts'
 
@@ -76,7 +76,9 @@ export async function handleInternalRound(
     fail(res, 401, 'unauthorized', 'runtime token required')
     return
   }
-  send(res, 200, { round: activeRound(ctx.store, roomId) ?? latestRound(ctx.store, roomId) })
+  const round = activeRound(ctx.store, roomId) ?? latestRound(ctx.store, roomId)
+  const stopping = round === null ? null : getStopping(ctx.store, round.id)
+  send(res, 200, { round, stopping })
 }
 
 /** POST /api/internal/rounds/:id/advance */
@@ -105,6 +107,8 @@ export async function handleInternalAdvance(
     return
   }
   try {
+    // 这一 slot 的停止请求已由 runtime 消费（advance missed），清掉避免跨轮误停。
+    setStopping(ctx.store, roundId, null)
     const outcome = applyAdvance({
       store: ctx.store,
       roundId,

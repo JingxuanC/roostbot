@@ -78,6 +78,17 @@ function responderEditor(options = {}) {
   return {
     node,
     refresh,
+    /** 用房间的最新 responder 重置控件（成员被移除后服务端可能改过 fallback）。 */
+    setValue(next) {
+      const kind = next && typeof next.kind === 'string' ? next.kind : ''
+      radios.setValue(kind === 'member' || kind === 'everyone' || kind === 'mentions' ? kind : '')
+      autoNote.hidden = kind !== 'auto'
+      const botId = next && typeof next.botId === 'string' ? next.botId : ''
+      if (botId !== '' && members.some((member) => member.botId === botId)) {
+        memberSelect.value = botId
+      }
+      syncVisibility()
+    },
     getValue() {
       const kind = radios.getValue()
       if (kind === '') return null
@@ -391,6 +402,11 @@ function roomSettingsView(ctx, room, bots, botsError) {
     renderMembers()
     refreshAddOptions()
     responder.refresh(currentMembers())
+    const kind = responderKind(room)
+    responder.setValue({
+      kind,
+      botId: (room.responder && room.responder.botId) || room.hostBotId,
+    })
   }
 
   function currentMembers() {

@@ -1,13 +1,21 @@
-// 测试用控制面：内部房间/消息/assignments/advance/say，全部本地假实现。
+// 测试用控制面：内部房间/消息/assignments/advance/say/round，全部本地假实现。
 //
 // options:
 //   rooms           内部接口返回的房间（含 members）
 //   messages        房间消息（按 seq 增量返回）
 //   assignments     房间 → RoundAssignment[]；对象/函数/数字(状态码)；缺省 = 404
+//   round           GET …/round 返回的 round；函数或 {roomId: value} 映射；缺省 = 404
+//   stopping        同上的 stopping 字段（stop 轮询用）；advance 命中该 slot 后清空
 //   failRooms       GET /api/internal/rooms 先失败几次（测退避）
 //   failMessages    GET …/messages 先失败几次
-//   advanceStatus   advance 固定返回的状态码（如 409 = 轮次已结束）
+//   advanceStatus   advance 失败的状态码（如 409 = 轮次已结束、408 = 超时）
+//   advanceFailCount 前 N 次 advance 用 advanceStatus 失败（缺省 Infinity）
+//   advanceDelayMs  前 advanceDelayCount 次 advance 延迟这么久再回（测请求超时）
 import { createServer } from 'node:http'
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -19,18 +27,46 @@ function readBody(req) {
   })
 }
 
+/** 函数 / {roomId: value} 映射 / 静态值 三选一。 */
+function resolveValue(spec, roomId) {
+  if (typeof spec === 'function') return spec(roomId)
+  if (spec !== null && typeof spec === 'object' && !Array.isArray(spec) && Object.prototype.hasOwnProperty.call(spec, roomId)) {
+    return spec[roomId]
+  }
+  return spec
+}
+
 export async function createFakeControlPlane(options = {}) {
   const state = {
     rooms: options.rooms ?? [{ id: 'rm_test', members: [] }],
     messages: options.messages ?? [],
     assignments: options.assignments,
+    round: options.round,
+    stopping: options.stopping,
     failRooms: options.failRooms ?? 0,
     failMessages: options.failMessages ?? 0,
     advanceStatus: options.advanceStatus ?? 0,
+    advanceFailCount: options.advanceFailCount ?? Number.POSITIVE_INFINITY,
+    advanceDelayMs: options.advanceDelayMs ?? 0,
+    advanceDelayCount: options.advanceDelayCount ?? 1,
     roomsRequests: 0,
+    roundRequests: 0,
     requests: [],
     said: [],
-    advances: []
+    advances: [],
+    advanceAttempts: []
+  }
+
+  function clearStopping(roomId, slotIndex) {
+    const current = resolveValue(state.stopping, roomId)
+    if (current !== slotIndex || current === null) return
+    if (state.stopping !== null && typeof state.stopping === 'object' && !Array.isArray(state.stopping)) {
+      if (Object.prototype.hasOwnProperty.call(state.stopping, roomId)) {
+        state.stopping[roomId] = null
+        return
+      }
+    }
+    state.stopping = null
   }
 
   function assignmentsFor(roomId) {
@@ -52,6 +88,7 @@ export async function createFakeControlPlane(options = {}) {
     const path = url.pathname
     state.requests.push({ method: req.method, path, at: Date.now() })
     const json = (status, payload) => {
+      if (res.writableEnded || res.destroyed) return
       res.statusCode = status
       res.setHeader('content-type', 'application/json')
       res.end(JSON.stringify(payload))
@@ -65,6 +102,21 @@ export async function createFakeControlPlane(options = {}) {
         return
       }
       json(200, { rooms: state.rooms })
+      return
+    }
+
+    const roundMatch = /^\/api\/internal\/rooms\/([^/]+)\/round$/.exec(path)
+    if (req.method === 'GET' && roundMatch !== null) {
+      state.roundRequests += 1
+      if (state.round === undefined && state.stopping === undefined) {
+        json(404, { ok: false, error: { code: 'not_found', message: 'round unavailable' } })
+        return
+      }
+      const roomId = decodeURIComponent(roundMatch[1])
+      json(200, {
+        round: resolveValue(state.round, roomId),
+        stopping: resolveValue(state.stopping, roomId)
+      })
       return
     }
 
@@ -97,15 +149,20 @@ export async function createFakeControlPlane(options = {}) {
     if (req.method === 'POST' && advanceMatch !== null) {
       const body = await readBody(req)
       const parsed = body.trim() === '' ? {} : JSON.parse(body)
-      if (state.advanceStatus >= 400) {
-        json(state.advanceStatus, { ok: false, error: { code: 'round_not_running', message: 'round is not running' } })
+      const roundId = decodeURIComponent(advanceMatch[1])
+      const attempt = { roundId, ...parsed, at: Date.now() }
+      state.advanceAttempts.push(attempt)
+      const attemptNumber = state.advanceAttempts.length
+      if (state.advanceStatus >= 400 && attemptNumber <= state.advanceFailCount) {
+        attempt.status = state.advanceStatus
+        json(state.advanceStatus, { ok: false, error: { code: 'round_conflict', message: 'round is not running' } })
         return
       }
-      state.advances.push({
-        roundId: decodeURIComponent(advanceMatch[1]),
-        ...parsed,
-        at: Date.now()
-      })
+      if (state.advanceDelayMs > 0 && attemptNumber <= state.advanceDelayCount) {
+        await sleep(state.advanceDelayMs)
+      }
+      state.advances.push(attempt)
+      clearStopping(decodeURIComponent(advanceMatch[1]), parsed.slotIndex)
       json(200, { ok: true })
       return
     }

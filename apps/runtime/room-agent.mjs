@@ -147,6 +147,8 @@ export class ControlPlaneError extends Error {
     this.name = 'ControlPlaneError'
     this.status = options.status ?? 0
     this.body = options.body
+    // 请求本身超时/被 abort（不是控制面回了错误码）：advance 要按 missed 兜底。
+    this.timeout = options.timeout === true
   }
 }
 
@@ -156,6 +158,25 @@ function errorMessage(error) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 等一个 abort 信号；resolve 'stopped'。返回的 cancel 负责摘掉监听。 */
+function stopSignalPromise(signal) {
+  if (signal === undefined || typeof signal.addEventListener !== 'function') {
+    return { promise: null, cancel() {} }
+  }
+  let onAbort
+  const promise = new Promise((resolve) => {
+    onAbort = () => resolve('stopped')
+    if (signal.aborted) resolve('stopped')
+    else signal.addEventListener('abort', onAbort, { once: true })
+  })
+  return {
+    promise,
+    cancel() {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+    }
+  }
 }
 
 function loadCursors(path) {
@@ -192,6 +213,14 @@ export async function startRoomAgent(options) {
   // 单成员回复超时取 ROUND_LIMITS.replyTimeoutMs（240s）。沙箱镜像只拷本文件，
   // 不能 import packages/contract，所以这里与契约常量保持同值。
   const turnTimeoutMs = options.turnTimeoutMs ?? 240_000
+  // 可选 stop 轮询（GET /api/internal/rooms/:id/round）：接口没有 stopping 字段/
+  // 404 时自动关闭，行为与之前完全一致。0 = 不轮询。
+  const stopPollMs = Number.isFinite(options.stopPollMs) ? options.stopPollMs : 500
+  const stopPollingEnabled = stopPollMs > 0
+  // 某些房间的 round 接口没有 stop 能力（404/405/501）：只关这个房间，不影响别的房间。
+  const stopPollingUnsupported = new Set()
+  // advance 请求本身的超时：控制面 408 或请求超时都按 missed 兜底（不重跑该 slot）。
+  const advanceTimeoutMs = Number.isFinite(options.advanceTimeoutMs) ? options.advanceTimeoutMs : 30_000
   const backoffBaseMs = options.backoffBaseMs ?? 1000
   const backoffMaxMs = options.backoffMaxMs ?? 30_000
   let stopped = false
@@ -264,11 +293,12 @@ export async function startRoomAgent(options) {
     await rpc.request('session/resume', { sessionId }).catch(() => undefined)
   }
 
-  /** 投一条 prompt，等 idle，返回助手文本（可能为空）。 */
-  async function runTurn(sessionId, text) {
+  /** 投一条 prompt，等 idle，返回助手文本（可能为空）；被 stop 时提前返回 stopped。 */
+  async function runTurn(sessionId, text, signal) {
     await prepareSession(sessionId)
     assistant.delete(sessionId)
     const idle = idleSignal(sessionId)
+    const stop = stopSignalPromise(signal)
     try {
       await rpc.request('session/prompt', {
         sessionId,
@@ -281,18 +311,23 @@ export async function startRoomAgent(options) {
         .then(() => sleep(50))
         .then(() => true)
         .catch(() => new Promise(() => {}))
-      const wasIdle = await Promise.race([idle.promise, fallback])
-      return { answer: assistant.get(sessionId), idle: wasIdle }
+      const racers = [idle.promise, fallback]
+      if (stop.promise !== null) racers.push(stop.promise)
+      const outcome = await Promise.race(racers)
+      return { answer: assistant.get(sessionId), idle: outcome === true, stopped: outcome === 'stopped' }
     } finally {
+      stop.cancel()
       idle.cancel()
     }
   }
 
-  /** 一个 slot 的执行结果；会话丢失记 failed(SESSION)，其余按文本归类。 */
-  async function runSlot(sessionId, prompt, messageText) {
+  /** 一个 slot 的执行结果；会话丢失记 failed(SESSION)，用户停止记 missed，其余按文本归类。 */
+  async function runSlot(sessionId, prompt, messageText, signal) {
     const text = typeof prompt === 'string' && prompt.trim() !== '' ? prompt : `房间里有人说：${messageText}`
     try {
-      const { answer, idle } = await runTurn(sessionId, text)
+      const { answer, idle, stopped: wasStopped } = await runTurn(sessionId, text, signal)
+      // 用户停止当前成员：不重跑这个 slot，按 missed 收尾，轮次继续（docs/design/rooms.md §10）。
+      if (wasStopped === true) return { kind: 'missed' }
       if (answer !== undefined) return classifySlotResult(answer)
       const status = lastStatus.get(sessionId)
       if (!idle && status === 'working') return { kind: 'working' }
@@ -310,7 +345,8 @@ export async function startRoomAgent(options) {
         headers: { ...headers, ...(init.headers ?? {}) }
       })
     } catch (error) {
-      throw new ControlPlaneError(`${path}: ${errorMessage(error)}`, { status: 0 })
+      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+      throw new ControlPlaneError(`${path}: ${errorMessage(error)}`, { status: 0, timeout: timedOut })
     }
   }
 
@@ -388,26 +424,139 @@ export async function startRoomAgent(options) {
     return normalized
   }
 
+  /**
+   * 读当前轮次里的 stop 指令（GET /api/internal/rooms/:id/round）：
+   *   number        → 要停的 slot 下标
+   *   'any'         → stopping:true，停当前 slot
+   *   null          → 没有指令 / 这次读失败（下一拍再试）
+   *   'unsupported' → 接口没有这个能力（404/405/501），之后不再轮询
+   * stopping 放在响应顶层或 round.stopping 上都接受（老接口没有该字段 → 行为不变）。
+   */
+  async function probeStopping(roomId) {
+    const path = `/api/internal/rooms/${encodeURIComponent(roomId)}/round`
+    let response
+    try {
+      response = await request(path)
+    } catch {
+      return null
+    }
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      await response.text().catch(() => '')
+      return 'unsupported'
+    }
+    const text = await response.text().catch(() => '')
+    if (!response.ok) return null
+    let payload
+    try {
+      payload = text.trim() === '' ? undefined : JSON.parse(text)
+    } catch {
+      return null
+    }
+    const raw = payload?.stopping ?? payload?.round?.stopping
+    if (raw === true) return 'any'
+    const value = raw !== null && typeof raw === 'object' ? (raw.slotIndex ?? raw.index) : raw
+    return Number.isSafeInteger(value) && value >= 0 ? value : null
+  }
+
+  /**
+   * 一个 slot 执行期间轮询 stop：命中就 abort 该 slot 的等待，由 runSlot 记 missed，
+   * 然后 runAssignments 继续下一个 slot（docs/design/rooms.md §3/§10）。
+   * 返回 { signal, cancel }；stopPollMs=0 或不支持时返回 null。
+   */
+  function watchSlotStop(roomId, slotIndex) {
+    if (!stopPollingEnabled || stopPollingUnsupported.has(roomId)) return null
+    const controller = new AbortController()
+    let timer
+    let active = true
+    const finish = () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    const check = async () => {
+      if (!active) return
+      const stopping = await probeStopping(roomId)
+      if (!active) return
+      if (stopping === 'unsupported') {
+        stopPollingUnsupported.add(roomId)
+        log(`round endpoint unavailable for ${roomId}; stop polling off for this room`)
+        finish()
+        return
+      }
+      if (stopping === 'any' || (typeof stopping === 'number' && stopping === slotIndex)) {
+        log(`stop requested for ${roomId} slot ${slotIndex}`)
+        finish()
+        controller.abort()
+        return
+      }
+      timer = setTimeout(check, stopPollMs)
+    }
+    timer = setTimeout(check, stopPollMs)
+    return { signal: controller.signal, cancel: finish }
+  }
+
   // 轮次已经被停掉/结束时，advance 的 4xx 是终态：记日志后继续，不能让
   // 游标卡在旧消息上反复重投。
   const TERMINAL_ADVANCE_STATUS = new Set([400, 404, 409, 410, 422])
 
-  async function advance(roundId, slotIndex, result) {
+  async function postAdvance(roundId, slotIndex, result) {
     const path = `/api/internal/rounds/${encodeURIComponent(roundId)}/advance`
+    const signal = advanceTimeoutMs > 0 ? AbortSignal.timeout(advanceTimeoutMs) : undefined
     const response = await request(path, {
       method: 'POST',
-      body: JSON.stringify({ slotIndex, result })
+      body: JSON.stringify({ slotIndex, result }),
+      ...(signal === undefined ? {} : { signal })
     })
     const body = await response.text().catch(() => '')
+    return { response, body }
+  }
+
+  /**
+   * advance 408 / 请求超时：该 slot 的结果已经来不及了，补一条 missed 收尾；
+   * 不重跑同一 slot（同一成员不会说两遍）。补报也失败时只记日志，不再重试。
+   */
+  async function reportMissed(roundId, slotIndex, reason) {
+    log(`${reason} for ${roundId} slot ${slotIndex}; reporting missed`)
+    try {
+      const { response, body } = await postAdvance(roundId, slotIndex, { kind: 'missed' })
+      if (response.ok) {
+        log(`advanced ${roundId} slot ${slotIndex} missed`)
+        return
+      }
+      if (TERMINAL_ADVANCE_STATUS.has(response.status)) {
+        log(`advance skipped ${roundId} slot ${slotIndex} (${response.status})`)
+        return
+      }
+      log(`advance missed failed ${response.status}${body === '' ? '' : `: ${body.slice(0, 200)}`}`)
+    } catch (error) {
+      log(`advance missed failed: ${errorMessage(error)}`)
+    }
+  }
+
+  async function advance(roundId, slotIndex, result) {
+    let response
+    let body
+    try {
+      ({ response, body } = await postAdvance(roundId, slotIndex, result))
+    } catch (error) {
+      if (error instanceof ControlPlaneError && error.timeout === true) {
+        await reportMissed(roundId, slotIndex, 'advance timed out')
+        return
+      }
+      throw error
+    }
+    if (response.status === 408) {
+      await reportMissed(roundId, slotIndex, 'advance 408')
+      return
+    }
     if (!response.ok) {
       if (TERMINAL_ADVANCE_STATUS.has(response.status)) {
         log(`advance skipped ${roundId} slot ${slotIndex} (${response.status})`)
         return
       }
-      throw new ControlPlaneError(`${path} ${response.status}${body === '' ? '' : `: ${body.slice(0, 200)}`}`, {
-        status: response.status,
-        body
-      })
+      throw new ControlPlaneError(
+        `/api/internal/rounds/${encodeURIComponent(roundId)}/advance ${response.status}${body === '' ? '' : `: ${body.slice(0, 200)}`}`,
+        { status: response.status, body }
+      )
     }
     log(`advanced ${roundId} slot ${slotIndex} ${result.kind}`)
   }
@@ -419,7 +568,13 @@ export async function startRoomAgent(options) {
           ? assignment.sessionId
           : sessionIdFor(assignment.roomId ?? roomId, assignment.botId)
       await prepareSession(sessionId)
-      const result = await runSlot(sessionId, assignment.prompt, message.text)
+      const watch = watchSlotStop(assignment.roomId ?? roomId, assignment.index)
+      let result
+      try {
+        result = await runSlot(sessionId, assignment.prompt, message.text, watch?.signal)
+      } finally {
+        watch?.cancel()
+      }
       await advance(assignment.roundId, assignment.index, result)
     }
   }

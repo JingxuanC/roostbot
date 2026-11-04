@@ -5,6 +5,7 @@
 //   FAKE_DSH_LOG     把 resume/prompt 事件追加成 JSONL，测试可读
 //   FAKE_DSH_ANSWER  固定回答（如 `[PASS]`），默认按轮数生成
 //   FAKE_DSH_MODE    working | approval | error | silent（模拟 SlotResult 的分支）
+//   FAKE_DSH_DELAY_MS 正常回答延迟多少毫秒（默认 5；测 stop 中断用大值）
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
@@ -12,6 +13,7 @@ const sessions = new Map()
 const logPath = process.env.FAKE_DSH_LOG ?? ''
 const fixedAnswer = process.env.FAKE_DSH_ANSWER
 const mode = process.env.FAKE_DSH_MODE ?? ''
+const delayMs = Number(process.env.FAKE_DSH_DELAY_MS ?? '5')
 const rl = createInterface({ input: process.stdin })
 const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`)
 
@@ -65,14 +67,14 @@ rl.on('line', (line) => {
     setTimeout(() => {
       send({ jsonrpc: '2.0', method: 'session.event', params: { sessionId, event: { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: answer }] } } } } })
       send({ jsonrpc: '2.0', method: 'session.status', params: { sessionId, status: 'idle' } })
-    }, 5)
+    }, delayMs)
     reply({ messageId: `msg-${turns}` })
     return
   }
   if (method === 'session/wait') {
     // 工作/审批/静默模式不主动结束：agent 要按超时与状态各自归类
     if (mode === 'working' || mode === 'approval' || mode === 'silent') return
-    reply({})
+    setTimeout(() => reply({}), delayMs)
     return
   }
   if (method === 'shutdown') {

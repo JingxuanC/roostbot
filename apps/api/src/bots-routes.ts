@@ -24,10 +24,15 @@ import {
   sendJson,
 } from './server.ts'
 import type { StorePort } from './port.ts'
+import type { Store } from '../../../packages/store/src/types.ts'
+import { createDmRoom } from '../../../packages/store/src/dm.ts'
+import { openKickoffRound } from './kickoff.ts'
 
 export interface BotsRouteContext {
   store: StorePort
   now: () => number
+  /** 原始 SQLite store：DM 房间与 kickoff 轮需要它；memory 模式下为 undefined。 */
+  rawStore?: Store
 }
 
 const BOT_EDITABLE_KEYS = [
@@ -130,6 +135,15 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
       ...(body['avatar'] === undefined ? {} : { avatar: body['avatar'] as Bot['avatar'] }),
       now: ctx.now(),
     })
+    // 建 Bot 后建 DM 并开一场 kickoff：Bot 先介绍自己、问用户想让它做什么。
+    if (ctx.rawStore !== undefined) {
+      try {
+        const dm = createDmRoom(ctx.rawStore, { workspaceId, botId: bot.id, createdBy: auth.session.accountId, at: ctx.now() })
+        openKickoffRound(ctx.rawStore, dm.id, ctx.now())
+      } catch (error) {
+        console.error('roost api: failed to open bot kickoff', error)
+      }
+    }
     sendJson(res, 201, { bot })
   } catch (err) {
     sendBotFailure(res, err)

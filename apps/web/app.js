@@ -1,34 +1,40 @@
-// Roost 网页端 —— 第一版 UI 切片。零依赖、零构建：浏览器按 ES module 直接执行。
+// Roost 网页端（M4）。零依赖、零构建：浏览器按 ES module 直接执行。
 //
 // 设计来源（唯一事实源）：
-//   docs/design/ui.md          §3.1 配对、§3.2 房间、§3.10 Bot 发来的消息、§6 设计系统
+//   docs/build/m4-contract.md  §2 API、§5 前端范围
+//   docs/design/ui.md          §3.1 配对、§3.2 房间、§3.7 Bot 设置、§3.11 群设置、
+//                              §3.12 谁会回答 + @ 菜单、§3.10 Bot 发来的消息、§6 设计系统
+//   docs/design/bots.md        创建轻、设置重；暂停/删除语义
+//   docs/design/rooms.md       建群、members、responder、轮次与 slot 状态
 //   docs/design/messaging.md   §14 / §14.1 私聊默认折叠
-//   docs/design/bot-identity.md §3 程序化图标
 //   docs/design/events.md      §3 事件信封、§5 chat.message 载荷
 //   docs/design/auth.md        §3 配对流程、§7 token 不进 Web 存储
 //
-// 状态说明：本文件里只有「配对」会发网络请求。房间、消息、审批全部是固定样例，
-// 发送消息只追加本地气泡，不发请求（见 README「哪些是真的、哪些是假的」）。
-// token 只在内存变量里（sessionToken），不写 localStorage / sessionStorage，刷新即丢。
+// 状态说明：配对、Bot、建群、房间消息都走控制面 REST；预览（#room）与「需要你」仍是固定样例。
+// token 只在内存变量里（sessionToken），不写 localStorage / sessionStorage，刷新即丢；
+// 受保护页面遇到 401 会回配对页并用 pendingRoute 记住原地址（见 README）。
 
-import { $, avatar, el } from './lib/dom.js'
+import { $, avatar, botAvatar, el } from './lib/dom.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
 import { routeMatch } from './lib/routing.js'
 import { insertMention, parseMentionQuery } from './lib/mentions.js'
 import {
   roomMembers,
+  roomOriginLabel,
+  roomOriginTitle,
   roundStateLabel,
   roundStatusItems,
   speakingSlot,
   whoAnswersLabel,
 } from './lib/rooms.js'
 import * as ui from './lib/ui.js'
+import { mountApprovalsPage } from './views/approvals.js'
 import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
 import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
 
 // ---------------------------------------------------------------------------
-// 二、固定样例
+// 一、固定样例
 // ---------------------------------------------------------------------------
 
 /** 四个 Bot。id 是稳定的；名字只是显示名（bot-identity.md §2）。 */
@@ -304,7 +310,7 @@ function markdownFragment(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 四、渲染
+// 二、渲染
 // ---------------------------------------------------------------------------
 
 /** 侧栏 Bot：预览用样例，连上控制面后用真实列表；点开是设置页（不是聊天）。 */
@@ -323,7 +329,7 @@ function renderSidebarBots() {
   for (const bot of bots) {
     const row = el('li', { class: 'bot-row' })
     const link = el('a', { class: 'bot-link', href: `#/bots/${encodeURIComponent(bot.id)}` })
-    link.append(avatar(bot.id, 24))
+    link.append(botAvatar(bot, 24))
     link.append(el('span', { class: 'bot-name', text: bot.name }))
     if (bot.role) link.append(el('span', { class: 'bot-role', text: bot.role }))
     if (bot.status === 'paused') link.append(el('span', { class: 'bot-paused', text: '暂停' }))
@@ -348,6 +354,10 @@ function renderSidebarRooms() {
       const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
       link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
       link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
+      const origin = roomOriginLabel(room)
+      if (origin !== '') {
+        link.append(el('span', { class: 'room-origin', text: origin, title: roomOriginTitle(room) }))
+      }
       row.append(link)
       list.append(row)
     }
@@ -596,7 +606,7 @@ function renderNeeds() {
 }
 
 // ---------------------------------------------------------------------------
-// 五、配对（唯一会发请求的地方）
+// 三、配对
 // ---------------------------------------------------------------------------
 
 let sessionToken = null // 只在内存：不写 localStorage、不写 URL、不渲染（auth.md §7）
@@ -753,7 +763,7 @@ function setupPairing() {
 
 
 // ---------------------------------------------------------------------------
-// 六、状态、API 客户端与会话
+// 四、状态、API 客户端与会话
 // ---------------------------------------------------------------------------
 // 会话 token 仍只在内存（auth.md §7）：刷新即丢。受保护页面在 401 时回到配对页，
 // 配对成功后回到刚才的地址（pendingRoute）。不写 localStorage / sessionStorage。
@@ -947,7 +957,7 @@ function pageContext() {
 }
 
 // ---------------------------------------------------------------------------
-// 七、路由与页面切换
+// 五、路由与页面切换
 // ---------------------------------------------------------------------------
 
 function showView(name) {
@@ -985,6 +995,11 @@ async function renderRoute() {
   const seq = ++routeSeq
   closeMentionMenu()
   const route = routeMatch(location.hash)
+  // 离开房间页就断开 SSE，别在后台一直收消息。
+  if (route.name !== 'room' && LIVE.stream) {
+    LIVE.stream.close()
+    LIVE.stream = null
+  }
 
   if (route.name === 'pair') {
     showView('pair')
@@ -1017,6 +1032,10 @@ async function renderRoute() {
       setTitle('Bot 设置')
       await mountBotSettingsPage(main, ctx, route.params.id)
       break
+    case 'approvals':
+      setTitle('需要你')
+      await mountApprovalsPage(main, ctx)
+      break
     case 'roomNew':
       setTitle('新建房间')
       await mountNewRoomPage(main, ctx)
@@ -1036,7 +1055,7 @@ async function renderRoute() {
 }
 
 // ---------------------------------------------------------------------------
-// 八、房间页：加载、成员、轮次状态、SSE
+// 六、房间页：加载、成员、轮次状态、SSE
 // ---------------------------------------------------------------------------
 
 function toEvent(message, roomId) {
@@ -1092,8 +1111,16 @@ function resetRoomChrome() {
   }
   const strip = $('#demo-strip-text')
   if (strip) strip.hidden = true
+  const origin = $('#room-origin')
+  if (origin) {
+    origin.hidden = true
+    origin.textContent = ''
+    origin.removeAttribute('title')
+  }
   const foot = $('#sidebar-foot')
   if (foot) foot.textContent = '未连接控制面'
+  // 加载/错误/实时房间都不显示样例「需要你」；只有预览模式会在后面重新打开。
+  setNeedsMode(true)
   clearComposerError()
 }
 
@@ -1105,6 +1132,14 @@ function applyLiveRoomChrome(room) {
   setTitle(name)
   const strip = $('#demo-strip-text')
   if (strip) strip.hidden = true
+  const origin = $('#room-origin')
+  if (origin) {
+    const label = roomOriginLabel(room)
+    origin.hidden = label === ''
+    origin.textContent = label
+    if (label === '') origin.removeAttribute('title')
+    else origin.title = roomOriginTitle(room)
+  }
   const foot = $('#sidebar-foot')
   if (foot) foot.textContent = '已连接控制面 · 实时'
   const settings = $('#room-settings-link')
@@ -1411,7 +1446,7 @@ async function enterLiveRoom(token) {
 }
 
 // ---------------------------------------------------------------------------
-// 九、输入区：谁会回答、@ 菜单、发送
+// 七、输入区：谁会回答、@ 菜单、发送
 // ---------------------------------------------------------------------------
 
 function syncSend() {
@@ -1702,7 +1737,7 @@ function appendUserMessage(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 十、启动
+// 八、启动
 // ---------------------------------------------------------------------------
 
 function boot() {

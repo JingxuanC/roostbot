@@ -137,6 +137,8 @@ export interface RoomRecord {
   createdByKind?: 'user' | 'bot'
   createdBy?: string
   members: RoomMember[]
+  /** DM（与某个 Bot 的私聊）；M4 起用于 kickoff。 */
+  dm?: boolean
 }
 
 export interface RoomMessageRecord {

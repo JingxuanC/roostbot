@@ -6,6 +6,8 @@ import {
   responderBotId,
   responderKind,
   roomMembers,
+  roomOriginLabel,
+  roomOriginTitle,
   roundStateLabel,
   roundStatusItems,
   slotStatusLabel,
@@ -110,4 +112,21 @@ test('speakingSlot 认 status=speaking 或 round.speaking', () => {
   assert.equal(speakingSlot({ speaking: 'b', slots: [{ botId: 'b', status: 'waiting' }] }).botId, 'b')
   assert.equal(speakingSlot({ slots: [{ botId: 'a', status: 'waiting' }] }), null)
   assert.equal(speakingSlot(null), null)
+})
+
+test('房间来源：只有 Bot 建的房间有徽章，title 带 createdBy', () => {
+  const botRoom = { createdByKind: 'bot', createdBy: 'bot_selector' }
+  assert.equal(roomOriginLabel(botRoom), '由 Bot 创建')
+  assert.equal(roomOriginTitle(botRoom), '由 Bot 创建 · 创建者 bot_selector')
+
+  assert.equal(roomOriginLabel({ createdByKind: 'user', createdBy: 'you' }), '')
+  assert.equal(roomOriginTitle({ createdByKind: 'user', createdBy: 'you' }), '')
+  assert.equal(roomOriginLabel({}), '')
+  assert.equal(roomOriginLabel(null), '')
+  assert.equal(roomOriginTitle(null), '')
+
+  // 缺 createdBy 时也不编一个 id 出来。
+  assert.equal(roomOriginLabel({ createdByKind: 'bot' }), '由 Bot 创建')
+  assert.equal(roomOriginTitle({ createdByKind: 'bot' }), '由 Bot 创建')
+  assert.equal(roomOriginTitle({ createdByKind: 'bot', createdBy: '   ' }), '由 Bot 创建')
 })
