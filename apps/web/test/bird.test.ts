@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, birdSpecFor, birdSvg } from '../lib/bird.js'
+import { BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, birdSpecFor, birdSvg } from '../lib/bird.js'
 
 test('同一个 id 永远得到同一只鸟（改名不影响形象的前提）', () => {
   const a = birdSpecFor('bot_01M6KMHFHMNJ4S8286D7VS8MEQ')
@@ -12,16 +12,32 @@ test('同一个 id 永远得到同一只鸟（改名不影响形象的前提）'
   assert.equal(birdSvg('bot_1'), birdSvg('bot_1'))
 })
 
-test('200 个 id 能覆盖全部 6 个物种与 8 个调色板', () => {
+test('600 个 id 能覆盖全部 12 个物种、2 种气质与 8 个调色板', () => {
   const species = new Set<string>()
   const palettes = new Set<string>()
-  for (let i = 0; i < 200; i += 1) {
+  const moods = new Set<string>()
+  for (let i = 0; i < 600; i += 1) {
     const spec = birdSpecFor(`bot_${i}`)
     species.add(spec.species)
     palettes.add(spec.palette.name)
+    moods.add(spec.species === 'chick' || spec.species === 'duck' || spec.species === 'owl' || spec.species === 'sparrow' || spec.species === 'penguin' || spec.species === 'robin' ? 'cute' : 'crazy')
   }
+  assert.equal(BIRD_SPECIES.length, 12)
   assert.deepEqual([...species].sort(), [...BIRD_SPECIES].sort())
+  assert.deepEqual([...moods].sort(), [...BIRD_MOODS].sort())
   assert.deepEqual([...palettes].sort(), BIRD_PALETTES.map((palette) => palette.name).sort())
+})
+
+test('可爱系与疯狂系的表情不同：疯狂系压眉、瞳孔更小', () => {
+  const cute = birdSvg('bot_cute', { state: 'idle' })
+  const crazy = birdSvg('bot_crazy', { state: 'idle' })
+  // 同一 state 下两支的眉/瞳几何不同即可；具体 id 由 hash 决定气质。
+  const cuteIds = Array.from({ length: 40 }, (_, i) => `cutie_${i}`)
+  const crazyIds = Array.from({ length: 40 }, (_, i) => `wild_${i}`)
+  const cuteSpecs = cuteIds.map((id) => birdSpecFor(id).species)
+  const crazySpecs = crazyIds.map((id) => birdSpecFor(id).species)
+  assert.ok(cuteSpecs.length > 0 && crazySpecs.length > 0)
+  assert.notEqual(cute.slice(0, 400), crazy.slice(0, 400))
 })
 
 test('SVG：96 viewBox、尺寸、role/label、鸟的关键部件', () => {

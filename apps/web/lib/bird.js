@@ -4,7 +4,13 @@
 // 画在 96×96 viewBox 里，最小 20px 仍能认出「鸟」：圆身、喙、两只眼、尾羽。
 // 设计说明见 docs/design/bot-avatar.md。
 
-export const BIRD_SPECIES = ['chick', 'rooster', 'owl', 'crow', 'parrot', 'duck']
+export const BIRD_SPECIES = [
+  // 可爱系
+  'chick', 'duck', 'owl', 'sparrow', 'penguin', 'robin',
+  // 疯狂系
+  'rooster', 'crow', 'parrot', 'goose', 'eagle', 'turkey'
+]
+export const BIRD_MOODS = ['cute', 'crazy']
 export const BIRD_STATES = ['idle', 'working', 'paused', 'alert']
 
 /** 与 glyph 共用 8 个品牌强调色；喙/爪固定暖黄，保证在深浅主题下都可辨。 */
@@ -57,19 +63,33 @@ function round(value) {
 /** 物种差异：身体宽窄、眼睛大小/间距、尾巴长度、额饰。 */
 function speciesShape(species) {
   switch (species) {
+    // ---- 可爱系：大眼、软眉、圆身 -------------------------------------------
     case 'chick':
-      return { bodyRx: 30, bodyRy: 31, eyeR: 8.4, eyeDx: 11.5, eyeY: 40, tail: 'short', crest: 'fluff', beak: 'tiny' }
-    case 'rooster':
-      return { bodyRx: 29, bodyRy: 31, eyeR: 7.8, eyeDx: 11, eyeY: 41, tail: 'plume', crest: 'comb', beak: 'small' }
-    case 'owl':
-      return { bodyRx: 34, bodyRy: 33, eyeR: 11.2, eyeDx: 13, eyeY: 41, tail: 'short', crest: 'horns', beak: 'small' }
-    case 'crow':
-      return { bodyRx: 27, bodyRy: 32, eyeR: 7, eyeDx: 10.5, eyeY: 39, tail: 'long', crest: 'sleek', beak: 'pointed' }
-    case 'parrot':
-      return { bodyRx: 28, bodyRy: 31, eyeR: 8, eyeDx: 11, eyeY: 39, tail: 'long', crest: 'curl', beak: 'hook' }
+      return { mood: 'cute', bodyRx: 30, bodyRy: 31, eyeR: 8.6, eyeDx: 11.5, eyeY: 40, tail: 'short', crest: 'fluff', beak: 'tiny', belly: 1, extra: null }
     case 'duck':
+      return { mood: 'cute', bodyRx: 32, bodyRy: 28, eyeR: 8.6, eyeDx: 12, eyeY: 37, tail: 'stub', crest: 'none', beak: 'flat', belly: 1.08, extra: null }
+    case 'owl':
+      return { mood: 'cute', bodyRx: 34, bodyRy: 33, eyeR: 11.4, eyeDx: 13, eyeY: 41, tail: 'short', crest: 'horns', beak: 'small', belly: 0.95, extra: null }
+    case 'sparrow':
+      return { mood: 'cute', bodyRx: 29, bodyRy: 29, eyeR: 8.8, eyeDx: 11, eyeY: 39, tail: 'short', crest: 'tuft', beak: 'tiny', belly: 1.05, extra: 'cheeks' }
+    case 'penguin':
+      return { mood: 'cute', bodyRx: 30, bodyRy: 33, eyeR: 8.2, eyeDx: 10.5, eyeY: 38, tail: 'stub', crest: 'none', beak: 'small', belly: 1.15, extra: 'penguin' }
+    case 'robin':
+      return { mood: 'cute', bodyRx: 29, bodyRy: 30, eyeR: 9, eyeDx: 11, eyeY: 39, tail: 'short', crest: 'tuft', beak: 'small', belly: 1, extra: 'breast' }
+    // ---- 疯狂系：压眉、小瞳、夸张冠/喙 --------------------------------------
+    case 'rooster':
+      return { mood: 'crazy', bodyRx: 29, bodyRy: 31, eyeR: 7.8, eyeDx: 11, eyeY: 41, tail: 'plume', crest: 'comb', beak: 'small', belly: 1, extra: null }
+    case 'crow':
+      return { mood: 'crazy', bodyRx: 27, bodyRy: 32, eyeR: 6.6, eyeDx: 10.5, eyeY: 39, tail: 'long', crest: 'sleek', beak: 'pointed', belly: 0.95, extra: null }
+    case 'parrot':
+      return { mood: 'crazy', bodyRx: 28, bodyRy: 31, eyeR: 7.8, eyeDx: 11, eyeY: 39, tail: 'long', crest: 'curl', beak: 'hook', belly: 1, extra: null }
+    case 'goose':
+      return { mood: 'crazy', bodyRx: 31, bodyRy: 30, eyeR: 7.2, eyeDx: 11.5, eyeY: 36, tail: 'stub', crest: 'none', beak: 'goose', belly: 1.05, extra: 'neck' }
+    case 'eagle':
+      return { mood: 'crazy', bodyRx: 31, bodyRy: 31, eyeR: 7, eyeDx: 10.5, eyeY: 38, tail: 'fan', crest: 'eagle', beak: 'eagle', belly: 0.95, extra: null }
+    case 'turkey':
     default:
-      return { bodyRx: 32, bodyRy: 28, eyeR: 8.4, eyeDx: 12, eyeY: 37, tail: 'stub', crest: 'none', beak: 'flat' }
+      return { mood: 'crazy', bodyRx: 32, bodyRy: 29, eyeR: 7, eyeDx: 12, eyeY: 38, tail: 'fan', crest: 'snood', beak: 'small', belly: 0.9, extra: null }
   }
 }
 
@@ -85,6 +105,12 @@ function crestMarkup(kind, p) {
       return `<path d="M42 17c2-6 8-7 11-3M50 16c2-4 6-4 8-1" fill="none" stroke="${p.wing}" stroke-width="3.4" stroke-linecap="round"/>`
     case 'fluff':
       return `<path d="M40 17l2-7 4 6 3-8 4 8 3-6 2 7" fill="none" stroke="${p.wing}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>`
+    case 'tuft':
+      return `<path d="M45 16c0-5 4-8 6-3M48 15c2-5 7-5 8 0" fill="none" stroke="${p.wing}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`
+    case 'eagle':
+      return `<path d="M36 20c-4-8 0-14 6-10 2-4 6-4 8 0 5-5 10 1 6 9" fill="${p.wing}" stroke="none"/><path d="M38 16l4 3M58 16l-4 3" stroke="${p.belly}" stroke-width="2" stroke-linecap="round"/>`
+    case 'snood':
+      return `<ellipse cx="34" cy="24" rx="5" ry="7" fill="#D9534F"/><path d="M44 20c-3-6 2-10 6-6 3 3 1 7-2 8" fill="#D9534F" opacity="0.9"/><path d="M42 63c-3 5-1 9 3 9 4 0 6-4 3-9" fill="#D9534F"/>`
     default:
       return ''
   }
@@ -96,11 +122,29 @@ function tailMarkup(kind, p) {
       return `<path d="M72 56l17 6-14 4 11 8-21-8z" fill="${p.wing}"/><path d="M76 60l12 4-9 3" stroke="#00000022" stroke-width="1.4" fill="none"/>`
     case 'plume':
       return `<path d="M73 53c7-6 15-7 19-4-5 3-6 7-5 12-5-3-10-2-15 2z" fill="${p.wing}"/><path d="M77 56c5-3 10-3 13-2" stroke="#00000022" stroke-width="1.4" fill="none"/>`
+    case 'fan':
+      return `<path d="M70 62l20-14-2 12 8-2-12 12z" fill="${p.wing}"/><path d="M74 62l13-8M77 65l10-5" stroke="${p.belly}" stroke-width="1.4" opacity="0.5"/>`
     case 'stub':
       return `<path d="M74 62l11-3-6 9z" fill="${p.wing}"/>`
     case 'short':
     default:
       return `<path d="M72 59l13 3-10 6z" fill="${p.wing}"/>`
+  }
+}
+
+/** 物种专属小部件：腮红、企鹅肚、知更鸟胸斑、鹅颈环。 */
+function extrasMarkup(shape, p) {
+  switch (shape.extra) {
+    case 'cheeks':
+      return `<circle cx="28" cy="54" r="5" fill="#F08A8A" opacity="0.45"/><circle cx="68" cy="54" r="5" fill="#F08A8A" opacity="0.45"/>`
+    case 'penguin':
+      return `<ellipse cx="48" cy="58" rx="20" ry="22" fill="${p.belly}"/><path d="M40 70c2 3 5 4 8 4s6-1 8-4" stroke="#D9D4C7" stroke-width="1.6" fill="none"/>`
+    case 'breast':
+      return `<path d="M33 52c0-8 6-13 15-13s15 5 15 13c0 9-7 14-15 14s-15-5-15-14z" fill="#E07A4F"/>`
+    case 'neck':
+      return `<path d="M34 46c4 4 9 6 14 6s10-2 14-6" stroke="${p.belly}" stroke-width="4" stroke-linecap="round" fill="none"/>`
+    default:
+      return ''
   }
 }
 
@@ -116,18 +160,28 @@ function beakMarkup(shape, p) {
       return `<path d="M43 53l5 4 5-4-5 7z" fill="${p.beak}"/>`
     case 'small':
       return `<path d="M42 51l6 5 6-5-6 8z" fill="${p.beak}"/><path d="M42 55h12" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/>`
+    case 'goose':
+      return `<path d="M33 52c0-4 5-6 15-6s15 2 15 6c0 3-4 4-9 4l-12 1c-5 0-9-1-9-5z" fill="${p.beak}"/><path d="M36 54h27" stroke="#B9741F" stroke-width="1.5" stroke-linecap="round"/>`
+    case 'eagle':
+      return `<path d="M48 46l11 3c3 1 3 4 0 5l-8 3 1-5-7 2-4-3z" fill="${p.beak}"/><path d="M51 51l7 2" stroke="#B9741F" stroke-width="1.5" stroke-linecap="round"/>`
+    case 'penguin':
+      return `<path d="M48 49l8 6-8 6-8-6z" fill="${p.beak}"/><path d="M41 55h14" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/>`
     default:
       return `<path d="M48 48l9 7-9 7-9-7z" fill="${p.beak}"/><path d="M39 55h18" stroke="#B9741F" stroke-width="1.6" stroke-linecap="round"/>`
   }
 }
 
-function browMarkup(brow, state, eyeY) {
+function browMarkup(brow, state, eyeY, mood = 'cute') {
   const y = eyeY - 12
   const width = state === 'alert' ? 3.4 : 3
   const color = '#3A2A1A'
   if (state === 'paused') return ''
   if (state === 'alert') {
     return `<path d="M28 ${y + 2}c4-4 10-4 14-1M54 ${y + 1}c4-3 10-3 14 1" stroke="${color}" stroke-width="${width}" stroke-linecap="round" fill="none"/>`
+  }
+  if (mood === 'crazy') {
+    // 疯狂系：眉骨压向鼻梁（内低外高），不靠动画也看得出脾气。
+    return `<path d="M27 ${y + 6}c5-5 10-7 14-7M69 ${y + 6}c-5-5-10-7-14-7" stroke="${color}" stroke-width="${width + 0.6}" stroke-linecap="round" fill="none"/>`
   }
   if (brow === 'sharp') {
     return `<path d="M28 ${y + 3}c5-4 10-4 14-1M68 ${y + 3}c-5-4-10-4-14-1" stroke="${color}" stroke-width="${width}" stroke-linecap="round" fill="none"/>`
@@ -138,7 +192,7 @@ function browMarkup(brow, state, eyeY) {
   return `<path d="M28 ${y}c4-2 10-2 14 0M68 ${y}c-4-2-10-2-14 0" stroke="${color}" stroke-width="${width}" stroke-linecap="round" fill="none"/>`
 }
 
-function eyesMarkup(shape, state, p) {
+function eyesMarkup(shape, state, p, mood = 'cute') {
   const { eyeR, eyeDx, eyeY } = shape
   const left = 48 - eyeDx
   const right = 48 + eyeDx
@@ -146,11 +200,12 @@ function eyesMarkup(shape, state, p) {
     return `<path d="M${left - 6} ${eyeY}c3-3 9-3 12 0M${right - 6} ${eyeY}c3-3 9-3 12 0" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/>`
   }
   const pupilY = state === 'alert' ? eyeY - 2 : eyeY + 1
+  const pupilScale = mood === 'crazy' ? 0.34 : 0.44
   return [
     `<circle cx="${left}" cy="${eyeY}" r="${eyeR}" fill="#FFFDF7"/>`,
     `<circle cx="${right}" cy="${eyeY}" r="${eyeR}" fill="#FFFDF7"/>`,
-    `<circle cx="${left + 1.4}" cy="${pupilY}" r="${round(eyeR * 0.44)}" fill="#26211C"/>`,
-    `<circle cx="${right + 1.4}" cy="${pupilY}" r="${round(eyeR * 0.44)}" fill="#26211C"/>`,
+    `<circle cx="${left + 1.4}" cy="${pupilY}" r="${round(eyeR * pupilScale)}" fill="#26211C"/>`,
+    `<circle cx="${right + 1.4}" cy="${pupilY}" r="${round(eyeR * pupilScale)}" fill="#26211C"/>`,
     `<circle cx="${left + 2.6}" cy="${pupilY - 2.2}" r="${round(eyeR * 0.16)}" fill="#FFFFFF" opacity="0.9"/>`,
     `<circle cx="${right + 2.6}" cy="${pupilY - 2.2}" r="${round(eyeR * 0.16)}" fill="#FFFFFF" opacity="0.9"/>`
   ].join('')
@@ -165,8 +220,14 @@ export function birdSvg(id, options = {}) {
   const size = Number.isFinite(options.size) && options.size > 0 ? Math.round(options.size) : 24
   const state = BIRD_STATES.includes(options.state) ? options.state : 'idle'
   const spec = birdSpecFor(id)
-  const p = spec.palette
   const shape = speciesShape(spec.species)
+  // 企鹅/鹅读图优先：它们靠黑白/白身识别，不跟调色板走。
+  const p =
+    spec.species === 'penguin'
+      ? { ...spec.palette, body: '#2E3440', wing: '#1B2026', belly: '#F7F5EE' }
+      : spec.species === 'goose'
+        ? { ...spec.palette, body: '#ECE7DA', wing: spec.palette.wing, belly: '#FFFFFF' }
+        : spec.palette
   const body = `M48 ${48 - shape.bodyRy}c${shape.bodyRx * 0.95} 0 ${shape.bodyRx} ${shape.bodyRy * 0.55} ${shape.bodyRx} ${shape.bodyRy} 0 ${shape.bodyRy * 0.62} -${shape.bodyRx * 0.66} ${shape.bodyRy * 0.94} -${shape.bodyRx} ${shape.bodyRy * 0.94} -${shape.bodyRx * 0.34} 0 -${shape.bodyRx} -${shape.bodyRy * 0.32} -${shape.bodyRx} -${shape.bodyRy * 0.94} 0 -${shape.bodyRy * 0.45} ${shape.bodyRx * 0.05} -${shape.bodyRy} ${shape.bodyRx} -${shape.bodyRy}z`
   const ring = state === 'working'
     ? `<circle class="bird-ring" cx="48" cy="48" r="45" fill="none" stroke="${p.wing}" stroke-width="3" opacity="0.35"/>`
@@ -177,5 +238,5 @@ export function birdSvg(id, options = {}) {
   const pausedOpacity = state === 'paused' ? '0.55' : '1'
   const label = typeof options.label === 'string' && options.label.trim() !== '' ? options.label.trim() : 'Bot 头像'
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="${size}" height="${size}" role="img" aria-label="${esc(label)}" focusable="false"><g opacity="${pausedOpacity}" transform="rotate(${spec.tilt} 48 48)">${ring}<circle cx="48" cy="48" r="45" fill="${p.belly}" opacity="0.28"/>${tailMarkup(shape.tail, p)}<path d="${body}" fill="${p.body}"/><ellipse cx="48" cy="62" rx="${round(shape.bodyRx * 0.62)}" ry="${round(shape.bodyRy * 0.44)}" fill="${p.belly}" opacity="0.85"/><ellipse cx="${48 - shape.bodyRx + 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><ellipse cx="${48 + shape.bodyRx - 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="${p.belly}" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>${crestMarkup(shape.crest, p)}${browMarkup(spec.brow, state, shape.eyeY)}${eyesMarkup(shape, state, p)}${beakMarkup(shape, p)}${marking}<path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="${size}" height="${size}" role="img" aria-label="${esc(label)}" focusable="false"><g opacity="${pausedOpacity}" transform="rotate(${spec.tilt} 48 48)">${ring}<circle cx="48" cy="48" r="45" fill="${p.belly}" opacity="0.28"/>${tailMarkup(shape.tail, p)}<path d="${body}" fill="${p.body}"/><ellipse cx="48" cy="62" rx="${round(shape.bodyRx * 0.62)}" ry="${round(shape.bodyRy * 0.44 * (shape.belly ?? 1))}" fill="${p.belly}" opacity="0.85"/>${extrasMarkup(shape, p)}<ellipse cx="${48 - shape.bodyRx + 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><ellipse cx="${48 + shape.bodyRx - 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="${p.belly}" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>${crestMarkup(shape.crest, p)}${browMarkup(spec.brow, state, shape.eyeY, shape.mood)}${eyesMarkup(shape, state, p, shape.mood)}${beakMarkup(shape, p)}${marking}<path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg>`
 }
