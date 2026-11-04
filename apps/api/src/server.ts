@@ -256,6 +256,10 @@ export interface ServerOptions {
   authSessionTtlMs?: number
   /** 模型代理（测试注入）；不传时按 ROOST_MODEL_* / DEEPSEEK_* 构造。 */
   modelProxy?: ModelProxyHandler
+  /** 事件出口（宿主空闲睡眠/外部审计用）；与指标 sink 并行调用。 */
+  onEvent?: (event: unknown) => void
+  /** workspace 启动成功（运行时就绪）后的回调。 */
+  onWorkspaceStarted?: (info: { workspaceId: string; sandbox: string }) => void
   /** 附件内容存储根目录；默认 ROOST_ATTACHMENTS_DIR 或 <cwd>/data/attachments。 */
   attachmentsDir?: string
   /** 附件签名密钥；默认 ROOST_SIGNING_SECRET，未配置时进程内随机。 */
@@ -2547,6 +2551,11 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     }
     try {
       const { runtime } = await startWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+      try {
+        options.onWorkspaceStarted?.({ workspaceId, sandbox: runtime.sandbox })
+      } catch {
+        // 同上：宿主回调失败不影响面板唤醒。
+      }
       const endpoint = await ctx.panelForward.ensure(workspaceId, { sandboxName: runtime.sandbox })
       sendJson(res, 200, { port: endpoint.port, url: `/w/${workspaceId}/dsh/` })
     } catch (error) {
@@ -2596,6 +2605,11 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     }
     try {
       const result = await startWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+      try {
+        options.onWorkspaceStarted?.({ workspaceId, sandbox: result.runtime.sandbox })
+      } catch {
+        // 启动后的宿主回调失败不影响 API 结果。
+      }
       sendJson(res, result.created ? 201 : 200, { runtime: result.runtime })
     } catch (error) {
       sendError(res, 502, 'runtime.start_failed', error instanceof Error ? error.message : String(error))
@@ -2886,6 +2900,11 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
       ctx.metrics.ingest(metricsFromEvent(event as never))
     } catch {
       // 指标失败不影响事件写入。
+    }
+    try {
+      options.onEvent?.(event)
+    } catch {
+      // 其它出口失败同样不影响写入。
     }
   })
 

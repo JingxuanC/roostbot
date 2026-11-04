@@ -5,6 +5,7 @@
 
 import { TICK_ROUTINE_MS } from '../../../packages/scheduler/src/index.ts'
 import { tick } from '../../../packages/store/src/schedules.ts'
+import { repairPass } from './scheduler-activation.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 
 export interface SchedulerLoopOptions {
@@ -31,6 +32,8 @@ export function startSchedulerLoop(options: SchedulerLoopOptions): () => void {
   const run = (): void => {
     if (stopped) return
     try {
+      // repair 先于 clock：中断的 routine 先补一次，再让 tick 建新的 clock 激活。
+      repairPass(options.rawStore, now())
       tick(options.rawStore, { now: now() })
     } catch (err) {
       onError(err)

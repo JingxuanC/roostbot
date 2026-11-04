@@ -13,6 +13,7 @@ import { createMemoryStore } from './memory-store.ts'
 import { createStorePort } from './store-adapter.ts'
 import { openStore } from '../../../packages/store/src/index.ts'
 import { openShellRuntimeManager } from './runtime-manager-openshell.ts'
+import { createSleeperRegistry } from './idle-sleepers.ts'
 
 function readPort(): number {
   const raw = process.env['PORT']
@@ -42,12 +43,17 @@ function readDshProxyPort(): number | undefined {
   return port === 0 ? undefined : port
 }
 
-function installShutdown(started: StartedServer): void {
+function installShutdown(started: StartedServer, extraStop?: () => void): void {
   let closing = false
   const shutdown = (signal: string): void => {
     if (closing) return
     closing = true
     console.log(`roost api: ${signal} received, closing`)
+    try {
+      extraStop?.()
+    } catch {
+      // 宿主清理失败不阻塞退出。
+    }
     const timer = setTimeout(() => {
       console.error('roost api: close timed out, exiting')
       process.exit(1)
@@ -93,6 +99,19 @@ async function main(): Promise<void> {
         })
       : undefined
 
+  // 宿主侧空闲睡/醒（6.5.4）：默认关闭，ROOST_IDLE_SLEEP_MS > 0 才启用。
+  const idleMs = Number(process.env['ROOST_IDLE_SLEEP_MS'] ?? '0')
+  let sleepers: ReturnType<typeof createSleeperRegistry> | undefined
+  if (runtimeManager !== undefined && sqlite !== undefined && Number.isFinite(idleMs) && idleMs > 0) {
+    const { OpenShellBackend } = await import('../../../packages/sandbox/src/index.ts')
+    sleepers = createSleeperRegistry({
+      backend: new OpenShellBackend(),
+      rawStore: sqlite,
+      idleMs,
+      log: (line: string) => console.log(`[idle] ${line}`)
+    })
+  }
+
   let started: StartedServer
   try {
     started = await startServer({
@@ -101,7 +120,13 @@ async function main(): Promise<void> {
       host,
       ...(sqlite === undefined ? {} : { rawStore: sqlite }),
       ...(runtimeManager === undefined ? {} : { runtimeManager }),
-      ...(dshProxyPort === undefined ? {} : { dshProxyPort })
+      ...(dshProxyPort === undefined ? {} : { dshProxyPort }),
+      ...(sleepers === undefined
+        ? {}
+        : {
+            onEvent: (event: unknown) => sleepers?.onEvent(event as never),
+            onWorkspaceStarted: (info: { workspaceId: string; sandbox: string }) => sleepers?.start(info)
+          })
     })
   } catch (err) {
     console.error(`roost api: failed to listen on ${host}:${port}`, err)
@@ -115,7 +140,7 @@ async function main(): Promise<void> {
   if (started.dshProxyUrl !== undefined) {
     console.log(`roost api: dsh proxy on ${started.dshProxyUrl}`)
   }
-  installShutdown(started)
+  installShutdown(started, () => sleepers?.stopAll())
 }
 
 await main()
