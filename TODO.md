@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：111 / 152 · 进行中：0
+- 完成：112 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -208,7 +208,7 @@
 ## 工程债（P2/P3）
 
 - [ ] E1 删除或标注 legacy `apps/runtime/worker.ts`（headless 逐条 fork）
-- [ ] E2 `bot-manifest` / `event-schema` 补 `src/`（TS 类型生成 + 校验 CLI）
+- [x] E2 `bot-manifest` / `event-schema` 补 `src/`（TS 类型 + 校验 CLI + 测试）
 - [ ] E3 迁移 0004+（bots/rooms 扩展/rounds/sessions/marketplace）
 - [ ] E4 用起来 `runtimes` / `capability_grants` / `invites` 表（或删除）
 - [ ] E5 planA-boot 收编为控制面接口
@@ -273,3 +273,4 @@
 - 2026-11-04 公网部署阻塞修复（后端 agent）：CSRF Origin 校验支持「同源（X-Forwarded-Proto + Host）」与 `ROOST_ALLOWED_ORIGINS` 精确白名单，仍拒绝 `null`/`*`；`/api/config` 推导 https 与 `ROOST_DSH_PROXY_PUBLIC_PORT`/`ROOST_DSH_PUBLIC_ORIGIN`；`/healthz` 执行 `SELECT 1`，失败 503 `db:error`。436 后端测试全绿；deploy/README 已同步。
 - 2026-11-04 M6 记忆系统（后端 agent）：迁移 0017（memories/memory_evidence/memory_reads）、falsifier 必填、scope 可见性、supersede 原子替换、关键词×置信度×新鲜度检索与 1200 token/8 条预算、50/日写入上限、软删与导出、`memory.*` 事件。458 后端测试全绿。LLM 抽取器、BM25/向量、复盘清理留后续。
 - 2026-11-04 M5 多端收尾（前端 agent）：深链 `#/w/:ws/...` 规范化与不一致空态；≤720px 抽屉式侧栏、表格横向滚动、44px 触控目标；设置页通知开关（仅「需要你」，页面隐藏时按 approval id 去重提醒）。全仓 644 测试全绿（前端 186）。
+- 2026-11-04 工程债 E2（后端 agent）：`event-schema`/`bot-manifest` 补 `src/` 类型与纯校验、两个校验 CLI（`roost-event-validate` / `roost-bot-validate`）、26 个测试；`panels` 作为可选字段补进 manifest schema。

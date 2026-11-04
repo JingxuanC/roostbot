@@ -31,6 +31,21 @@
       }
     },
     "skills": { "type": "array", "items": { "type": "string" }, "maxItems": 60 },
+    "panels": {
+      "type": "array",
+      "description": "Bot-owned UI panel declarations; same shape the control plane reads from plugin manifests.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "title": { "type": "string", "maxLength": 200 },
+          "slot": { "type": "string", "maxLength": 64 },
+          "path": { "type": "string", "maxLength": 512 }
+        }
+      }
+    },
     "approvals": {
       "type": "array",
       "items": { "enum": ["write_outside_workspace", "network_egress", "spend", "install_plugin", "read_secret"] }

@@ -3,12 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "description": "Bot manifest v1: TypeScript types and a zero-dependency validator (docs/design/bots.md).",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts"
+  },
+  "bin": {
+    "roost-bot-validate": "./src/cli.ts"
+  },
   "files": [
     "*.json",
+    "src",
     "README.md"
   ],
   "scripts": {
-    "check": "node -e \"require('node:fs').accessSync('bot.schema.json')\""
+    "check": "node --experimental-strip-types --check src/index.ts && node --experimental-strip-types --check src/validate.ts && node --experimental-strip-types --check src/cli.ts && node --experimental-strip-types --test \"test/*.test.ts\"",
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
+    "validate": "node --experimental-strip-types src/cli.ts"
   },
   "license": "Apache-2.0"
 }
