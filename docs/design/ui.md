@@ -452,7 +452,7 @@ Run     62 / 200
 | 房间页 | ✅ 消息来自 `GET /api/rooms/:id/messages`，新消息经 SSE（`/stream`）；发送写 `POST` |
 | Bot 消息 | ✅ 由 runtime worker 经内部接口写入（v0 占位回复）；渲染走 §3.2 的 Bot 消息样式 |
 | Bot 私聊折叠 | ✅ 渲染规则在 `packages/messaging` 与 app.js 各一份，等前端接包后只剩一份 |
-| 需要你 | ⏳ 抽屉与卡片是样例，接口未做 |
+| 需要你 | ⏳ 抽屉与卡片是样例；审批后端已接（`GET /api/approvals`、`POST /api/approvals/:id` 单次决策，长期授权 `/api/approval-grants`，运行时申请 `/api/internal/approvals`），前端未做 |
 | Bot 设置 / 插件 / 连接器 / 用量 | ⏳ 未做 |
 
 **SSE 的实现偏差**：浏览器 `EventSource` 不能带 `Authorization` 头，所以 `/stream` 额外接受 `?access_token=`（仅回环、no-store）。上公网前要换成同源 cookie 或 fetch 流。

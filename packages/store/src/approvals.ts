@@ -13,6 +13,7 @@
 // 这样 code 稳定、又不污染共享错误码表。
 
 import { StoreError } from './errors.ts'
+import { appendEvent } from './events.ts'
 import { asInteger, asNonEmptyString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
 import { newRoostId } from './ids.ts'
 import type { Store } from './types.ts'
@@ -42,6 +43,12 @@ export interface Approval {
   createdAt: number
   decidedAt: number | null
   decidedBy: string | null
+  /** 要做什么（卡片标题下的动作）；旧行为 null。 */
+  action: string | null
+  /** 作用对象（房间 / 地址 / 文件等）；旧行为 null。 */
+  target: string | null
+  /** 影响什么（卡片上的后果说明）；旧行为 null。 */
+  consequence: string | null
 }
 
 export interface CreateApprovalInput {
@@ -51,7 +58,44 @@ export interface CreateApprovalInput {
   /** 默认 'bot'（迁移里的 DEFAULT 同义）。 */
   requesterKind?: string
   payload: Record<string, unknown>
+  action?: string | null
+  target?: string | null
+  consequence?: string | null
   /** epoch 毫秒；默认 Date.now()。 */
+  at?: number
+}
+
+/** 长期授权：workspace + kind + action + target 精确匹配，不做通配。 */
+export interface ApprovalGrant {
+  id: string
+  workspaceId: string
+  kind: string
+  action: string | null
+  target: string | null
+  grantedBy: string
+  grantedAt: number
+  revokedAt: number | null
+}
+
+export interface CreateApprovalGrantInput {
+  workspaceId: string
+  kind: string
+  action?: string | null
+  target?: string | null
+  /** 授权人（用户 id），审计用。 */
+  grantedBy: string
+  at?: number
+}
+
+export interface FindApprovalGrantInput {
+  workspaceId: string
+  kind: string
+  action?: string | null
+  target?: string | null
+}
+
+export interface RevokeApprovalGrantInput {
+  id: string
   at?: number
 }
 
@@ -74,13 +118,33 @@ interface ApprovalRow {
   created_at: number | bigint
   decided_at: number | bigint | null
   decided_by: string | null
+  action: string | null
+  target: string | null
+  consequence: string | null
+}
+
+interface ApprovalGrantRow {
+  id: string
+  workspace_id: string
+  kind: string
+  action: string | null
+  target: string | null
+  granted_by: string
+  granted_at: number | bigint
+  revoked_at: number | bigint | null
 }
 
 const APPROVAL_COLUMNS =
-  'id, workspace_id, kind, requester, requester_kind, payload_json, status, created_at, decided_at, decided_by'
+  'id, workspace_id, kind, requester, requester_kind, payload_json, status, created_at, decided_at, decided_by, action, target, consequence'
+
+const GRANT_COLUMNS = 'id, workspace_id, kind, action, target, granted_by, granted_at, revoked_at'
 
 /** paylaod 上限：审批只带参数，不该塞大对象（64KiB，与 API body 上限一致）。 */
 const PAYLOAD_MAX_BYTES = 64 * 1024
+/** action / target / consequence 的长度上限（卡片字段，防止当正文塞）。 */
+const ACTION_MAX_CHARS = 200
+const TARGET_MAX_CHARS = 500
+const CONSEQUENCE_MAX_CHARS = 2000
 
 /** `CODE: detail` —— 把域错误码塞进 message，code 仍用现有枚举。 */
 export function taggedStoreMessage(code: string, message: string): string {
@@ -102,6 +166,9 @@ export function createApproval(store: Store, input: CreateApprovalInput): Approv
   const requester = readShortId(req.requester, 'approval.requester')
   const requesterKind = readRequesterKind(req.requesterKind)
   const payload = readPayload(req.payload)
+  const action = readOptionalText(req.action, 'approval.action', ACTION_MAX_CHARS)
+  const target = readOptionalText(req.target, 'approval.target', TARGET_MAX_CHARS)
+  const consequence = readOptionalText(req.consequence, 'approval.consequence', CONSEQUENCE_MAX_CHARS)
   const at =
     req.at === undefined || req.at === null
       ? Date.now()
@@ -113,14 +180,49 @@ export function createApproval(store: Store, input: CreateApprovalInput): Approv
   }
 
   const id = newRoostId('apr', at)
+  // 行与 approval.requested 事件同生共死：事件写失败就回滚申请，不留「看不见的审批」。
+  store.db.exec('SAVEPOINT roost_create_approval')
   try {
     store.db
       .prepare(
         `INSERT INTO approvals (${APPROVAL_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, ?, ?, ?)`,
       )
-      .run(id, workspaceId, kind, requester, requesterKind, JSON.stringify(payload), at)
+      .run(
+        id,
+        workspaceId,
+        kind,
+        requester,
+        requesterKind,
+        JSON.stringify(payload),
+        at,
+        action,
+        target,
+        consequence,
+      )
+    appendEvent(store, {
+      at: new Date(at).toISOString(),
+      domain: 'approval',
+      kind: 'approval.requested',
+      actor: { kind: requesterKind, id: requester },
+      subject: { kind: 'approval', id },
+      audience: 'team',
+      idem: `approval:${id}:requested`,
+      payload: {
+        approvalId: id,
+        workspaceId,
+        kind,
+        action,
+        target,
+        consequence,
+        requester,
+        requesterKind,
+      },
+    })
+    store.db.exec('RELEASE roost_create_approval')
   } catch (err) {
+    rollback(store, 'roost_create_approval')
+    if (err instanceof StoreError) throw err
     throw new StoreError('INVALID_INPUT', `failed to create approval: ${errorMessage(err)}`, { cause: err })
   }
 
@@ -135,6 +237,9 @@ export function createApproval(store: Store, input: CreateApprovalInput): Approv
     createdAt: at,
     decidedAt: null,
     decidedBy: null,
+    action,
+    target,
+    consequence,
   }
 }
 
@@ -187,11 +292,44 @@ export function decideApproval(store: Store, input: DecideApprovalInput): Approv
   }
 
   // 已经是终态：同决定幂等返回；相反决定也不翻案（审批是事实，不是偏好）。
+  // 终态不再写 approval.decided：决策事件恰好一次。
   if (current.status !== 'pending') return current
 
-  store.db
-    .prepare("UPDATE approvals SET status = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
-    .run(decision, at, by, id)
+  // 决策与 approval.decided 事件同一 savepoint：要么都落，要么都不落。
+  store.db.exec('SAVEPOINT roost_decide_approval')
+  try {
+    const result = store.db
+      .prepare("UPDATE approvals SET status = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
+      .run(decision, at, by, id)
+    if (toNumber(result.changes) === 1) {
+      appendEvent(store, {
+        at: new Date(at).toISOString(),
+        domain: 'approval',
+        kind: 'approval.decided',
+        actor: { kind: 'user', id: by },
+        subject: { kind: 'approval', id },
+        audience: 'team',
+        idem: `approval:${id}:decided`,
+        payload: {
+          approvalId: id,
+          workspaceId: current.workspaceId,
+          kind: current.kind,
+          action: current.action,
+          target: current.target,
+          consequence: current.consequence,
+          requester: current.requester,
+          requesterKind: current.requesterKind,
+          decision,
+          decidedBy: by,
+        },
+      })
+    }
+    store.db.exec('RELEASE roost_decide_approval')
+  } catch (err) {
+    rollback(store, 'roost_decide_approval')
+    if (err instanceof StoreError) throw err
+    throw new StoreError('INVALID_INPUT', `failed to decide approval: ${errorMessage(err)}`, { cause: err })
+  }
 
   // 条件更新没命中 = 另一个调用点刚把它落定；读回当前行，返回值仍一致。
   const updated = getApproval(store, id)
@@ -202,6 +340,114 @@ export function decideApproval(store: Store, input: DecideApprovalInput): Approv
     )
   }
   return updated
+}
+
+// ---- 长期授权（设置里显式打开；决策接口绝不隐式写入）--------------------------
+
+/**
+ * 建一条长期授权。同一 workspace+kind+action+target 已有未吊销授权时返回它（幂等），
+ * 避免双击设置按钮堆出重复行。
+ */
+export function createApprovalGrant(store: Store, input: CreateApprovalGrantInput): ApprovalGrant {
+  assertOpen(store)
+  const req = asRecord(input, 'approvalGrant', 'INVALID_INPUT')
+  const workspaceId = asNonEmptyString(req.workspaceId, 'approvalGrant.workspaceId', 'INVALID_INPUT')
+  const kind = readKind(req.kind)
+  const action = readOptionalText(req.action, 'approvalGrant.action', ACTION_MAX_CHARS)
+  const target = readOptionalText(req.target, 'approvalGrant.target', TARGET_MAX_CHARS)
+  const grantedBy = readShortId(req.grantedBy, 'approvalGrant.grantedBy')
+  const at =
+    req.at === undefined || req.at === null
+      ? Date.now()
+      : asInteger(req.at, 'approvalGrant.at', 0, 'INVALID_INPUT')
+
+  assertWorkspaceExists(store, workspaceId)
+
+  const existing = findApprovalGrant(store, { workspaceId, kind, action, target })
+  if (existing !== null) return existing
+
+  const id = newRoostId('apg', at)
+  try {
+    store.db
+      .prepare(
+        `INSERT INTO approval_grants (${GRANT_COLUMNS})
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+      )
+      .run(id, workspaceId, kind, action, target, grantedBy, at)
+  } catch (err) {
+    throw new StoreError('INVALID_INPUT', `failed to create approval grant: ${errorMessage(err)}`, {
+      cause: err,
+    })
+  }
+
+  const created = getApprovalGrant(store, id)
+  if (created === null) {
+    throw new StoreError('INVALID_INPUT', `approval grant ${id} was inserted but cannot be read back`)
+  }
+  return created
+}
+
+/** 只返回未吊销的授权（设置页展示用），按授权时间升序。 */
+export function listApprovalGrants(store: Store, workspaceId: string): ApprovalGrant[] {
+  assertOpen(store)
+  const wsId = asNonEmptyString(workspaceId, 'approvalGrant.workspaceId', 'INVALID_INPUT')
+  return store.db
+    .prepare(
+      `SELECT ${GRANT_COLUMNS} FROM approval_grants
+        WHERE workspace_id = ? AND revoked_at IS NULL
+        ORDER BY granted_at, id`,
+    )
+    .all(wsId)
+    .map(rowToApprovalGrant)
+}
+
+/** 按 id 读（含已吊销）：撤销接口需要它做权限判断。 */
+export function getApprovalGrant(store: Store, id: string): ApprovalGrant | null {
+  assertOpen(store)
+  const grantId = asNonEmptyString(id, 'approvalGrant.id', 'INVALID_INPUT')
+  const row = store.db.prepare(`SELECT ${GRANT_COLUMNS} FROM approval_grants WHERE id = ?`).get(grantId)
+  return row === undefined || row === null ? null : rowToApprovalGrant(row)
+}
+
+/**
+ * 精确匹配未吊销的授权：workspace + kind + action + target 全等，v1 不做通配。
+ * action/target 省略等价于「匹配 NULL」，即有值请求不会被 NULL 授权放行。
+ */
+export function findApprovalGrant(store: Store, input: FindApprovalGrantInput): ApprovalGrant | null {
+  assertOpen(store)
+  const req = asRecord(input, 'approvalGrant.find', 'INVALID_INPUT')
+  const workspaceId = asNonEmptyString(req.workspaceId, 'approvalGrant.workspaceId', 'INVALID_INPUT')
+  const kind = readKind(req.kind)
+  const action = readOptionalText(req.action, 'approvalGrant.action', ACTION_MAX_CHARS)
+  const target = readOptionalText(req.target, 'approvalGrant.target', TARGET_MAX_CHARS)
+  const row = store.db
+    .prepare(
+      `SELECT ${GRANT_COLUMNS} FROM approval_grants
+        WHERE workspace_id = ? AND kind = ? AND action IS ? AND target IS ? AND revoked_at IS NULL
+        ORDER BY granted_at, id LIMIT 1`,
+    )
+    .get(workspaceId, kind, action, target)
+  return row === undefined || row === null ? null : rowToApprovalGrant(row)
+}
+
+/** 软撤销；重复撤销幂等（保留第一次的 revoked_at）。不存在返回 null。 */
+export function revokeApprovalGrant(store: Store, input: RevokeApprovalGrantInput): ApprovalGrant | null {
+  assertOpen(store)
+  const req = asRecord(input, 'approvalGrant.revoke', 'INVALID_INPUT')
+  const id = asNonEmptyString(req.id, 'approvalGrant.id', 'INVALID_INPUT')
+  const at =
+    req.at === undefined || req.at === null
+      ? Date.now()
+      : asInteger(req.at, 'approvalGrant.at', 0, 'INVALID_INPUT')
+
+  const current = getApprovalGrant(store, id)
+  if (current === null) return null
+  if (current.revokedAt !== null) return current
+
+  store.db
+    .prepare('UPDATE approval_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+    .run(at, id)
+  return getApprovalGrant(store, id)
 }
 
 /** 是否有待处理的审批（「需要你」角标用）。 */
@@ -230,6 +476,54 @@ function rowToApproval(row: unknown): Approval {
     createdAt: toNumber(r.created_at),
     decidedAt: r.decided_at === null ? null : toNumber(r.decided_at),
     decidedBy: r.decided_by,
+    action: r.action,
+    target: r.target,
+    consequence: r.consequence,
+  }
+}
+
+function rowToApprovalGrant(row: unknown): ApprovalGrant {
+  const r = row as ApprovalGrantRow
+  return {
+    id: r.id,
+    workspaceId: r.workspace_id,
+    kind: r.kind,
+    action: r.action,
+    target: r.target,
+    grantedBy: r.granted_by,
+    grantedAt: toNumber(r.granted_at),
+    revokedAt: r.revoked_at === null ? null : toNumber(r.revoked_at),
+  }
+}
+
+function assertWorkspaceExists(store: Store, workspaceId: string): void {
+  const workspace = store.db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId)
+  if (workspace === undefined || workspace === null) {
+    throw new StoreError('WORKSPACE_NOT_FOUND', `unknown workspace ${workspaceId}`)
+  }
+}
+
+/** 可选文本：undefined/null/空白 = null；拒绝控制字符与超长值。 */
+function readOptionalText(value: unknown, label: string, maxChars: number): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string') throw new StoreError('INVALID_INPUT', `${label} must be a string when present`)
+  const text = value.trim()
+  if (text === '') return null
+  if (text.length > maxChars) {
+    throw new StoreError('INVALID_INPUT', `${label} must be at most ${maxChars} characters`)
+  }
+  if (/[\u0000-\u001f\u007f]/.test(text)) {
+    throw new StoreError('INVALID_INPUT', `${label} must not contain control characters`)
+  }
+  return text
+}
+
+function rollback(store: Store, savepoint: string): void {
+  try {
+    store.db.exec(`ROLLBACK TO ${savepoint}`)
+    store.db.exec(`RELEASE ${savepoint}`)
+  } catch {
+    // 外层事务可能已经把 savepoint 一起回滚；保留原始错误。
   }
 }
 

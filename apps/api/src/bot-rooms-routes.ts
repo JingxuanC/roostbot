@@ -18,9 +18,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { StoreError } from '../../../packages/store/src/index.ts'
 import type { Approval } from '../../../packages/store/src/approvals.ts'
-import { getApproval, listApprovals, storeErrorTag } from '../../../packages/store/src/approvals.ts'
+import { decideApproval, getApproval, listApprovals, storeErrorTag } from '../../../packages/store/src/approvals.ts'
 import type { ApprovalStatus } from '../../../packages/store/src/approvals.ts'
-import { approveBotRoom, rejectBotRoom, requestBotRoom } from '../../../packages/store/src/bot-rooms.ts'
+import {
+  BOT_ROOM_APPROVAL_KIND,
+  approveBotRoom,
+  rejectBotRoom,
+  requestBotRoom,
+} from '../../../packages/store/src/bot-rooms.ts'
 import type { RoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { authenticate, isPlainObject, readJsonBody, roomJson, sendError, sendJson } from './server.ts'
@@ -177,13 +182,27 @@ export async function handleDecideApproval(
   }
 
   try {
-    if (decision === 'rejected') {
-      const rejected = rejectBotRoom(store, { approvalId, by: auth.session.accountId, at: ctx.now() })
-      return sendJson(res, 200, { approval: approvalJson(rejected) })
+    // 建群审批有额外业务：批准要真的建房。其它 kind（沙箱工具申请等）只落决策；
+    // 两条路径都经 decideApproval，approval.decided 恰好写一次。
+    if (approval.kind === BOT_ROOM_APPROVAL_KIND && approval.requesterKind === 'bot') {
+      if (decision === 'rejected') {
+        const rejected = rejectBotRoom(store, { approvalId, by: auth.session.accountId, at: ctx.now() })
+        return sendJson(res, 200, { approval: approvalJson(rejected) })
+      }
+      const result = approveBotRoom(store, { approvalId, by: auth.session.accountId, at: ctx.now() })
+      // 契约：approved 时建房，返回 {room}；同时带上审批本身，前端不用再拉一次列表。
+      sendJson(res, 200, { room: roomJson(roomRecordFromDetail(result.room)), approval: approvalJson(result.approval) })
+      return
     }
-    const result = approveBotRoom(store, { approvalId, by: auth.session.accountId, at: ctx.now() })
-    // 契约：approved 时建房，返回 {room}；同时带上审批本身，前端不用再拉一次列表。
-    sendJson(res, 200, { room: roomJson(roomRecordFromDetail(result.room)), approval: approvalJson(result.approval) })
+
+    // 单次决策：绝不隐式创建长期授权。
+    const decided = decideApproval(store, {
+      id: approvalId,
+      decision,
+      by: auth.session.accountId,
+      at: ctx.now(),
+    })
+    sendJson(res, 200, { approval: approvalJson(decided) })
   } catch (err) {
     sendApprovalFailure(res, err)
   }
@@ -203,6 +222,9 @@ export function approvalJson(approval: Approval): Record<string, unknown> {
     createdAt: approval.createdAt,
     decidedAt: approval.decidedAt,
     decidedBy: approval.decidedBy,
+    action: approval.action,
+    target: approval.target,
+    consequence: approval.consequence,
   }
 }
 

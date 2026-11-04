@@ -44,6 +44,13 @@ import {
   handleDecideApproval,
   handleListApprovals,
 } from './bot-rooms-routes.ts'
+import {
+  handleCreateApprovalGrant,
+  handleInternalCreateApproval,
+  handleInternalGetApproval,
+  handleListApprovalGrants,
+  handleRevokeApprovalGrant,
+} from './approvals-routes.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
@@ -1324,6 +1331,48 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleDecideApproval(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  // 运行时审批申请：沙箱里的工具执行前调用，命中长期授权直接放行。
+  if (path === '/api/internal/approvals') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalCreateApproval(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (/^\/api\/internal\/approvals\/[^/]+$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalGetApproval(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  // 长期授权：设置里显式打开；决策接口不会隐式创建。
+  if (path === '/api/approval-grants') {
+    if (method === 'GET') {
+      await handleListApprovalGrants(ctx as RoomRouteContext, req, res, url)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateApprovalGrant(ctx as RoomRouteContext, req, res)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/approval-grants\/[^/]+$/.test(path)) {
+    if (method !== 'DELETE') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleRevokeApprovalGrant(ctx as RoomRouteContext, req, res, url)
     return
   }
 

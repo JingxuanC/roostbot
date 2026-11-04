@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：53 / 152 · 进行中：2
+- 完成：57 / 152 · 进行中：3
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -119,12 +119,12 @@
 
 ### 5.4 审批（"需要你"）
 
-- [ ] 5.4.1 `approvals` 表（单次/长期、动作、目标、后果）
-- [ ] 5.4.2 审批 API（列表/批准/拒绝）
+- [x] 5.4.1 `approvals` 表（单次/长期、动作、目标、后果）
+- [x] 5.4.2 审批 API（列表/批准/拒绝 + 运行时申请/轮询）
 - [ ] 5.4.3 房间/工具/Bot 建群接入审批
 - [ ] 5.4.4 需要你页真实数据 + 卡片渲染
-- [ ] 5.4.5 审批决策事件与审计
-- [ ] 5.4.6 长期授权（Allow always）与撤销
+- [x] 5.4.5 审批决策事件与审计（`approval.requested` / `approval.decided` 恰好一次）
+- [x] 5.4.6 长期授权（Allow always）与撤销（`approval_grants`，仅设置里显式创建）
 
 ### 5.5 多端（`docs/design/workspace.md`）
 
@@ -250,3 +250,4 @@
 - 2026-11-04 M4 主体完成：bots CRUD/建群/成员/responder/轮次引擎/内部接口/workspace start-local/前端四视图；本地 HTTP 冒烟 14/14、本地双 Bot E2E 通过。剩：kickoff、软删、Bot 建群、profile sync、远端真实模型双 Bot、浏览器全流程（见 4.1.5/4.1.6/4.2.14/4.2.15/4.3.4/4.5.1/4.5.3/4.5.4）。
 - 2026-11-04 M4 收尾第三批子 agent：Bot 软删 7 天 + 恢复（迁移 0010、`POST /api/bots/:id/restore`、删即退房 + `bot.removed_from_room`）、`bot.created/updated/deleted/restored` 事件、房间日志裁剪投影（保留 60 / 首看 12 / `before` 翻页 / 增量不受影响）、`DELETE /api/rooms/:id`、profile sync 拉锁（`POST /api/internal/plugins/sync`，ensure 前硬门 + `ROOST_PROFILE_LOCK_ID` 注入沙箱）。392 测试全绿 + 真实 HTTP 冒烟（锁拉取/软删/恢复/删房间）通过。M4 仅剩远端真实模型验收（4.5.3/4.5.4）。
 - 2026-11-04 M5 认证加固（后端 agent）：配对码签发鉴权（Bearer owner/admin + 回环 bootstrap 例外）、会话续期（<15 天续到 createdAt+180d）、`GET /api/devices` + `DELETE /api/devices/:id`（写 `auth.session.revoked`）；399 测试全绿。
+- 2026-11-04 M5 审批闭环（后端 agent）：迁移 0011（approvals 增 action/target/consequence + `approval_grants`）、`approval.requested/decided` 事件（savepoint 保证恰好一次）、运行时 `POST/GET /api/internal/approvals`（命中长期授权直接放行）、用户侧 `/api/approval-grants`（仅 owner/admin 显式创建/撤销）；406 测试全绿。

@@ -19,7 +19,7 @@ test('按文件名升序执行迁移；再次打开不重复执行', () => {
     const dbPath = join(dir, 'workspace.db')
 
     const first = openStore(dbPath)
-    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql'])
+    assert.deepEqual(first.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql'])
     first.close()
 
     const second = openStore(dbPath)
@@ -174,7 +174,7 @@ test(':memory: 也能跑迁移（测试用）', () => {
   const store = openStore(':memory:')
   try {
     assert.equal(store.path, ':memory:')
-    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql'])
+    assert.deepEqual(store.appliedMigrations, ['0001_core.sql', '0002_control_plane.sql', '0003_rooms.sql', '0004_bots.sql', '0005_rooms_rounds.sql', '0006_workspace_runtime.sql', '0007_dm_rooms.sql', '0008_approvals.sql', '0009_round_stopping.sql', '0010_bot_soft_delete.sql', '0011_approval_grants.sql'])
   } finally {
     store.close()
   }
