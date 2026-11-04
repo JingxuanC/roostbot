@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：113 / 152 · 进行中：0
+- 完成：114 / 152 · 进行中：1
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -139,7 +139,7 @@
 
 ### 6.1 连接器（`docs/design/connectors.md`）
 
-- [ ] 6.1.1 GatewayBackend 接口 + OpenConnector 后端
+- [x] 6.1.1 GatewayBackend 接口 + OpenConnector HTTP 后端（env 选择/回退）
 - [x] 6.1.2 OAuth 回调与 state 校验（服务端短时 state，绑定 workspace/account/slug）
 - [x] 6.1.3 按 Bot 授权（read/write/actions）
 - [x] 6.1.4 动作级审批 + idem 幂等（写动作走 approval_grants/审批）
@@ -275,3 +275,4 @@
 - 2026-11-04 M5 多端收尾（前端 agent）：深链 `#/w/:ws/...` 规范化与不一致空态；≤720px 抽屉式侧栏、表格横向滚动、44px 触控目标；设置页通知开关（仅「需要你」，页面隐藏时按 approval id 去重提醒）。全仓 644 测试全绿（前端 186）。
 - 2026-11-04 工程债 E2（后端 agent）：`event-schema`/`bot-manifest` 补 `src/` 类型与纯校验、两个校验 CLI（`roost-event-validate` / `roost-bot-validate`）、26 个测试；`panels` 作为可选字段补进 manifest schema。
 - 2026-11-04 M6 配额四层与计量（后端 agent）：迁移 0018 重建 quotas 支持 run/turn scope、usage_rows 增 container_seconds/storage_bytes；reserve 多层同时校验并带 error.layer；`POST /api/internal/meter`、usage totals/daily（容器秒求和、存储取最大）；493 后端测试全绿。runtime 侧采样接线与默认配额播种留后续。
+- 2026-11-04 M6 OpenConnector 适配器（后端 agent）：`HttpGatewayBackend`（list/authorize/status/call、Bearer、5s 超时、错误脱敏）、`createGatewayBackend` env 选择与缺配置回退 Stub、假网关端到端测试；509 后端测试全绿。路由层传 workspaceId/state、account_label 回写与 token 撤销留后续。

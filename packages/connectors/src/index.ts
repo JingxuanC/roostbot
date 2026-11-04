@@ -1,2 +1,6 @@
 export * from './types.ts'
 export { CONNECTOR_NOT_CONFIGURED, StubGatewayBackend, isConnectorNotConfigured } from './stub.ts'
+export { DEFAULT_GATEWAY_TIMEOUT_MS, HttpGatewayBackend } from './http.ts'
+export type { HttpGatewayBackendOptions } from './http.ts'
+export { createGatewayBackend } from './factory.ts'
+export type { CreateGatewayBackendOptions } from './factory.ts'

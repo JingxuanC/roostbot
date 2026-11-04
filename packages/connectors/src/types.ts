@@ -36,12 +36,23 @@ export type CallResult =
   | { ok: true; data: unknown; bytes: number }
   | { ok: false; code: 'denied' | 'unavailable' | 'needs_reauth' | 'provider_error'; reason?: string }
 
+/** OAuth 起点附加上下文；可选，兼容只传 slug 的旧调用方。 */
+export interface ConnectorAuthorizeOptions {
+  workspaceId?: string
+  state?: string
+}
+
+/** 查询连接状态的附加上下文；可选，兼容只传 slug 的旧调用方。 */
+export interface ConnectorStatusOptions {
+  workspaceId?: string
+}
+
 export interface GatewayBackend {
   id: GatewayBackendId
   listConnectors(): Promise<ConnectorSummary[]>
-  authorize(slug: string): Promise<{ url: string }>
+  authorize(slug: string, options?: ConnectorAuthorizeOptions): Promise<{ url: string }>
   call(call: ConnectorCall, grant: ConnectorGrant): Promise<CallResult>
-  status(slug: string): Promise<ConnectionStatus>
+  status(slug: string, options?: ConnectorStatusOptions): Promise<ConnectionStatus>
 }
 
 /** 未授权的连接器不进上下文：工具名也不出现。 */

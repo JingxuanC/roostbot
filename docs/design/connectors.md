@@ -31,9 +31,12 @@ DSH 插件 roost-connectors（唯一入口）
 ```ts
 interface GatewayBackend {
   listConnectors(): Promise<ConnectorSummary[]>          // 可用目录
-  authorize(slug: string): Promise<{ url: string }>      // OAuth 起点
+  authorize(slug: string, options?: {                     // OAuth 起点
+    workspaceId?: string
+    state?: string
+  }): Promise<{ url: string }>
   call(req: { slug, action, args, grant, idem }): Promise<CallResult>
-  status(slug: string): Promise<ConnectionStatus>
+  status(slug: string, options?: { workspaceId?: string }): Promise<ConnectionStatus>
 }
 ```
 
@@ -189,18 +192,34 @@ CREATE TABLE connector_calls (
 | 幂等索引 | ✅ | `connector_calls` 用 partial unique index：`(workspace_id, bot_id, idem) WHERE idem IS NOT NULL` |
 | store | ✅ | `packages/store/src/connectors.ts`：连接 upsert/get/list/delete、grant 覆盖/list/find、`recordCall`（idem 幂等） |
 | 事件 | ✅ | `domain='connector'`：`connector.connected` / `.disconnected` / `.grant.changed` / `.call`（成功与被拒都记，`deniedReason` 在 payload） |
-| 网关接口 | ✅（Stub） | `packages/connectors` 新增 `StubGatewayBackend`：目录为空，`authorize`/`call` 抛 `connector.not_configured`；API 映射 501 |
+| 网关接口 | ✅（Stub + HTTP） | `StubGatewayBackend`（目录为空，`authorize`/`call` 抛 `connector.not_configured`）；`HttpGatewayBackend` 实现 OpenConnector/Composio 共用的 HTTP 契约 |
+| 后端选择 | ✅ | `createGatewayBackend(env)`：`ROOST_CONNECTOR_BACKEND=stub|openconnector|composio`（默认 stub）；缺 `ROOST_CONNECTOR_URL` 或 URL 非法时回退 stub 并写日志 |
 | 用户 API | ✅ | `GET /api/connectors`、`POST /:slug/connect`、`GET /callback/:slug`、`DELETE /:slug`、`GET / PUT /:slug/grants` |
 | 内部 API | ✅ | `POST /api/internal/connectors/call`：连接/授权三层校验、只读直调、写动作走审批、idem 去重 |
 | memory port | ✅ | 全部接口无 `rawStore` 时 503 `runtime.not_configured` |
+
+### 网关 HTTP 契约（HttpGatewayBackend）
+
+| 方法 | 路径 | 请求 | 响应 |
+|---|---|---|---|
+| GET | `/connectors` | — | `[{slug,title,actions:string[]}]` |
+| POST | `/authorize` | `{slug,workspaceId?,state?}` | `{url}` |
+| GET | `/status` | `?slug=&workspaceId=` | `{status:'connected'|'expired'|'revoked',accountLabel?}` |
+| POST | `/call` | `{slug,action,args,idem?,workspaceId,botId}` | `{ok:true,result}` / `{ok:false,code,message}` |
+
+- 配置了 `ROOST_CONNECTOR_TOKEN` 时所有请求带 `Authorization: Bearer <token>`；token 不落日志、不回显到错误串，错误信息截断到 200 字符。
+- 默认 5s 超时；`call` 的传输/超时/5xx 映射为 `{ok:false,code:'unavailable'}`，契约失败体按 `denied|unavailable|needs_reauth|provider_error` 透传，未知 code 回退 `provider_error`。
+- 目录契约只给动作名，适配器统一按 `read` 展示；实际读写权限仍以 `connector_grants` 为准。
 
 实现细节与偏差：
 
 - **OAuth state** 保存在控制面进程内存（`Map`），10 分钟过期、绑定 `workspace/account/slug`、一次有效；服务重启或多副本部署会丢，需要换成共享存储（Redis/SQLite）。
 - **回调响应**：成功返回 `200 {connected:true}`；还没有前端回调页，所以没有 302。接前端时改为 302 到 `/connectors`。
-- **connect 的网关调用**只传 `slug`（沿用 §2 的 `authorize(slug)`）；真实网关需要 workspace/redirect 时在 v1 扩接口，而不是把凭据/工作区塞进 state。
+- **connect/status 的网关调用**：`GatewayBackend` 已新增可选 `options.workspaceId/state`；但 `connectors-routes.ts` 目前仍只传 `slug`，所以发往网关的请求暂时缺这两个字段。v1 扩路由时补传（workspaceId 来自连接请求，state 来自控制面生成的值），而不是把凭据塞进 state。
+- **accountLabel**：`/status` 契约允许返回账号展示名，但 `GatewayBackend.status()` 只返回状态，未回写 `connections.account_label`（可后续扩展返回值或单独接口）。
+- **选择/回退**：`server.ts` 默认 `createGatewayBackend(process.env)`；`options.connectorBackend` 仍可注入覆盖（测试用）。未知后端值或非法 URL 也回退 stub，日志只写原因、不回显 URL/token。
 - **写动作**：`requiresApprovalForWrite(access, action)` 为真时先查 `approval_grants`（`kind='connector_action'`、`action=<slug>.<action>`、`target=<botId>`）；命中直接放行，否则落 pending 审批并返回 202，不调用网关。
 - **idem 重放**：`connector_calls` 只存 `ok/result_bytes/denied_reason`，不存结果正文，所以重放成功调用返回 `200 {ok:true,deduped:true}`（说明无法重放结果）；重放被拒调用返回 403 + 首次 `deniedReason`。
 - **断开**只删本地连接并写事件，**没有调用网关撤销 token**（`GatewayBackend` 尚无 revoke 方法）。
 
-遗留：真实网关（OpenConnector）适配器与 OAuth code→token 交换、网关侧 token 撤销、回调 302 前端页、state 共享存储。
+遗留：真实网关字段对齐（authorize/status 的 workspaceId/state 透传、accountLabel 回写、目录动作读写标记）、OAuth code→token 交换、网关侧 token 撤销、回调 302 前端页、state 共享存储。

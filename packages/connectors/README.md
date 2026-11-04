@@ -20,9 +20,24 @@
 connector__<slug>__<action>          例：connector__gmail__send_email
 ```
 
+## 网关 HTTP 契约
+
+`HttpGatewayBackend`（OpenConnector / Composio 共用）：
+
+| 方法 | 路径 | 请求 | 响应 |
+|---|---|---|---|
+| GET | `/connectors` | — | `[{slug,title,actions:string[]}]` |
+| POST | `/authorize` | `{slug,workspaceId?,state?}` | `{url}` |
+| GET | `/status` | `?slug=&workspaceId=` | `{status:'connected'|'expired'|'revoked',accountLabel?}` |
+| POST | `/call` | `{slug,action,args,idem?,workspaceId,botId}` | `{ok:true,result}` / `{ok:false,code,message}` |
+
+配置了 token 时每个请求带 `Authorization: Bearer <token>`；默认 5s 超时，token 不落日志、不回显到错误串。
+
+后端选择：`createGatewayBackend(env)` 读 `ROOST_CONNECTOR_BACKEND=stub|openconnector|composio`（默认 stub），`openconnector`/`composio` 需要 `ROOST_CONNECTOR_URL`；缺失时回退 stub。
+
 ## 待办
 
-- [ ] OpenConnector 后端实现（`listConnectors/authorize/call/status`）
-- [ ] OAuth 回调与 state 校验
-- [ ] 动作级审批与 `idem` 幂等仓储
-- [ ] Composio 后端（同接口）
+- [x] OpenConnector HTTP 适配器（`HttpGatewayBackend`）
+- [ ] OAuth code→token 交换与网关侧 token 撤销
+- [ ] 回调路由透传 workspaceId/state 给网关（接口已留可选参数）
+- [ ] Composio 字段差异对齐（同一 HTTP 契约，真实账号字段待验证）

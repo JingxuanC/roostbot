@@ -119,7 +119,7 @@ import {
   handleListConnectors,
   handlePutConnectorGrant,
 } from './connectors-routes.ts'
-import { StubGatewayBackend } from '../../../packages/connectors/src/index.ts'
+import { createGatewayBackend } from '../../../packages/connectors/src/index.ts'
 import type { GatewayBackend } from '../../../packages/connectors/src/index.ts'
 import {
   createAttachmentsRuntime,
@@ -218,7 +218,10 @@ export interface ServerOptions {
   schedulerLoop?: boolean
   /** 结构化请求日志出口；默认写 stdout，测试可注入收集器。 */
   logSink?: (entry: HttpLogEntry) => void
-  /** 连接器网关后端；不配置时用 StubGatewayBackend（authorize/call 抛 connector.not_configured）。 */
+  /**
+   * 连接器网关后端；不配置时按 ROOST_CONNECTOR_BACKEND 选择（默认 StubGatewayBackend，
+   * 未配 URL 的 openconnector/composio 也回退 Stub）。测试可注入 fake 覆盖。
+   */
   connectorBackend?: GatewayBackend
 }
 
@@ -2512,7 +2515,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     rateLimiter: new TokenBucketLimiter(),
     schedulerEnabled,
     logSink: options.logSink ?? writeHttpLog,
-    connectorBackend: options.connectorBackend ?? new StubGatewayBackend(),
+    connectorBackend: options.connectorBackend ?? createGatewayBackend(process.env),
     allowedOrigins: parseAllowedOrigins(process.env.ROOST_ALLOWED_ORIGINS),
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
