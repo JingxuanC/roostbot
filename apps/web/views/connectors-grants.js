@@ -194,6 +194,7 @@ export function connectorGrantsSection(ctx, page) {
     form.addEventListener('submit', async (event) => {
       event.preventDefault()
       ui.setError(error, '')
+      ui.clearFieldInvalid(error)
       ui.setStatus(statusLine, '')
       const result = validateGrantForm({
         access: access.getValue(),

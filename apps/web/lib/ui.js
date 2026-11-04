@@ -2,6 +2,9 @@
 // 只负责建 DOM；值校验与请求在 views 里做。
 
 import { el } from './dom.js'
+import { nextFormErrorId } from './a11y.js'
+
+export { clearFieldInvalid, focusableElements, setFieldInvalid, trapTabKey } from './a11y.js'
 
 export function button(label, options = {}) {
   const variant = options.variant === 'primary' ? 'btn-primary' : options.variant === 'ghost' ? 'btn-ghost' : options.variant === 'outline' ? 'btn-outline' : ''
@@ -11,6 +14,7 @@ export function button(label, options = {}) {
     text: label,
     disabled: options.disabled,
     title: options.title,
+    'aria-label': options.ariaLabel,
     onclick: options.onClick,
   })
 }
@@ -55,6 +59,7 @@ export function input(options = {}) {
     required: options.required,
     disabled: options.disabled,
     spellcheck: 'false',
+    'aria-label': options.ariaLabel,
   })
 }
 
@@ -70,11 +75,18 @@ export function textarea(options = {}) {
     required: options.required,
     disabled: options.disabled,
     spellcheck: options.spellcheck || 'false',
+    'aria-label': options.ariaLabel,
   })
 }
 
 export function select(options = {}) {
-  const node = el('select', { class: 'input select', id: options.id, name: options.name, disabled: options.disabled })
+  const node = el('select', {
+    class: 'input select',
+    id: options.id,
+    name: options.name,
+    disabled: options.disabled,
+    'aria-label': options.ariaLabel,
+  })
   setSelectOptions(node, options.options || [], options.value)
   return node
 }
@@ -166,7 +178,10 @@ export function checkboxList(options = {}) {
 }
 
 export function inlineError() {
-  return el('p', { class: 'form-error', role: 'alert', hidden: true })
+  const node = el('p', { class: 'form-error', role: 'alert', hidden: true })
+  // 错误节点要有 id，才能被控件的 aria-describedby 引用（setFieldInvalid 负责建立关联）。
+  node.id = nextFormErrorId()
+  return node
 }
 
 export function setError(node, message) {
@@ -189,6 +204,8 @@ export function setStatus(node, message, kind = 'ok') {
   node.textContent = message
   node.hidden = message === ''
   node.classList.toggle('is-error', kind === 'error')
+  // 失败信息必须被立即读出；成功/进度保持 polite。
+  node.setAttribute('role', kind === 'error' ? 'alert' : 'status')
 }
 
 export function badge(text, kind = '') {

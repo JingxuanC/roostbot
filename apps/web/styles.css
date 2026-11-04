@@ -109,6 +109,26 @@ button {
   border: 0;
 }
 
+/* 键盘用户跳过侧栏/导航，直接到主内容；只在获得焦点时出现。 */
+.skip-link {
+  position: fixed;
+  top: var(--space-sm);
+  left: var(--space-sm);
+  z-index: 2000;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--roost-surface);
+  border: 1px solid var(--roost-accent);
+  border-radius: var(--radius-sm);
+  color: var(--roost-ink);
+  font-size: 13px;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus-visible {
+  transform: none;
+}
+
 .muted {
   color: var(--roost-muted);
 }
@@ -269,7 +289,6 @@ button {
 }
 
 .code-digit:focus {
-  outline: none;
   border-color: var(--roost-accent);
   box-shadow: 0 0 0 3px var(--accent-weak);
 }
@@ -840,9 +859,16 @@ button {
 }
 
 .composer textarea:focus {
-  outline: none;
   border-color: var(--roost-accent);
   box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+/* :focus 的视觉增强不能把键盘焦点环抹掉；键盘用户保留 outline。 */
+.code-digit:focus-visible,
+.composer textarea:focus-visible,
+.input:focus-visible {
+  outline: 2px solid var(--roost-accent);
+  outline-offset: 2px;
 }
 
 .composer-row {
@@ -1289,7 +1315,7 @@ button {
 }
 
 .round-muted {
-  opacity: 0.65;
+  opacity: 0.9;
 }
 
 .round-note {
@@ -1458,7 +1484,6 @@ button {
   max-width: 840px;
   margin: 0 auto;
   padding: var(--space-xl);
-  outline: none;
 }
 
 .stack {
@@ -1613,7 +1638,6 @@ button {
 }
 
 .input:focus {
-  outline: none;
   border-color: var(--roost-accent);
   box-shadow: 0 0 0 3px var(--accent-weak);
 }

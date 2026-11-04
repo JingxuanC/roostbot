@@ -206,31 +206,37 @@ function createView(ctx, bots) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     ui.setError(error, '')
+    ui.clearFieldInvalid(error)
     const cleanName = name.value.trim()
     const cleanRole = role.value.trim()
     if (cleanName === '') {
       ui.setError(error, '名字不能为空')
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
     if (cleanName.length > NAME_MAX) {
       ui.setError(error, `名字最多 ${NAME_MAX} 字`)
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
     if (cleanRole.length > ROLE_MAX) {
       ui.setError(error, `角色最多 ${ROLE_MAX} 字`)
+      ui.setFieldInvalid(role, true, error)
       role.focus()
       return
     }
     if (model.value.trim() === '') {
       ui.setError(error, '模型不能为空（创建时固定）')
+      ui.setFieldInvalid(model, true, error)
       model.focus()
       return
     }
     const conflict = memberNameConflict(cleanName, bots)
     if (conflict) {
       ui.setError(error, `已经有同名 Bot：${conflict.name}。换一个名字，或去它的设置页改名。`)
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
@@ -396,6 +402,7 @@ function settingsView(ctx, bot, bots) {
     id: 'bot-setting-avatar',
     type: 'file',
     accept: AVATAR_ACCEPT,
+    'aria-label': '上传 Bot 图标（PNG / JPEG / WebP / GIF，≤256KB）',
   })
   const avatarRemove = ui.button('移除图片', { variant: 'ghost', size: 'sm' })
 
@@ -568,6 +575,7 @@ function settingsView(ctx, bot, bots) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     ui.setError(error, '')
+    ui.clearFieldInvalid(error)
     ui.setStatus(statusLine, '')
     const next = {
       name: name.value.trim(),
@@ -582,26 +590,31 @@ function settingsView(ctx, bot, bots) {
     }
     if (next.name === '') {
       ui.setError(error, '名称不能为空')
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
     if (next.name.length > NAME_MAX) {
       ui.setError(error, `名称最多 ${NAME_MAX} 字`)
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
     if (next.role.length > ROLE_MAX) {
       ui.setError(error, `角色最多 ${ROLE_MAX} 字`)
+      ui.setFieldInvalid(role, true, error)
       role.focus()
       return
     }
     if (next.persona.length > PERSONA_MAX) {
       ui.setError(error, `人设最多 ${PERSONA_MAX} 字`)
+      ui.setFieldInvalid(persona, true, error)
       persona.focus()
       return
     }
     if (next.model === '') {
       ui.setError(error, '模型不能为空（创建后固定）')
+      ui.setFieldInvalid(model, true, error)
       model.focus()
       return
     }
@@ -611,6 +624,7 @@ function settingsView(ctx, bot, bots) {
     )
     if (conflict) {
       ui.setError(error, `已经有同名 Bot：${conflict.name}`)
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
@@ -627,6 +641,7 @@ function settingsView(ctx, bot, bots) {
     if (avatarDraft.dirty) {
       if (avatarDraft.image !== '' && !isAvatarDataUrl(avatarDraft.image)) {
         ui.setError(error, '头像图片无效：只支持 PNG / JPEG / WebP / GIF，且不超过 256KB。')
+        ui.setFieldInvalid(avatarFile, true, error)
         return
       }
       const avatar = bot.avatar && typeof bot.avatar === 'object' ? { ...bot.avatar } : {}

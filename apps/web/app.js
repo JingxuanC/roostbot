@@ -278,11 +278,14 @@ function markdownFragment(text) {
       const rows = []
       while (lines[i] !== undefined && lines[i].startsWith('|')) { rows.push(lines[i]); i += 1 }
       const table = el('table', { class: 'md-table' })
+      table.append(el('caption', { class: 'sr-only', text: '消息中的表格' }))
       rows.forEach((row, index) => {
         if (index === 1) return // 分隔行
         const cells = row.split('|').slice(1, -1).map((cell) => cell.trim())
         const tr = el('tr')
-        for (const cell of cells) tr.append(index === 0 ? el('th', {}, [inlineFragment(cell)]) : el('td', {}, [inlineFragment(cell)]))
+        for (const cell of cells) {
+          tr.append(index === 0 ? el('th', { scope: 'col' }, [inlineFragment(cell)]) : el('td', {}, [inlineFragment(cell)]))
+        }
         table.append(tr)
       })
       frag.append(table)
@@ -743,10 +746,13 @@ function setupPairing() {
   const clearError = () => {
     error.hidden = true
     error.textContent = ''
+    ui.setFieldInvalid(boxes, false, error)
   }
   const showError = (message) => {
     error.textContent = message
     error.hidden = false
+    // 错误作用于整组配对码：六个输入都标红，读屏读到一致的原因。
+    ui.setFieldInvalid(boxes, true, error)
   }
   const setBusy = (busy) => {
     submit.disabled = busy
@@ -1990,6 +1996,7 @@ function showComposerError(message) {
   if (!node) return
   node.textContent = message
   node.hidden = false
+  ui.setFieldInvalid($('#composer'), true, node)
 }
 
 function clearComposerError() {
@@ -1997,6 +2004,7 @@ function clearComposerError() {
   if (!node) return
   node.textContent = ''
   node.hidden = true
+  ui.setFieldInvalid($('#composer'), false, node)
 }
 
 const mentionState = {
@@ -2150,12 +2158,14 @@ function setupNeedsPanel() {
       lastFocus = opener || document.activeElement
       panel.hidden = false
       for (const button of buttons) if (button) button.setAttribute('aria-expanded', 'true')
-      panel.focus()
+      // 打开后把焦点放进抽屉（关闭按钮；没有就落在对话框容器上）。
+      const closeButton = $('#needs-close')
+      ;(closeButton || panel).focus()
       return
     }
-    if (lastFocus && document.contains(lastFocus)) lastFocus.focus()
     panel.hidden = true
     for (const button of buttons) if (button) button.setAttribute('aria-expanded', 'false')
+    if (lastFocus && document.contains(lastFocus)) lastFocus.focus()
   }
 
   for (const button of buttons) {
@@ -2172,10 +2182,13 @@ function setupNeedsPanel() {
   const close = $('#needs-close')
   if (close) close.addEventListener('click', () => setOpen(false))
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !panel.hidden) {
+    if (panel.hidden) return
+    if (event.key === 'Escape') {
       event.preventDefault()
       setOpen(false)
+      return
     }
+    ui.trapTabKey(event, panel)
   })
 }
 
@@ -2196,7 +2209,9 @@ function setupSidebarDrawer() {
     if (scrim) scrim.hidden = !open
     if (open) {
       lastFocus = opener || document.activeElement
-      if (sidebar) sidebar.focus()
+      const first = ui.focusableElements(sidebar)[0]
+      if (first) first.focus()
+      else if (sidebar) sidebar.focus()
       return
     }
     if (lastFocus && document.contains(lastFocus)) lastFocus.focus()
@@ -2211,14 +2226,34 @@ function setupSidebarDrawer() {
     })
   }
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && isOpen()) {
+    if (!isOpen()) return
+    // 「需要你」抽屉叠在侧栏上时，焦点陷阱由它接管。
+    const needs = $('#needs')
+    if (needs && !needs.hidden) return
+    if (event.key === 'Escape') {
       event.preventDefault()
       setOpen(false)
+      return
     }
+    ui.trapTabKey(event, sidebar)
   })
   window.addEventListener('resize', () => {
     if (window.innerWidth > 720 && isOpen()) setOpen(false)
   })
+}
+
+/** 跳过导航直接到主内容；不能走 hash，否则会触发路由把页面切走。 */
+function setupSkipLinks() {
+  for (const link of document.querySelectorAll('.skip-link')) {
+    link.addEventListener('click', (event) => {
+      event.preventDefault()
+      const id = (link.getAttribute('href') || '').replace(/^#/, '')
+      const target = id === '' ? null : document.getElementById(id)
+      if (!target) return
+      target.focus()
+      target.scrollIntoView({ block: 'start' })
+    })
+  }
 }
 
 function setupComposer() {
@@ -2308,6 +2343,7 @@ function boot() {
   setupPairing()
   setupNeedsPanel()
   setupSidebarDrawer()
+  setupSkipLinks()
   setupComposer()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {

@@ -112,8 +112,18 @@ function renderImage(att, ctx) {
         alt: att.name || '图片附件',
         loading: 'lazy',
         decoding: 'async',
+        tabindex: '0',
+        role: 'button',
+        'aria-haspopup': 'dialog',
+        'aria-label': `查看图片：${att.name || '图片附件'}`,
       })
       image.addEventListener('click', () => openLightbox(att, url))
+      image.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openLightbox(att, url)
+        }
+      })
       image.addEventListener('error', () => {
         releaseObjectUrl(url)
         fail('图片无法解码')

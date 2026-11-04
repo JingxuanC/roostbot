@@ -199,6 +199,7 @@ function detailView(ctx, root, slug, initialWorkspaceId, plugin, versions) {
   // ---- 版本 / 预检 / 安装 --------------------------------------------------
   const versionSelect = ui.select({
     id: 'plugin-version',
+    ariaLabel: '选择插件版本',
     options: versions.length === 0
       ? [{ value: '', label: '（没有可用版本）' }]
       : versions.map((version) => ({

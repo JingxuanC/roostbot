@@ -101,6 +101,7 @@ export function triggerOpen(blob) {
 }
 
 export function openOverlay(options) {
+  const previouslyFocused = document.activeElement
   const overlay = el('div', {
     class: 'attachment-overlay',
     role: 'dialog',
@@ -120,22 +121,34 @@ export function openOverlay(options) {
   overlay.append(panel)
 
   function close() {
-    document.removeEventListener('keydown', onKey)
+    document.removeEventListener('keydown', onKey, true)
     overlay.remove()
     overlays.delete(close)
+    // 焦点回到打开它的控件；控件已被重建时不要硬塞回一个脱离文档的节点。
+    if (previouslyFocused && typeof previouslyFocused.focus === 'function' && document.contains(previouslyFocused)) {
+      previouslyFocused.focus()
+    }
     if (options.onClose) options.onClose()
   }
   function onKey(event) {
     if (event.key === 'Escape') {
       event.preventDefault()
+      event.stopPropagation()
       close()
+      return
+    }
+    if (event.key === 'Tab') {
+      // 灯箱打开时由它独占 Tab 序列，底下的抽屉不再插手。
+      ui.trapTabKey(event, overlay)
+      event.stopPropagation()
     }
   }
   closeButton.addEventListener('click', close)
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) close()
   })
-  document.addEventListener('keydown', onKey)
+  // 捕获阶段接管：灯箱/沙箱在焦点陷阱上优先于页面抽屉。
+  document.addEventListener('keydown', onKey, true)
   document.body.append(overlay)
   overlays.add(close)
   closeButton.focus()

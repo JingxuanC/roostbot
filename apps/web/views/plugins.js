@@ -104,6 +104,7 @@ function pluginsView(ctx, root, workspaceId) {
     type: 'search',
     placeholder: '搜索插件标题或摘要…',
     autocomplete: 'off',
+    ariaLabel: '搜索插件标题或摘要',
   })
   const categorySelect = ui.select({ id: 'plugin-category', options: [{ value: '', label: '全部分类' }] })
   const tierSelect = ui.select({ id: 'plugin-tier', options: TIER_OPTIONS })

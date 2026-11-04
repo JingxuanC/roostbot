@@ -102,7 +102,7 @@ export function renderTableCard(att, ctx) {
       const text = await blob.text()
       const parsed = parseTablePreview(text, { delimiter, limit: PREVIEW_ROWS })
       if (parsed.totalRows === 0) throw new Error('文件里没有可解析的行')
-      body.replaceChildren(renderTablePreview(parsed))
+      body.replaceChildren(renderTablePreview(parsed, att.name))
       preview.hidden = true
     })
   )
@@ -110,12 +110,13 @@ export function renderTableCard(att, ctx) {
   return card
 }
 
-function renderTablePreview(parsed) {
+function renderTablePreview(parsed, name) {
   const wrap = el('div', { class: 'attachment-table-wrap' })
   const table = el('table', { class: 'attachment-table-preview' })
+  table.append(el('caption', { class: 'sr-only', text: name || '附件表格预览' }))
   const head = el('thead')
   const headRow = el('tr')
-  for (const cell of parsed.header) headRow.append(el('th', { text: cell === '' ? '—' : cell }))
+  for (const cell of parsed.header) headRow.append(el('th', { scope: 'col', text: cell === '' ? '—' : cell }))
   head.append(headRow)
   table.append(head)
   const tbody = el('tbody')

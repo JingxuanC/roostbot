@@ -102,8 +102,9 @@
 
     <!-- ------------------------------------------------------------ 页面二：房间（ui.md §3.2） -->
     <div id="room-view" class="room" hidden>
+      <a class="skip-link" href="#room-main">跳到主内容</a>
       <div id="sidebar-scrim" class="sidebar-scrim" aria-hidden="true" hidden></div>
-      <aside id="sidebar" class="sidebar" aria-label="导航" tabindex="-1">
+      <nav id="sidebar" class="sidebar" aria-label="导航" tabindex="-1">
         <div class="brand">
           <span class="brand-name">Roost</span>
           <span class="brand-tag">M4</span>
@@ -139,9 +140,9 @@
         <p class="nav-muted-link"><a href="#/schedules">定时任务</a> · <a href="#/connectors">连接器</a> · <a href="#/settings">设置</a> · <a href="#/usage">用量</a> · <a href="#/plugins">插件</a> · <a href="#/panels">插件面板</a></p>
 
         <p class="sidebar-foot muted" id="sidebar-foot">未连接控制面</p>
-      </aside>
+      </nav>
 
-      <main class="main">
+      <main id="room-main" class="main" tabindex="-1">
         <header class="room-head">
           <button
             id="sidebar-toggle"
@@ -159,7 +160,7 @@
             <a id="room-settings-link" class="room-settings-link" href="#" hidden>设置</a>
           </div>
           <div class="head-right">
-            <p class="working" id="working">
+            <p class="working" id="working" role="status">
               <span class="dot" aria-hidden="true"></span>
               <span id="working-text">选股师 正在工作</span>
             </p>
@@ -196,6 +197,8 @@
             autocomplete="off"
             aria-expanded="false"
             aria-controls="mention-menu"
+            aria-autocomplete="list"
+            aria-haspopup="listbox"
           ></textarea>
           <p id="composer-error" class="composer-error" role="alert" hidden></p>
           <div class="composer-foot">
@@ -219,7 +222,15 @@
         </form>
       </main>
 
-      <aside id="needs" class="needs" aria-labelledby="needs-title" tabindex="-1" hidden>
+      <aside
+        id="needs"
+        class="needs"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="needs-title"
+        tabindex="-1"
+        hidden
+      >
         <div class="needs-head">
           <h2 class="needs-title" id="needs-title">需要你 · 2</h2>
           <button id="needs-close" class="btn btn-ghost btn-sm" type="button">关闭</button>
@@ -230,6 +241,7 @@
 
     <!-- ------------------------------------------------------------ 页面三至六：Bot 与房间设置 -->
     <div id="page-view" class="page" hidden>
+      <a class="skip-link" href="#page-main">跳到主内容</a>
       <header class="page-head">
         <a class="brand-link" href="#/">Roost</a>
         <nav class="page-nav" aria-label="导航">

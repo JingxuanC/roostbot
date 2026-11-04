@@ -154,6 +154,7 @@ export function scheduleFormSection(ctx, state, onCreated) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     ui.setError(error, '')
+    ui.clearFieldInvalid(error)
     ui.setStatus(statusLine, '')
     const validation = validateScheduleForm({
       botId: bot.value,
@@ -166,6 +167,7 @@ export function scheduleFormSection(ctx, state, onCreated) {
     if (!validation.ok) {
       ui.setError(error, validation.message)
       const field = fields[validation.field]
+      if (field) ui.setFieldInvalid(field, true, error)
       if (field && typeof field.focus === 'function') field.focus()
       return
     }

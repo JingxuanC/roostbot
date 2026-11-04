@@ -259,18 +259,22 @@ function createRoomView(ctx, bots) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     ui.setError(error, '')
+    ui.clearFieldInvalid(error)
     if (selected.length < MEMBERS_MIN) {
       ui.setError(error, `至少需要 ${MEMBERS_MIN} 个 Bot 才能建群`)
+      ui.setFieldInvalid(memberList.node, true, error)
       return
     }
     const cleanName = name.value.trim()
     if (cleanName.length > NAME_MAX) {
       ui.setError(error, `名称最多 ${NAME_MAX} 字`)
+      ui.setFieldInvalid(name, true, error)
       name.focus()
       return
     }
     if (notice.value.length > NOTICE_MAX) {
       ui.setError(error, `公告最多 ${NOTICE_MAX} 字`)
+      ui.setFieldInvalid(notice, true, error)
       notice.focus()
       return
     }
@@ -392,7 +396,7 @@ function roomSettingsView(ctx, room, bots, botsError) {
   const membersHint = el('p', { class: 'field-hint', text: '' })
   const memberError = ui.inlineError()
   const memberStatus = ui.statusLine('')
-  const addSelect = ui.select({ id: 'room-add-member' })
+  const addSelect = ui.select({ id: 'room-add-member', ariaLabel: '要添加到房间的 Bot' })
   const addButton = ui.button('添加', { variant: 'ghost', size: 'sm' })
   const addRow = el('div', { class: 'add-member-row' }, [addSelect, addButton])
 
@@ -595,20 +599,24 @@ function roomSettingsView(ctx, room, bots, botsError) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     ui.setError(formError, '')
+    ui.clearFieldInvalid(formError)
     ui.setStatus(sectionStatus, '')
     const cleanName = name.value.trim()
     if (cleanName === '') {
       ui.setError(formError, '房间名称不能为空')
+      ui.setFieldInvalid(name, true, formError)
       name.focus()
       return
     }
     if (cleanName.length > NAME_MAX) {
       ui.setError(formError, `名称最多 ${NAME_MAX} 字`)
+      ui.setFieldInvalid(name, true, formError)
       name.focus()
       return
     }
     if (notice.value.length > NOTICE_MAX) {
       ui.setError(formError, `公告最多 ${NOTICE_MAX} 字`)
+      ui.setFieldInvalid(notice, true, formError)
       notice.focus()
       return
     }

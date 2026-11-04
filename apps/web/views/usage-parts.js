@@ -60,12 +60,13 @@ export function detailsSections(data) {
 
 function detailSection(title, rows, keyLabel, fallbackKey) {
   const table = el('table', { class: 'usage-table' })
+  table.append(el('caption', { class: 'sr-only', text: `${title}：按${keyLabel}拆分 token 与成本` }))
   const head = el('thead')
   const headRow = el('tr')
   headRow.append(
-    el('th', { text: keyLabel }),
-    el('th', { class: 'num', text: 'token' }),
-    el('th', { class: 'num', text: '成本' })
+    el('th', { scope: 'col', text: keyLabel }),
+    el('th', { scope: 'col', class: 'num', text: 'token' }),
+    el('th', { scope: 'col', class: 'num', text: '成本' })
   )
   head.append(headRow)
 

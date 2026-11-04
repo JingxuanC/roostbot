@@ -104,10 +104,11 @@ export function createRunsSection(ctx, state) {
 
     const wrap = el('div', { class: 'usage-table-wrap' })
     const table = el('table', { class: 'usage-table schedule-runs-table' })
+    table.append(el('caption', { class: 'sr-only', text: '定时任务运行记录' }))
     const head = el('thead')
     const headRow = el('tr')
     for (const label of ['状态', 'Outcome', 'routineId', '开始', '结束', '执行次数', '操作']) {
-      headRow.append(el('th', { text: label, class: label === '执行次数' ? 'num' : undefined }))
+      headRow.append(el('th', { scope: 'col', text: label, class: label === '执行次数' ? 'num' : undefined }))
     }
     head.append(headRow)
 

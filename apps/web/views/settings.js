@@ -410,6 +410,7 @@ function grantsSections(ctx, root, state) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     ui.setError(error, '')
+    ui.clearFieldInvalid(error)
     ui.setStatus(statusLine, '')
     const payload = approvalGrantPayload({
       workspaceId: state.workspaceId,
@@ -419,6 +420,7 @@ function grantsSections(ctx, root, state) {
     })
     if (payload === null) {
       ui.setError(error, 'kind 不能为空')
+      ui.setFieldInvalid(kind, true, error)
       kind.focus()
       return
     }

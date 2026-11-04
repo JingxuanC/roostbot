@@ -215,7 +215,7 @@
 - [ ] E6 runtime token 从 env 改为 provider
 - [ ] E7 CI 在远端/GitHub 真跑（typecheck + 138 测试）
 - [ ] E8 远端 e2e 自动化（脚本 → CI job）
-- [ ] E9 web 端从"UI 切片"升级（组件化、tokens 包接入、可访问性审计）
+- [ ] E9 web 端从"UI 切片"升级（可访问性审计已完成；组件化与 tokens 包接入未做）
 - [x] E10 统一 SSE 断线重连与去重（客户端显式状态机）
 - [ ] E11 错误码/文案统一（中文 + 稳定 code）
 - [ ] E12 包版本与发布（Changesets 或手写 CHANGELOG）
@@ -276,3 +276,4 @@
 - 2026-11-04 工程债 E2（后端 agent）：`event-schema`/`bot-manifest` 补 `src/` 类型与纯校验、两个校验 CLI（`roost-event-validate` / `roost-bot-validate`）、26 个测试；`panels` 作为可选字段补进 manifest schema。
 - 2026-11-04 M6 配额四层与计量（后端 agent）：迁移 0018 重建 quotas 支持 run/turn scope、usage_rows 增 container_seconds/storage_bytes；reserve 多层同时校验并带 error.layer；`POST /api/internal/meter`、usage totals/daily（容器秒求和、存储取最大）；493 后端测试全绿。runtime 侧采样接线与默认配额播种留后续。
 - 2026-11-04 M6 OpenConnector 适配器（后端 agent）：`HttpGatewayBackend`（list/authorize/status/call、Bearer、5s 超时、错误脱敏）、`createGatewayBackend` env 选择与缺配置回退 Stub、假网关端到端测试；509 后端测试全绿。路由层传 workspaceId/state、account_label 回写与 token 撤销留后续。
+- 2026-11-04 E9 可访问性审计（前端 agent）：焦点环恢复、skip link、抽屉/侧栏/附件弹层焦点陷阱与归位、表单 aria-invalid/aria-describedby、错误 role=alert、表格 caption/scope、muted 对比度修正；186 前端测试 + headless Chrome 键盘路径实测通过。组件化与 tokens 包接入未做，E9 暂不勾。
