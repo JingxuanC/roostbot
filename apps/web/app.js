@@ -925,13 +925,15 @@ function navigate(hash) {
   location.hash = hash
 }
 
-/** 受保护页面发现会话失效：回配对页，并记住原地址。 */
-function requirePair() {
+/** 受保护页面发现会话失效：回配对页，并记住原地址。message 用于特定场景（如吊销当前设备）。 */
+function requirePair(message = '') {
   if (location.hash !== '#/' && location.hash !== '') pendingRoute = location.hash
   navigate('#/')
   const note = $('#pair-note')
   if (note) {
-    note.textContent = '会话已失效或还没配对（token 只在内存里，刷新后要重新配对）。配对成功后会回到刚才的页面。'
+    note.textContent =
+      message ||
+      '会话已失效或还没配对（token 只在内存里，刷新后要重新配对）。配对成功后会回到刚才的页面。'
     note.hidden = false
   }
   setTitle('配对')

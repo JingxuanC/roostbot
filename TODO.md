@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：80 / 152 · 进行中：1
+- 完成：81 / 152 · 进行中：2
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -128,7 +128,7 @@
 
 ### 5.5 多端（`docs/design/workspace.md`）
 
-- [ ] 5.5.1 设备管理页（列表/吊销/在线状态）
+- [x] 5.5.1 设备管理页（列表/吊销/当前设备标记；吊销当前设备后重新配对）
 - [x] 5.5.2 同一 workspace 两窗口同步（`LIVE.seen` 统一去重 + 按 seq 乱序插入）
 - [x] 5.5.3 离线态与重连补拉（after=seq，指数退避 + online/visibility 触发）
 - [ ] 5.5.4 深链（`/w/:id/room/:id`、`/w/:id/bot/:id`）
@@ -263,3 +263,4 @@
 - 2026-11-04 M6 定时激活（后端 agent）：迁移 0015（workspace_schedules/activations/runs/run_events）、零依赖 cron/daily/weekly/every + IANA 时区与 DST、tick 扫描（10s 循环，`ROOST_SCHEDULER=1`）、幂等键与 12h 追赶、重叠 queue/skip、routines 与 runs API、人工触发/停止。551 全量测试全绿（后端 401）。容器执行、睡眠/唤醒、调度页面留后续。
 - 2026-11-04 DSH 反代独立源修复（后端 agent）：反代拆到同 host 的独立端口（`dshProxyPort`，默认 4098），iframe 保留反代端口自己的源，子资源不再受 opaque origin 的 cookie/CORS 限制；新增 `GET /api/config` 返回 `dshBase`、`GET /api/workspaces/:id/dsh/status` 由控制面代探活。406 后端测试全绿。
 - 2026-11-04 M5 面板容器前端（前端 agent）：`#/panels` 从 `/api/config` 取 `dshBase`，iframe 指向独立反代端口并用 `allow-same-origin`；探活改走控制面 `/dsh/status`；实测 iframe 内 fetch/script/XHR 三类子资源均到达上游（上一轮 0 次），父页面读 `contentDocument` 仍为 null。560 全量测试全绿（前端 107）。生命周期唤醒、WebSocket、注册数冒烟留后续。
+- 2026-11-04 M5 设置页扩展（前端 agent）：成员管理（角色下拉/移除/最后 owner 409）与设备管理（列表/吊销/当前设备标记），保留长期授权分区；403/503/空态独立降级。560 全量测试全绿（前端 124）。

@@ -2258,6 +2258,24 @@ button {
   flex: none;
 }
 
+/* 设置页：成员角色与设备吊销 */
+
+.member-manage-row.is-current {
+  border-color: color-mix(in srgb, var(--roost-ok) 45%, var(--roost-border));
+}
+
+.settings-manage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.settings-role-select {
+  width: 120px;
+}
+
 /* ------------------------------------------------------------------ Bot 列表：已删除筛选（禁用态） */
 
 .bot-filter-row {

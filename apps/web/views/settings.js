@@ -1,37 +1,63 @@
-// 设置页：长期授权（docs/design/ui.md §3.3 / §12 待决 3）。
+// 设置页：成员与角色、设备与吊销、长期授权。
 //
-// 单次批准只对这一次生效；长期授权必须在这里显式创建，避免在审批卡上误点。
-// 授权按 workspace + kind + action + target 精确匹配（不做通配）。
-// 403 显示「仅 owner/admin 可管理」；404/405/501/503 降级为未就绪说明，不白屏。
-// 所有用户输入只进 textContent / value / 属性，不拼 innerHTML。
+// 数据来自：
+//   GET    /api/workspaces/:id/members        → 成员分区（settings-members.js）
+//   GET    /api/devices                       → 设备分区（settings-devices.js）
+//   GET/POST/DELETE /api/approval-grants      → 长期授权（本文件）
+// 三个分区各自加载、各自降级：一个接口 403/503 不拖垮其它分区。
+// 401 一律回配对页；403 说明角色不足；503 runtime.not_configured 说接口未就绪。
+// 所有用户可见文本只进 textContent / value，不拼 innerHTML。
 
 import { el } from '../lib/dom.js'
-import { isAuthError, isMissingRoute } from '../lib/api-client.js'
+import { isAuthError } from '../lib/api-client.js'
 import { approvalGrantPayload, approvalGrantsView } from '../lib/approvals.js'
+import { isSettingsForbidden, isSettingsNotReady } from '../lib/settings.js'
 import * as ui from '../lib/ui.js'
+import { membersSection } from './settings-members.js'
+import { devicesSection } from './settings-devices.js'
 
 const PAGE_TITLE = '设置'
 const KIND_MAX = 80
 const ACTION_MAX = 200
 const TARGET_MAX = 500
 
-function isNotReady(error) {
-  if (!error) return false
-  if (isMissingRoute(error)) return true
-  if (error.status === 405 || error.status === 501) return true
-  return error.status === 503 && error.code === 'runtime.not_configured'
-}
-
-function isPermissionError(error) {
-  return Boolean(error && (error.status === 403 || error.code === 'forbidden'))
-}
-
 function grantsPath(workspaceId) {
   return `/api/approval-grants?workspaceId=${encodeURIComponent(workspaceId)}`
 }
 
+function membersPath(workspaceId) {
+  return `/api/workspaces/${encodeURIComponent(workspaceId)}/members`
+}
+
 function notice(title, body, action) {
   return ui.emptyState({ title, body, action })
+}
+
+function retryButton(root, ctx) {
+  return ui.button('重试', { variant: 'primary', onClick: () => void mountSettingsPage(root, ctx) })
+}
+
+/**
+ * 拉一个分区；返回 401 时交给调用方 requirePair，其余错误只写回槽位。
+ * @returns {Promise<unknown|null>} 只返回鉴权错误
+ */
+async function loadSection(ctx, slot, path, key) {
+  try {
+    const data = await ctx.api.get(path)
+    slot.rows = Array.isArray(data?.[key]) ? data[key] : []
+    slot.mode = 'ready'
+    slot.error = null
+  } catch (error) {
+    if (isAuthError(error)) return error
+    slot.rows = []
+    if (isSettingsForbidden(error)) slot.mode = 'forbidden'
+    else if (isSettingsNotReady(error)) slot.mode = 'not-ready'
+    else {
+      slot.mode = 'error'
+      slot.error = error
+    }
+  }
+  return null
 }
 
 /**
@@ -61,56 +87,72 @@ export async function mountSettingsPage(root, ctx) {
     return
   }
 
-  let grants = []
-  let mode = 'ready'
-  let loadError = null
+  const state = {
+    workspaceId,
+    // 当前账号在这个工作区的角色。拿不到时保持空：成员只读展示，不显示管理控件。
+    role: '',
+    members: { mode: 'ready', rows: [], error: null },
+    devices: { mode: 'ready', rows: [], error: null },
+    grants: { mode: 'ready', rows: [], error: null },
+  }
+
+  // 角色只用于「能不能显示管理控件」和「推断哪个成员是你」；失败不阻断页面。
   try {
-    const data = await ctx.api.get(grantsPath(workspaceId))
-    grants = Array.isArray(data?.grants) ? data.grants : []
+    const data = await ctx.api.get('/api/workspaces')
+    const workspaces = Array.isArray(data?.workspaces) ? data.workspaces : []
+    const current = workspaces.find(
+      (workspace) => workspace && typeof workspace === 'object' && workspace.id === workspaceId
+    )
+    if (current && typeof current.role === 'string') state.role = current.role
   } catch (error) {
     if (isAuthError(error)) {
       ctx.requirePair()
       return
     }
-    if (isPermissionError(error)) {
-      mode = 'forbidden'
-    } else if (isNotReady(error)) {
-      mode = 'not-ready'
-    } else {
-      loadError = error
-    }
   }
 
-  if (loadError !== null) {
-    root.replaceChildren(
-      ui.pageHeader(PAGE_TITLE),
-      ui.errorState({
-        error: loadError,
-        message: `长期授权载入失败：${loadError instanceof Error ? loadError.message : String(loadError)}`,
-        onRetry: () => void mountSettingsPage(root, ctx),
-      })
-    )
+  const authError =
+    (await loadSection(ctx, state.members, membersPath(workspaceId), 'members')) ||
+    (await loadSection(ctx, state.devices, '/api/devices', 'devices')) ||
+    (await loadSection(ctx, state.grants, grantsPath(workspaceId), 'grants'))
+  if (authError) {
+    ctx.requirePair()
     return
   }
 
-  root.replaceChildren(settingsView(ctx, root, workspaceId, grants, mode))
+  root.replaceChildren(settingsView(ctx, root, state))
   const main = root.closest('main')
   if (main) main.focus()
 }
 
-function settingsView(ctx, root, workspaceId, initialGrants, mode) {
+function settingsView(ctx, root, state) {
   const header = ui.pageHeader(PAGE_TITLE, {
-    subtitle: '单次批准不会写入长期授权；只有这里显式添加的授权才会自动放行。',
+    subtitle: '成员、设备与长期授权都在这里管理；单次批准不会写入长期授权。',
     actions: [ui.linkButton('需要你', '#/approvals', { variant: 'ghost' })],
   })
 
+  const remount = () => void mountSettingsPage(root, ctx)
+  // 成员/设备分区需要 workspaceId 与当前角色；用页面上下文的副本传进去，不改原对象。
+  const pageCtx = { ...ctx, workspaceId: state.workspaceId, role: state.role }
+
   const board = el('div', { class: 'page-card settings-board' })
+  board.append(membersSection(pageCtx, state.members, remount))
+  board.append(devicesSection(pageCtx, state.devices, remount))
+  for (const node of grantsSections(ctx, root, state)) board.append(node)
+  return el('div', { class: 'stack' }, [header, board])
+}
+
+// ---------------------------------------------------------------------------
+// 长期授权（原有能力，保留）
+// ---------------------------------------------------------------------------
+
+function grantsSections(ctx, root, state) {
   const description =
     '精确匹配，不支持通配；只对完全相同的 workspace + kind + action + target 请求生效。' +
     'action/target 留空表示只匹配「请求里同样没填」的情况。'
 
-  if (mode === 'forbidden') {
-    board.append(
+  if (state.grants.mode === 'forbidden') {
+    return [
       ui.section(
         '长期授权',
         [
@@ -120,29 +162,45 @@ function settingsView(ctx, root, workspaceId, initialGrants, mode) {
           ),
         ],
         { description }
-      )
-    )
-    return el('div', { class: 'stack' }, [header, board])
+      ),
+    ]
   }
 
-  if (mode === 'not-ready') {
-    board.append(
+  if (state.grants.mode === 'not-ready') {
+    return [
       ui.section(
         '长期授权',
         [
           notice(
             '长期授权接口未就绪',
             '控制面还没有可用的 GET/POST /api/approval-grants（或返回 404/405/501/503）。界面不会假装已保存；接口上线后点「重试」即可。',
-            ui.button('重试', { variant: 'primary', onClick: () => void mountSettingsPage(root, ctx) })
+            retryButton(root, ctx)
           ),
         ],
         { description }
-      )
-    )
-    return el('div', { class: 'stack' }, [header, board])
+      ),
+    ]
   }
 
-  let current = Array.isArray(initialGrants) ? initialGrants.slice() : []
+  if (state.grants.mode === 'error') {
+    return [
+      ui.section(
+        '长期授权',
+        [
+          ui.errorState({
+            error: state.grants.error,
+            message: `长期授权载入失败：${
+              state.grants.error instanceof Error ? state.grants.error.message : String(state.grants.error)
+            }`,
+            onRetry: () => void mountSettingsPage(root, ctx),
+          }),
+        ],
+        { description }
+      ),
+    ]
+  }
+
+  let current = Array.isArray(state.grants.rows) ? state.grants.rows.slice() : []
   const statusLine = ui.statusLine('')
   const list = el('ul', { class: 'grant-list' })
   const emptyGrants = ui.emptyState({
@@ -198,7 +256,7 @@ function settingsView(ctx, root, workspaceId, initialGrants, mode) {
   }
 
   async function reloadGrants() {
-    const data = await ctx.api.get(grantsPath(workspaceId))
+    const data = await ctx.api.get(grantsPath(state.workspaceId))
     current = Array.isArray(data?.grants) ? data.grants : []
     renderRows()
   }
@@ -226,11 +284,11 @@ function settingsView(ctx, root, workspaceId, initialGrants, mode) {
         return
       }
       ui.setBusy(button, false)
-      if (isPermissionError(cause)) {
+      if (isSettingsForbidden(cause)) {
         ui.setStatus(note, '仅 owner/admin 可管理长期授权。', 'error')
         return
       }
-      if (isNotReady(cause)) {
+      if (isSettingsNotReady(cause)) {
         ui.setStatus(
           note,
           `长期授权接口未就绪（HTTP ${cause.status ?? '?'}）：这次没有撤销成功。`,
@@ -287,7 +345,7 @@ function settingsView(ctx, root, workspaceId, initialGrants, mode) {
     ui.setError(error, '')
     ui.setStatus(statusLine, '')
     const payload = approvalGrantPayload({
-      workspaceId,
+      workspaceId: state.workspaceId,
       kind: kind.value,
       action: action.value,
       target: target.value,
@@ -318,11 +376,11 @@ function settingsView(ctx, root, workspaceId, initialGrants, mode) {
         ctx.requirePair()
         return
       }
-      if (isPermissionError(cause)) {
+      if (isSettingsForbidden(cause)) {
         ui.setError(error, '仅 owner/admin 可管理长期授权。')
         return
       }
-      if (isNotReady(cause)) {
+      if (isSettingsNotReady(cause)) {
         ui.setError(
           error,
           `长期授权接口未就绪（HTTP ${cause.status ?? '?'}）：这次没有保存，也没有发生任何状态变化。`
@@ -336,12 +394,11 @@ function settingsView(ctx, root, workspaceId, initialGrants, mode) {
   })
 
   renderRows()
-  board.append(
+
+  return [
     ui.section('长期授权', [form], { description }),
     ui.section('当前授权', [emptyGrants, list], {
       description: '按授权时间升序；撤销后立即失效。',
-    })
-  )
-
-  return el('div', { class: 'stack' }, [header, board])
+    }),
+  ]
 }
