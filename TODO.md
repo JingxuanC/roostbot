@@ -261,3 +261,4 @@
 - 2026-11-04 M5 插件市场前端（前端 agent）：市场/详情/已安装三屏，搜索与分类/tier 过滤、权限清单、预检、二次确认安装、启停/升级/卸载；安装后只显示「等待沙箱同步」；修复 HTTP 200 + `{ok:false,problems}` 被误判为请求失败。517 测试全绿（前端 97）。5.1.7 工具来源映射待后端。
 - 2026-11-04 M6 预算与计量（后端 agent）：迁移 0014（quotas/reservations/usage_rows）、UTC 周期重置的预留-结算、80% 软限 `billing.cap`、`billing.reserve/settle/usage/quota.changed` 事件、内部预留/结算/用量接口、`/api/quotas` 与 `/api/usage`，消息准入配额耗尽 429 且不落库。517 测试全绿（后端 373）。模型代理、容器秒、工作区时区、用量页留后续。
 - 2026-11-04 M6 定时激活（后端 agent）：迁移 0015（workspace_schedules/activations/runs/run_events）、零依赖 cron/daily/weekly/every + IANA 时区与 DST、tick 扫描（10s 循环，`ROOST_SCHEDULER=1`）、幂等键与 12h 追赶、重叠 queue/skip、routines 与 runs API、人工触发/停止。551 全量测试全绿（后端 401）。容器执行、睡眠/唤醒、调度页面留后续。
+- 2026-11-04 DSH 反代独立源修复（后端 agent）：反代拆到同 host 的独立端口（`dshProxyPort`，默认 4098），iframe 保留反代端口自己的源，子资源不再受 opaque origin 的 cookie/CORS 限制；新增 `GET /api/config` 返回 `dshBase`、`GET /api/workspaces/:id/dsh/status` 由控制面代探活。406 后端测试全绿。

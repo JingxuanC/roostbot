@@ -3,6 +3,14 @@
 //   GET|HEAD|POST|PUT|PATCH|DELETE /w/:workspaceId/dsh/*   反代到 127.0.0.1:<DSH_WEB_PORT>
 //   POST                           /w/:workspaceId/dsh/session  签发短时 cookie
 //   GET                            /api/workspaces/:id/panels     已启用插件声明的面板
+//   GET                            /api/workspaces/:id/dsh/status 面板容器探活
+//
+// 独立源（ADR 0004）：
+//   控制面在第二个监听端口（ServerOptions.dshProxyPort）只伺服上面这组 /w/.../dsh 路由。
+//   cookie 不区分端口，所以主端口签发的会话 cookie 对同 host 的反代端口同样有效；iframe 用
+//   `allow-scripts allow-same-origin` 时保留的是反代端口自己的源，与主控制面（另一个端口）
+//   仍是跨源，插件代码碰不到主控制面的 DOM/storage。反代端口不重复主控制面的 Origin 校验，
+//   鉴权仍由 cookie / Bearer 负责。
 //
 // 鉴权（为什么不是 Authorization 头）：
 //   iframe 用 `sandbox="allow-scripts"`（**不加 allow-same-origin**），文档是 opaque origin，
@@ -438,6 +446,62 @@ async function collectAndRewrite(
   headers['content-length'] = String(body.byteLength)
   res.writeHead(status, headers)
   res.end(body)
+}
+
+// ---- 面板容器探活 ------------------------------------------------------------
+
+/** 探活超时（毫秒）。 */
+export const DSH_STATUS_TIMEOUT_MS = 1500
+
+/**
+ * GET /api/workspaces/:id/dsh/status（Bearer，任意成员）。
+ * 由控制面代探 127.0.0.1:<dshWebPort>/：前端不必从主控制面源跨源 fetch 反代端口（没有 CORS）。
+ * 探活失败不是服务错误：始终 200，用 available 区分，避免前端把"没启动"当接口故障。
+ */
+export async function handleDshStatus(
+  ctx: DshRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  workspaceId: string,
+): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) {
+    sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
+    return
+  }
+  if (!(await isWorkspaceMember(ctx, workspaceId, auth.session.accountId))) {
+    sendError(res, 404, 'workspace_not_found', 'unknown workspace')
+    return
+  }
+
+  const status = await probeDshWeb(ctx.dshWebPort, DSH_STATUS_TIMEOUT_MS)
+  if (status === null) sendJson(res, 200, { available: false })
+  else sendJson(res, 200, { available: true, status })
+}
+
+/** 对 127.0.0.1:<port>/ 发 GET；拿到任意 HTTP 响应即视为可用。 */
+function probeDshWeb(port: number, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (status: number | null): void => {
+      if (settled) return
+      settled = true
+      resolve(status)
+    }
+    const probe = http.request(
+      { host: '127.0.0.1', port, method: 'GET', path: '/', headers: { accept: '*/*' } },
+      (upstreamRes) => {
+        finish(upstreamRes.statusCode ?? 0)
+        upstreamRes.resume()
+      },
+    )
+    probe.setTimeout(timeoutMs, () => {
+      finish(null)
+      probe.destroy()
+    })
+    probe.on('error', () => finish(null))
+    probe.end()
+  })
 }
 
 // ---- 面板清单 ----------------------------------------------------------------

@@ -35,7 +35,13 @@ iframe 打开面板。产品主界面（房间、Bot、设置、市场）永远�
 ## 约束
 
 1. **DSH Web 只绑 127.0.0.1**，外部只能经控制面反代（带设备会话校验）
-2. iframe 用独立源 + `sandbox="allow-scripts"`，不与我们同源
+2. iframe 用独立源 + `sandbox="allow-scripts allow-same-origin"`，不与我们同源。
+   独立源的做法是：控制面在**同 host、不同端口**再起一个只服务 `/w/<workspace>/dsh/*`
+   的监听（`ServerOptions.dshProxyPort`），iframe 指向该端口。cookie 不区分端口，主端口
+   签发的会话 cookie 对反代端口同样有效；iframe 保留的是反代端口自己的 origin，与主控制面
+   （另一个端口）仍是跨源，插件代码碰不到主控制面的 DOM/storage。纯 `allow-scripts`
+   不带 `allow-same-origin` 是 opaque origin，子资源（`<script src>`/fetch）带不上 cookie
+   且被 CORS 阻断，真实 DSH Web 无法工作，因此不再采用。
 3. 面板空闲时随沙箱 stop/start；打开面板才唤醒（不常驻占用）
 4. 插件的 host 半不依赖 DSH Web：面板缺失时工具/技能照常工作
 5. 每个用户两个 DSH 进程（sdk / web），内存预算按 ~400MB 估，沙箱规格要留余量
@@ -50,6 +56,8 @@ iframe 打开面板。产品主界面（房间、Bot、设置、市场）永远�
 ## 待办
 
 - [x] 反代路由与 base path 细节（`/w/<workspace>/dsh/*`；`apps/api/src/dsh-proxy-routes.ts`）
-- [ ] iframe 容器组件与 CSP
+- [x] 反代独立源监听（`ServerOptions.dshProxyPort`，同 host 不同端口；`GET /api/config` 下发
+      `dshBase`，`GET /api/workspaces/:id/dsh/status` 代探面板容器）
+- [ ] iframe 容器组件与 CSP（前端切到 `dshBase` + `allow-same-origin`）
 - [x] 面板清单接口（manifest `panels` 声明；实际注册数冒烟留后续）
 - [ ] 沙箱规格与内存预算更新

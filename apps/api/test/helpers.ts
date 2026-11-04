@@ -47,6 +47,8 @@ export interface Harness {
   store: StorePort
   clock: ManualClock
   baseUrl: string
+  /** 独立反代源（dshProxyPort 启用时）；测试直接对它发请求。 */
+  dshProxyUrl?: string
   call: (method: string, path: string, options?: CallOptions) => Promise<ApiResult>
   close: () => Promise<void>
   /** 仅 SQLite harness 有：设备/会话/事件相关接口需要它。 */
@@ -86,6 +88,8 @@ function makeCaller(baseUrl: string) {
 export interface HarnessOptions {
   /** 假上游 dsh web 端口（反代测试用）；不传则用默认 4099。 */
   dshWebPort?: number
+  /** 独立反代端口：0=随机（测试常用）；不传=不启动。 */
+  dshProxyPort?: number
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -97,12 +101,14 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     port: 0,
     host: '127.0.0.1',
     ...(options.dshWebPort === undefined ? {} : { dshWebPort: options.dshWebPort }),
+    ...(options.dshProxyPort === undefined ? {} : { dshProxyPort: options.dshProxyPort }),
   })
 
   return {
     store,
     clock,
     baseUrl: started.url,
+    ...(started.dshProxyUrl === undefined ? {} : { dshProxyUrl: started.dshProxyUrl }),
     call: makeCaller(started.url),
     close: started.close
   }
@@ -123,6 +129,7 @@ export async function startSqliteHarness(options: HarnessOptions = {}): Promise<
     port: 0,
     host: '127.0.0.1',
     ...(options.dshWebPort === undefined ? {} : { dshWebPort: options.dshWebPort }),
+    ...(options.dshProxyPort === undefined ? {} : { dshProxyPort: options.dshProxyPort }),
   })
 
   return {
@@ -130,6 +137,7 @@ export async function startSqliteHarness(options: HarnessOptions = {}): Promise<
     rawStore,
     clock,
     baseUrl: started.url,
+    ...(started.dshProxyUrl === undefined ? {} : { dshProxyUrl: started.dshProxyUrl }),
     call: makeCaller(started.url),
     close: async () => {
       await started.close()

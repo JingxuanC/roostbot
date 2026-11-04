@@ -80,6 +80,7 @@ import { startSchedulerLoop } from './scheduler-loop.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
   handleDshRequest,
+  handleDshStatus,
   handleListWorkspacePanels,
   isDshProxyPath,
   resolveDshWebPort,
@@ -169,6 +170,12 @@ export interface ServerOptions {
    */
   dshWebPort?: number
   /**
+   * 独立的 DSH 反代监听端口（ADR 0004「独立源」）：undefined=不启动，0=随机端口（测试），
+   * >0=固定端口。该端口只服务 /w/:workspaceId/dsh/*，不走主控制面的 Origin 校验；
+   * 鉴权仍由 cookie/Bearer 负责。cookie 不区分端口，主端口签发的会话 cookie 对它同样有效。
+   */
+  dshProxyPort?: number
+  /**
    * 是否启动控制面调度 tick 循环（默认 false；ROOST_SCHEDULER=1 时也会启动）。
    * 测试直接用 store.tick，不走真实定时器。
    */
@@ -178,7 +185,15 @@ export interface ServerOptions {
 export interface StartedServer {
   server: http.Server
   url: string
+  /** 独立反代源（如 `http://127.0.0.1:4098`）；未启用反代端口时为 undefined。 */
+  dshProxyUrl?: string
   close: () => Promise<void>
+}
+
+/** 启动期共享的可变状态：随机反代端口的实际值要 listen 之后才知道，/api/config 需要读它。 */
+export interface ServerState {
+  dshProxyPort?: number
+  dsh?: DshRouteContext
 }
 
 /** 鉴权只需要 store 与时钟；新的路由模块用这个最小形状，不依赖 server 内部状态。 */
@@ -203,6 +218,8 @@ interface HandlerContext extends AuthContext {
   attachments?: AttachmentsRuntime
   /** DSH Web 反代与面板清单（ADR 0004）。 */
   dsh: DshRouteContext
+  /** 反代端口的实际绑定值等启动期可变状态。 */
+  serverState: ServerState
 }
 
 type Clock = () => number
@@ -779,6 +796,43 @@ async function handleCreateWorkspace(ctx: HandlerContext, req: IncomingMessage, 
 }
 
 
+// ---- 客户端配置 --------------------------------------------------------------
+
+/**
+ * GET /api/config（无需鉴权）：告诉前端反代源地址。
+ * 用请求 Host 的主机名（去端口、保留 IPv6 方括号）+ 实际反代端口拼出 dshBase；
+ * 没有启用反代端口时返回 null。主机名不合法回退 127.0.0.1，避免把任意 Host 透出成 URL。
+ */
+function handleGetConfig(ctx: HandlerContext, req: IncomingMessage, res: ServerResponse): void {
+  const port = ctx.serverState.dshProxyPort
+  const dshBase =
+    port === undefined || port <= 0 ? null : `http://${hostnameFromHostHeader(req.headers.host)}:${port}`
+  sendJson(res, 200, { dshBase })
+}
+
+/** 从 Host 头取主机名：去掉端口，IPv6 字面量保留方括号；非法值回退 127.0.0.1。 */
+export function hostnameFromHostHeader(host: string | undefined): string {
+  if (host === undefined) return DEFAULT_HOST
+  const trimmed = host.trim()
+  if (trimmed === '') return DEFAULT_HOST
+
+  // IPv6 字面量必须带方括号：`[::1]:4098` → `[::1]`。
+  if (trimmed.startsWith('[')) {
+    const end = trimmed.indexOf(']')
+    if (end < 0) return DEFAULT_HOST
+    const inner = trimmed.slice(1, end)
+    const rest = trimmed.slice(end + 1)
+    if (rest !== '' && !/^:\d+$/.test(rest)) return DEFAULT_HOST
+    return /^[0-9A-Fa-f:.]+$/.test(inner) ? `[${inner}]` : DEFAULT_HOST
+  }
+
+  // 主机名 / IPv4：只允许字母数字、点、连字符、下划线，拒绝冒号以外的注入字符。
+  const name = trimmed.split(':')[0] ?? ''
+  if (name === '' || name.length > 253) return DEFAULT_HOST
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) return DEFAULT_HOST
+  return name
+}
+
 // ---- 同源伺服 apps/web -------------------------------------------------------
 // 浏览器直连 ?api= 会触发跨源预检，而控制面没有 CORS（有意：v0 不回 CORS 头）。
 // 所以把网页也从控制面伺服，页面用同源相对路径调 API，一个进程就是完整应用。
@@ -1271,6 +1325,16 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // 前端启动时读一次：反代源地址（无鉴权；只含本机 Host 拼出的地址，不泄漏秘密）。
+  if (path === '/api/config') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    handleGetConfig(ctx, req, res)
+    return
+  }
+
   if (path === '/api/pairing/code') {
     if (method !== 'POST') {
       notFound(req, res, method, path)
@@ -1323,6 +1387,22 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     notFound(req, res, method, path)
+    return
+  }
+
+  // 面板容器探活（Bearer，任意成员）：由控制面代探，前端不跨源。
+  if (/^\/api\/workspaces\/[^/]+\/dsh\/status$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/dsh\/status$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null || workspaceId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace dsh status path')
+      return
+    }
+    await handleDshStatus(ctx.dsh, req, res, workspaceId)
     return
   }
 
@@ -2017,8 +2097,21 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
 }
 
 /** 返回未监听的 node:http Server；要直接起服务用 startServer()。 */
-export function createServer(options: ServerOptions): http.Server {
+export function createServer(options: ServerOptions, sharedState?: ServerState): http.Server {
   const now: Clock = options.now ?? (() => Date.now())
+  // 反代端口 0 表示随机端口，实际值要 listen 后写回 state；主控制面的 /api/config 从这里读。
+  const state: ServerState = sharedState ?? { dshProxyPort: options.dshProxyPort }
+  if (state.dshProxyPort === undefined) state.dshProxyPort = options.dshProxyPort
+  const dsh: DshRouteContext = {
+    store: options.store,
+    now,
+    dshWebPort: resolveDshWebPort(options.dshWebPort),
+    // cookie 签名密钥与附件共用 ROOST_SIGNING_SECRET；都没配置则本进程随机（重启后旧 cookie 失效）。
+    signingSecret:
+      options.signingSecret ?? process.env.ROOST_SIGNING_SECRET ?? randomBytes(32).toString('hex'),
+    ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
+  }
+  state.dsh = dsh
   const ctx: RoomRouteContext = {
     store: options.store,
     now,
@@ -2027,15 +2120,8 @@ export function createServer(options: ServerOptions): http.Server {
     sessionAccounts: new Set<string>(),
     streamPollMs: options.streamPollMs ?? 700,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
-    dsh: {
-      store: options.store,
-      now,
-      dshWebPort: resolveDshWebPort(options.dshWebPort),
-      // cookie 签名密钥与附件共用 ROOST_SIGNING_SECRET；都没配置则本进程随机（重启后旧 cookie 失效）。
-      signingSecret:
-        options.signingSecret ?? process.env.ROOST_SIGNING_SECRET ?? randomBytes(32).toString('hex'),
-      ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
-    },
+    dsh,
+    serverState: state,
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
     ...(options.rawStore === undefined
@@ -2078,14 +2164,28 @@ export function createServer(options: ServerOptions): http.Server {
   return server
 }
 
-/** 起服务并等到 listening：默认 127.0.0.1，port 0 表示随机端口（测试用）。 */
-export async function startServer(
-  options: ServerOptions & { port?: number; host?: string }
-): Promise<StartedServer> {
-  const server = createServer(options)
-  const port = options.port ?? DEFAULT_PORT
-  const host = options.host ?? DEFAULT_HOST
+/**
+ * 独立源监听（ADR 0004）：只接管 /w/:workspaceId/dsh/*，其余一律 JSON 404。
+ * 不做主控制面的 Origin 校验——这个源只服务反代，鉴权仍由 cookie/Bearer 负责。
+ */
+function createDshProxyServer(ctx: DshRouteContext): http.Server {
+  return http.createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://dsh-proxy.local')
+    if (!isDshProxyPath(url.pathname)) {
+      req.resume()
+      sendError(res, 404, 'not_found', `no route for ${req.method ?? 'GET'} ${url.pathname}`)
+      return
+    }
+    handleDshRequest(ctx, req, res, url).catch((err: unknown) => {
+      console.error('roost api: dsh proxy request error', err)
+      if (!res.headersSent) sendError(res, 500, 'internal_error', 'internal error')
+      else if (!res.writableEnded) res.destroy()
+    })
+  })
+}
 
+/** listen 并返回实际端口（port 0 时由内核分配）。 */
+async function listenOn(server: http.Server, port: number, host: string): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => {
       server.off('listening', onListening)
@@ -2099,9 +2199,58 @@ export async function startServer(
     server.once('listening', onListening)
     server.listen(port, host)
   })
-
   const address = server.address()
-  const boundPort = typeof address === 'object' && address !== null ? address.port : port
+  return typeof address === 'object' && address !== null ? address.port : port
+}
+
+function closeServer(server: http.Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (err) reject(err)
+      else resolve()
+    })
+    // fetch/undici 会保持 keep-alive 连接；不主动清掉，close() 会等到超时。
+    server.closeAllConnections()
+  })
+}
+
+/** 起服务并等到 listening：默认 127.0.0.1，port 0 表示随机端口（测试用）。 */
+export async function startServer(
+  options: ServerOptions & { port?: number; host?: string }
+): Promise<StartedServer> {
+  const requestedProxyPort = options.dshProxyPort
+  if (
+    requestedProxyPort !== undefined &&
+    (!Number.isInteger(requestedProxyPort) || requestedProxyPort < 0 || requestedProxyPort > 65535)
+  ) {
+    throw new Error(`dshProxyPort must be an integer between 0 and 65535, got ${requestedProxyPort}`)
+  }
+
+  const state: ServerState = { dshProxyPort: requestedProxyPort }
+  const server = createServer(options, state)
+  const port = options.port ?? DEFAULT_PORT
+  const host = options.host ?? DEFAULT_HOST
+
+  const boundPort = await listenOn(server, port, host)
+
+  // 第二个监听端口：同 host、不同端口 = 独立 origin（cookie 不区分端口）。
+  let dshProxyServer: http.Server | undefined
+  let dshProxyUrl: string | undefined
+  if (requestedProxyPort !== undefined) {
+    const dsh = state.dsh
+    if (dsh === undefined) throw new Error('dsh route context was not initialized')
+    dshProxyServer = createDshProxyServer(dsh)
+    try {
+      const boundProxyPort = await listenOn(dshProxyServer, requestedProxyPort, host)
+      state.dshProxyPort = boundProxyPort
+      dshProxyUrl = `http://${host}:${boundProxyPort}`
+    } catch (err) {
+      // 主监听已经起来：失败时一起收掉，不留半启动状态。
+      dshProxyServer.removeAllListeners()
+      await closeServer(server).catch(() => {})
+      throw err
+    }
+  }
 
   const schedulerEnabled = options.schedulerLoop === true || process.env.ROOST_SCHEDULER === '1'
   const stopScheduler =
@@ -2115,15 +2264,11 @@ export async function startServer(
   return {
     server,
     url: `http://${host}:${boundPort}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        stopScheduler?.()
-        server.close((err) => {
-          if (err) reject(err)
-          else resolve()
-        })
-        // fetch/undici 会保持 keep-alive 连接；不主动清掉，close() 会等到超时。
-        server.closeAllConnections()
-      })
+    ...(dshProxyUrl === undefined ? {} : { dshProxyUrl }),
+    close: async () => {
+      stopScheduler?.()
+      const proxy = dshProxyServer
+      await Promise.all([closeServer(server), ...(proxy === undefined ? [] : [closeServer(proxy)])])
+    }
   }
 }

@@ -25,6 +25,23 @@ function readPort(): number {
   return port
 }
 
+/**
+ * DSH 反代端口：`ROOST_DSH_PROXY_PORT` 未设置时默认 4098；`0` 表示禁用（不启动第二监听）。
+ * 返回 undefined = 禁用。
+ */
+function readDshProxyPort(): number | undefined {
+  const raw = process.env['ROOST_DSH_PROXY_PORT']
+  if (raw === undefined || raw.trim() === '') return 4098
+  const port = Number(raw.trim())
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error(
+      `roost api: ROOST_DSH_PROXY_PORT must be an integer between 0 and 65535, got ${JSON.stringify(raw)}`
+    )
+    process.exit(2)
+  }
+  return port === 0 ? undefined : port
+}
+
 function installShutdown(started: StartedServer): void {
   let closing = false
   const shutdown = (signal: string): void => {
@@ -55,6 +72,7 @@ async function main(): Promise<void> {
   const port = readPort()
   // 沙箱要通过 host.openshell.internal 访问控制面，所以默认仍是回环，但允许显式放开。
   const host = process.env.ROOST_HOST ?? DEFAULT_HOST
+  const dshProxyPort = readDshProxyPort()
   const raw = process.env.ROOST_DB
   const memory = raw === 'memory'
   const dbPath = memory ? undefined : resolve(raw === undefined || raw === '' ? join(process.cwd(), 'data', 'roost.db') : raw)
@@ -82,7 +100,8 @@ async function main(): Promise<void> {
       port,
       host,
       ...(sqlite === undefined ? {} : { rawStore: sqlite }),
-      ...(runtimeManager === undefined ? {} : { runtimeManager })
+      ...(runtimeManager === undefined ? {} : { runtimeManager }),
+      ...(dshProxyPort === undefined ? {} : { dshProxyPort })
     })
   } catch (err) {
     console.error(`roost api: failed to listen on ${host}:${port}`, err)
@@ -93,6 +112,9 @@ async function main(): Promise<void> {
   console.log(
     `roost api listening on ${started.url} (${sqlite === undefined ? 'memory store; state is lost on exit' : `sqlite ${dbPath}`}${runtimeManager === undefined ? '' : ', sandbox manager on'})`
   )
+  if (started.dshProxyUrl !== undefined) {
+    console.log(`roost api: dsh proxy on ${started.dshProxyUrl}`)
+  }
   installShutdown(started)
 }
 

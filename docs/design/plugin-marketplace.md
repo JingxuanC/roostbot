@@ -66,7 +66,7 @@ permissions:
 | 项 | 决定 |
 |---|---|
 | 绑定 | `dsh web` 只绑 127.0.0.1，外部只能经控制面反代 |
-| 鉴权 | 反代校验设备会话；iframe 用独立源 + `sandbox="allow-scripts"` |
+| 鉴权 | 反代校验设备会话；iframe 用独立源（同 host 不同端口）+ `sandbox="allow-scripts allow-same-origin"` |
 | 生命周期 | 面板随沙箱 stop/start；打开面板才唤醒 |
 | host 半 | 不依赖 DSH Web；面板缺失时工具/技能照常 |
 | 面板清单 | 插件 manifest 的 `panels` 声明 + 启动冒烟核对实际注册数 |
@@ -257,3 +257,13 @@ Bot 设置里的工具列表要标**来源**（`mcp__data__* ← 行情中心`�
     manifest `panels` 数组，返回 `{panels:[{pluginSlug,name,title?,slot?,path?}]}`；
     memory port（无 rawStore）一律 503。**未做**：DSH Web 实际注册数冒烟、WebSocket upgrade、
     生命周期唤醒/休眠（见 ADR 0004 待办）。
+- **2026-11-04（M5-5.2 后续：独立源）**：新增 `ServerOptions.dshProxyPort`（undefined=不启动、
+  0=随机端口、>0=固定端口），`startServer` 在同一 host 的第二个端口只伺服 `/w/<id>/dsh/*`
+  （不做主控制面的 Origin 校验，鉴权仍走 cookie/Bearer），`StartedServer.dshProxyUrl` 暴露地址，
+  `close()` 同时关闭两个监听。cookie 不区分端口，主端口签发的会话 cookie 对反代端口同样有效；
+  iframe 用 `allow-scripts allow-same-origin` 时保留的是反代端口的源，与主控制面仍跨源。
+  控制面新增 `GET /api/config`（无鉴权，`{dshBase}`，用请求 Host 主机名 + 实际反代端口拼接，
+  未启用为 null）与 `GET /api/workspaces/:id/dsh/status`（Bearer、任意成员，代探
+  `127.0.0.1:<DSH_WEB_PORT>/`，1.5s 超时，可达 200 `{available:true,status}`、不可达 200
+  `{available:false}`）。`main.ts` 默认监听 4098（`ROOST_DSH_PROXY_PORT`，`0`=禁用）。
+  **前端未切换**（仍由另一批把 iframe 指向 `dshBase`）；WebSocket upgrade 仍未支持。
