@@ -50,7 +50,7 @@ API 地址：默认同源；`?api=http://127.0.0.1:8787` 可指定（受 CORS �
 | `@` 成员菜单 | **真**：方向键 + 回车插入；中文名前缀消歧（`lib/mentions.js`） |
 | 轮次状态（谁在说 / 排队 / 失败 / 静默） | **真**（有数据才渲染）：`room.round.slots` + SSE `round`/`status`/`speaking`；接口暂未接轮次时整块隐藏 |
 | 房间来源 | **真**：`room.createdByKind === 'bot'` 时在房间列表/房间头显示「由 Bot 创建」，title 带 `createdBy` |
-| Bot 头像上传 | **真**（带限制）：读成 dataURL、预览/移除，随 `PATCH /api/bots/:id` 发 `avatar.image`；服务端当前仍有 512 字符上限，大图会被拒（见偏差 9） |
+| Bot 头像上传 | **真**：读成 dataURL、预览/移除，随 `PATCH /api/bots/:id` 发 `avatar.image`；前端卡 256KB，服务端 `avatar.image` 上限 512k 字符、JSON body 上限 1MiB |
 | 需要你 / 审批 | **真**：`#/approvals` 读 `GET /api/approvals`，批准/拒绝走 `POST /api/approvals/:id`；接口 404/405/501/503 时显示「审批接口未就绪」 |
 | 房间删除 | 按钮会真的发 `DELETE /api/rooms/:id`；契约与当前控制面都没有这个接口，所以会如实显示 404 错误 |
 | 「需要你」抽屉（房间页） | **样例**。预览房间时显示；连上控制面后隐藏；真实审批在 `#/approvals` |
@@ -124,9 +124,8 @@ node --check apps/web/app.js
    遇到已有的 `auto` 房间会显示提示，保存时必须显式选三种之一。
 8. **`?api=` 跨源**：控制面仍不回 CORS 头，跨源预检会失败；页面会如实报「连不上 API」。
    同源伺服（默认）是当前唯一顺畅的用法。
-9. **头像上传受服务端上限阻塞**：前端按 256KB 读 dataURL，但 `packages/store/src/bots.ts` 的
-   `readAvatar()` 目前把 `avatar.image` 卡在 512 字符，PATCH 会返回 `bot.invalid`。前端如实显示
-   错误、不改本地 state；要端到端可用需要服务端放宽上限或改走 multipart 图标接口。
+9. **头像走 dataURL 而不是 multipart**：前端把 ≤256KB 图片读成 dataURL 存进 `avatar.image`；
+   服务端为 `image` 放宽到 512k 字符、JSON body 提到 1MiB（`bots.md` 的 `/icon` multipart 接口未做）。
 10. **软删恢复未上线**：`DELETE /api/bots/:id` 当前是硬删，没有「列出已删除 / 恢复」接口；
     Bot 列表的「已删除」筛选和设置页的「恢复」都是禁用态 + 文案，不假装能恢复。
 
@@ -136,14 +135,14 @@ node --check apps/web/app.js
 - @ 菜单是 `role="listbox"` + `option`，输入框带 `aria-expanded` / `aria-activedescendant`；
   方向键循环、回车插入、Esc 关闭、Tab 离开；IME 组合输入时不吃回车。
 - 房间页成员/轮次状态是 `role="status"`，只在有数据时出现。
-- 窄屏（≤860px）沿用原媒体查询：左栏收起、房间头露出「需要你」与「Bot」入口；路由页单列。
+- 窄屏（≤860px）沿用原媒体查询：左栏收起、房间头露出「审批」与「Bot」入口；路由页单列。
 - 只做深色：`<meta name="color-scheme" content="dark">`。
 
 ## 仍然没有的
 
 - 审批里的提问（question）交互与房间内联审批；真实审批目前只覆盖 Bot 建群。
 - 轮次引擎完整接入后的历史轮次、停止当前成员、重发去重提示。
-- Bot 头像生成 / 裁剪；上传已做，但受上面偏差 9 的服务端上限限制；定时 routine；插件/用量/连接器页。
+- Bot 头像生成 / 裁剪；上传已做（大小与类型在 `lib/avatar.js` 校验）；定时 routine；插件/用量/连接器页。
 - Bot 软删恢复（需要迁移与服务端接口）；当前删除是硬删。
 - 客户端状态持久化（刷新只保留 hash，不保留 token 与草稿）。
 - 移动端底部 Tab（当前用页面顶部导航 + 房间头入口）。

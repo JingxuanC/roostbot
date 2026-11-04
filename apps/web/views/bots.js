@@ -417,10 +417,11 @@ function settingsView(ctx, bot, bots) {
   avatarFile.addEventListener('change', async () => {
     const file = avatarFile.files && avatarFile.files[0]
     if (!file) return
+    // 立刻清空 input：同一个文件再选一次也要触发 change；读取期间不让文件名残留。
+    avatarFile.value = ''
     ui.setError(avatarError, '')
     ui.setStatus(avatarStatus, '正在读取图片…')
     const result = await readAvatarFile(file)
-    avatarFile.value = ''
     if (!result.ok) {
       // 失败时不动 avatarDraft：预览和保存内容都保持原样。
       ui.setStatus(avatarStatus, '')

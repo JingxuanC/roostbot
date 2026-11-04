@@ -110,7 +110,9 @@ export async function mountApprovalsPage(root, ctx) {
     if (workspaceId !== '') params.set('workspaceId', workspaceId)
     params.set('status', 'pending')
     const data = await ctx.api.get(`/api/approvals?${params.toString()}`)
-    approvals = listFrom(data)
+    approvals = listFrom(data).filter(
+      (item) => item !== null && typeof item === 'object' && !Array.isArray(item)
+    )
   } catch (error) {
     if (isAuthError(error)) {
       ctx.requirePair()
