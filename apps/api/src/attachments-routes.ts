@@ -14,16 +14,12 @@ import {
   MAX_ATTACHMENTS_PER_EVENT,
   MAX_AVATAR_BYTES,
   MAX_OBJECT_BYTES,
-  detectImageFormat,
   detectImageSize,
-  generateThumbnail,
-  stripJpegExif,
 } from '../../../packages/storage/src/index.ts'
 import { LocalVolumeStore } from '../../../packages/storage/src/index.ts'
 import {
   ATTACHMENT_RETENTION_MS,
   ARTIFACT_KINDS,
-  addAttachmentRef,
   appendEvent,
   deleteAttachmentRows,
   getArtifact,
@@ -34,6 +30,10 @@ import {
   recordAttachmentGc,
 } from '../../../packages/store/src/index.ts'
 import type { Artifact, ArtifactKind } from '../../../packages/store/src/index.ts'
+import { persistThumbnail, prepareUpload } from './attachments-thumbnails.ts'
+import type { StoredThumbnail } from './attachments-thumbnails.ts'
+import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
+import type { RuntimeRequestAuth } from './runtime-auth.ts'
 import { authenticate, sendError, sendJson } from './server.ts'
 import type { AuthContext } from './server.ts'
 
@@ -124,29 +124,18 @@ function positiveIntHeader(req: IncomingMessage, name: string): number | null | 
   return Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
-function runtimeTokenFrom(req: IncomingMessage): string | null {
-  const direct = header(req, 'x-runtime-token')
-  if (direct !== null) return direct
-  const auth = (req.headers.authorization ?? '').trim()
-  const match = /^Runtime[ ]+(\S+)$/.exec(auth)
-  return match === null ? null : match[1]!
-}
-
-function authorizeRuntime(ctx: AttachmentsRouteContext, req: IncomingMessage, res: ServerResponse): boolean {
-  if (ctx.runtimeToken === undefined || ctx.runtimeToken === '') {
-    sendError(res, 404, 'not_found', 'internal api is disabled')
-    return false
-  }
-  const token = runtimeTokenFrom(req)
-  if (token === null || token !== ctx.runtimeToken) {
-    sendError(res, 401, 'unauthenticated', 'runtime token required')
-    return false
-  }
+function requireRuntimeAuth(
+  ctx: AttachmentsRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+): RuntimeRequestAuth | null {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return null
   if (ctx.rawStore === undefined || ctx.attachments === undefined) {
     sendError(res, 503, 'runtime.not_configured', 'content storage needs the SQLite store')
-    return false
+    return null
   }
-  return true
+  return auth
 }
 
 function cleanMime(value: string | null): string {
@@ -183,16 +172,13 @@ function artifactJson(artifact: Artifact): Record<string, unknown> {
   }
 }
 
-/** 图片登记前整理：JPEG 剥 EXIF，读宽高。 */
-function prepareImage(bytes: Buffer, kind: string, mime: string): {
-  bytes: Buffer
-  width: number | null
-  height: number | null
-} {
-  if (kind !== 'image' && !mime.startsWith('image/')) return { bytes, width: null, height: null }
-  const stripped = detectImageFormat(bytes) === 'jpeg' ? Buffer.from(stripJpegExif(bytes)) : bytes
-  const size = detectImageSize(stripped)
-  return { bytes: stripped, width: size?.width ?? null, height: size?.height ?? null }
+/**
+ * 上传响应里的缩略图描述；null 表示这次没有可用缩略图（不代表上传失败）。
+ * artifactId 是内容对象 id，与 `artifacts.thumb_id` / 消息附件里的 `thumbId` 同值。
+ */
+function thumbnailJson(thumb: StoredThumbnail | null): Record<string, unknown> | null {
+  if (thumb === null) return null
+  return { artifactId: thumb.artifactId, mime: thumb.mime, width: thumb.width, height: thumb.height }
 }
 
 /** POST /api/internal/artifacts —— runtime 以 raw body 登记产物。 */
@@ -201,7 +187,8 @@ export async function handleInternalArtifactUpload(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = requireRuntimeAuth(ctx, req, res)
+  if (auth === null) return
   const store = ctx.rawStore!
   const runtime = ctx.attachments!
 
@@ -219,6 +206,11 @@ export async function handleInternalArtifactUpload(
   }
 
   if (workspaceId === null) return fail(400, 'invalid_body', 'x-workspace-id is required')
+  // workspace token 只能往自己的 workspace 登记产物。
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) {
+    req.resume()
+    return
+  }
   if (producedBy === null || producedBy.length > 128) {
     return fail(400, 'invalid_body', 'x-produced-by is required')
   }
@@ -267,8 +259,10 @@ export async function handleInternalArtifactUpload(
   if (body.bytes.byteLength === 0) return sendError(res, 400, 'invalid_body', 'artifact body is empty')
 
   try {
-    const prepared = prepareImage(body.bytes, kind, mime)
-    const stored = await runtime.content.put(prepared.bytes, {
+    // 原图先整理（JPEG 剥 EXIF），缩略图另行尽力生成；缩略图失败不阻断上传。
+    const upload = await prepareUpload({ bytes: body.bytes, mime })
+    const imageSize = detectImageSize(upload.bytes)
+    const stored = await runtime.content.put(upload.bytes, {
       mime,
       owner: producedBy,
       audience: 'team',
@@ -284,31 +278,23 @@ export async function handleInternalArtifactUpload(
       createdAt: ctx.now(),
     })
 
-    // 缩略图尽力而为：没有 sips/convert 就 thumbId=null（PDF 首页缩略图 v0 不做）。
-    let thumbId: string | null = null
-    if (kind === 'image' || mime.startsWith('image/')) {
-      const thumb = await generateThumbnail(prepared.bytes, mime)
-      if (thumb !== null) {
-        const thumbObject = await runtime.content.put(thumb, {
-          mime: 'image/jpeg',
-          owner: producedBy,
-          audience: 'team',
-        })
-        putAttachment(store, {
-          id: thumbObject.id,
-          workspaceId,
-          sha256: thumbObject.sha256,
-          size: thumbObject.size,
-          mime: 'image/jpeg',
-          owner: producedBy,
-          audience: 'team',
-          createdAt: ctx.now(),
-        })
-        // 缩略图被产物引用：登记一条合成引用，避免 7 天后被 GC 掉。
-        addAttachmentRef(store, thumbObject.id, `artifact:${stored.id}`)
-        thumbId = thumbObject.id
-      }
+    // 缩略图存成独立内容对象（artifacts.thumb_id 指向它），并写合成引用避免被 GC。
+    let thumbUnavailable = upload.thumbUnavailable
+    let thumbnail: StoredThumbnail | null = null
+    if (upload.thumbnail !== undefined) {
+      thumbnail = await persistThumbnail({
+        store,
+        content: runtime.content,
+        thumbnail: upload.thumbnail,
+        workspaceId,
+        owner: producedBy,
+        createdAt: ctx.now(),
+        audience: 'team',
+        ownerArtifactId: stored.id,
+      })
+      if (thumbnail === null) thumbUnavailable ??= 'thumbnail could not be stored'
     }
+    const thumbId = thumbnail === null ? null : thumbnail.artifactId
 
     const artifact = putArtifact(store, {
       id: stored.id,
@@ -317,8 +303,8 @@ export async function handleInternalArtifactUpload(
       mime,
       name,
       size: stored.size,
-      width: prepared.width,
-      height: prepared.height,
+      width: imageSize?.width ?? null,
+      height: imageSize?.height ?? null,
       thumbId,
       producedBy,
       createdAt: ctx.now(),
@@ -343,7 +329,11 @@ export async function handleInternalArtifactUpload(
       },
     })
 
-    sendJson(res, 201, { artifact: artifactJson(artifact) })
+    sendJson(res, 201, {
+      artifact: artifactJson(artifact),
+      thumbnail: thumbnailJson(thumbnail),
+      ...(thumbUnavailable === undefined ? {} : { thumbUnavailable }),
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('roost api: artifact upload failed', err)
@@ -384,8 +374,8 @@ export async function handleUploadAttachment(
 
   const mime = cleanMime(header(req, 'x-file-mime') ?? req.headers['content-type'] ?? null)
   try {
-    const prepared = prepareImage(body.bytes, 'image', mime)
-    const stored = await ctx.attachments.content.put(prepared.bytes, {
+    const upload = await prepareUpload({ bytes: body.bytes, mime })
+    const stored = await ctx.attachments.content.put(upload.bytes, {
       mime,
       owner: auth.session.accountId,
       audience: 'team',
@@ -400,6 +390,19 @@ export async function handleUploadAttachment(
       audience: 'team',
       createdAt: ctx.now(),
     })
+    // 头像/临时附件没有 artifact 行，缩略图只作为独立内容对象登记（无产物引用）。
+    let thumbnail: StoredThumbnail | null = null
+    if (upload.thumbnail !== undefined) {
+      thumbnail = await persistThumbnail({
+        store: ctx.rawStore,
+        content: ctx.attachments.content,
+        thumbnail: upload.thumbnail,
+        workspaceId: workspaceId ?? '',
+        owner: auth.session.accountId,
+        createdAt: ctx.now(),
+        audience: 'team',
+      })
+    }
     const url = await ctx.attachments.content.signRead(stored.id, SIGNED_URL_TTL_SECONDS)
     sendJson(res, 201, {
       attachment: {
@@ -412,6 +415,8 @@ export async function handleUploadAttachment(
         createdAt: attachment.createdAt,
         url,
       },
+      thumbnail: thumbnailJson(thumbnail),
+      ...(upload.thumbUnavailable === undefined ? {} : { thumbUnavailable: upload.thumbUnavailable }),
     })
   } catch (err) {
     console.error('roost api: attachment upload failed', err)
@@ -524,7 +529,8 @@ export async function handleInternalAttachmentGc(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (!authorizeRuntime(ctx, req, res)) return
+  const auth = requireRuntimeAuth(ctx, req, res)
+  if (auth === null) return
   const store = ctx.rawStore!
   const runtime = ctx.attachments!
   const now = ctx.now()
@@ -532,7 +538,9 @@ export async function handleInternalAttachmentGc(
   let deleted = 0
   let bytes = 0
   try {
+    // GC 是全库扫描；workspace token 只清理自己 workspace 的过期附件。
     const candidates = listCollectableAttachments(store, { now, retentionMs: runtime.retentionMs })
+      .filter((candidate) => auth.workspaceId === null || candidate.workspaceId === auth.workspaceId)
     for (const candidate of candidates) {
       const removed = deleteAttachmentRows(store, [candidate.id])
       if (removed.length === 0) continue
