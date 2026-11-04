@@ -38,6 +38,13 @@ export const STORE_ERROR_CODES = [
   'BOT_NO_MODEL',
   'BOT_WRITE_FAILED',
   'BOT_RESTORE_EXPIRED',
+  // ---- 账号与一次性令牌（0019_auth.sql / accounts-auth.ts）------------------
+  'INVALID_ACCOUNT',
+  'ACCOUNT_EXISTS',
+  'ACCOUNT_NOT_FOUND',
+  'ACCOUNT_WRITE_FAILED',
+  'INVALID_AUTH_TOKEN',
+  'AUTH_TOKEN_WRITE_FAILED',
 ] as const
 
 export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number]
