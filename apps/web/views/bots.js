@@ -272,7 +272,6 @@ function createView(ctx, bots) {
     }
   })
 
-  void loadToolSources()
   return el('div', { class: 'stack' }, [header, form])
 }
 
