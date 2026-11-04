@@ -19,7 +19,9 @@ COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
 ENV DSH_HOME=/workspace/.dsh
 ENV HOME=/workspace
 WORKDIR /workspace
-RUN mkdir -p /workspace/.dsh
+# 沙箱以 uid 1000 运行，WORKDIR 必须对它是可用的（否则 OpenShell 报
+# "OCI WorkingDir is not usable by the sandbox identity"）。
+RUN mkdir -p /workspace/.dsh && chown -R 1000:1000 /workspace
 
 # 沙箱主进程：长活 room-agent（内部再起 `dsh --profile sdk`）。
 CMD ["node", "/opt/roost/room-agent.mjs"]
