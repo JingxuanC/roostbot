@@ -18,7 +18,14 @@ import { $, avatar, botAvatar, el } from './lib/dom.js'
 import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
-import { routeMatch } from './lib/routing.js'
+import { canonicalWorkspaceRoute, routeMatch } from './lib/routing.js'
+import {
+  NOTIFICATION_TITLE,
+  notificationPermission,
+  planApprovalNotification,
+  readNotificationPref,
+  supportsNotifications,
+} from './lib/notifications.js'
 import { insertMention, parseMentionQuery } from './lib/mentions.js'
 import {
   roomMembers,
@@ -931,6 +938,8 @@ function navigate(hash) {
 /** 受保护页面发现会话失效：回配对页，并记住原地址。message 用于特定场景（如吊销当前设备）。 */
 function requirePair(message = '') {
   if (location.hash !== '#/' && location.hash !== '') pendingRoute = location.hash
+  stopNeedsPolling()
+  resetApprovalNotifyState()
   navigate('#/')
   const note = $('#pair-note')
   if (note) {
@@ -1063,6 +1072,77 @@ function pageContext() {
 
 let needsCountSeq = 0
 
+// 通知（TODO 5.5.6）：按 approval id 去重，同一批只提醒一次。首轮只建基线。
+const NEEDS_POLL_MS = 60_000
+const approvalNotifyState = {
+  knownIds: new Set(),
+  notifiedIds: new Set(),
+  ready: false,
+}
+let needsPollTimer = null
+
+function resetApprovalNotifyState() {
+  approvalNotifyState.knownIds = new Set()
+  approvalNotifyState.notifiedIds = new Set()
+  approvalNotifyState.ready = false
+}
+
+function stopNeedsPolling() {
+  if (needsPollTimer) {
+    clearInterval(needsPollTimer)
+    needsPollTimer = null
+  }
+}
+
+/** 连上控制面后按 60s 刷新待审批；页面可见与否都跑，隐藏时才有系统通知。 */
+function startNeedsPolling() {
+  if (needsPollTimer) return
+  needsPollTimer = setInterval(() => {
+    void refreshNeedsCount()
+  }, NEEDS_POLL_MS)
+}
+
+/** 系统通知只在这一刻创建：权限必须在用户手势时已经拿到；失败就只保留角标。 */
+function showApprovalSystemNotification(body) {
+  if (!supportsNotifications() || notificationPermission() !== 'granted') return false
+  try {
+    const notification = new Notification(NOTIFICATION_TITLE, {
+      body,
+      tag: 'roost-approvals',
+      renotify: false,
+    })
+    notification.onclick = () => {
+      try {
+        window.focus()
+      } catch {
+        // 部分浏览器不允许脚本抢焦点；下面照样切路由。
+      }
+      navigate('#/approvals')
+      notification.close()
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 把一轮审批快照交给纯逻辑：去重 + 判断是否弹通知。 */
+function applyApprovalSnapshot(list) {
+  const plan = planApprovalNotification({
+    knownIds: approvalNotifyState.knownIds,
+    notifiedIds: approvalNotifyState.notifiedIds,
+    ready: approvalNotifyState.ready,
+    approvals: list,
+    enabled: readNotificationPref(),
+    permission: notificationPermission(),
+    hidden: typeof document !== 'undefined' && document.hidden === true,
+  })
+  approvalNotifyState.knownIds = plan.knownIds
+  approvalNotifyState.notifiedIds = plan.notifiedIds
+  approvalNotifyState.ready = plan.ready
+  if (plan.notify) showApprovalSystemNotification(plan.body)
+}
+
 /** 把真实 pending 数写到侧栏/房间头/抽屉标题；0 时隐藏角标，不显示样例 2。 */
 function setNeedsCount(count) {
   const value = Number.isInteger(count) && count > 0 ? count : 0
@@ -1092,6 +1172,8 @@ async function refreshNeedsCount() {
     const list = Array.isArray(data?.approvals) ? data.approvals : []
     const pending = list.filter((item) => item && item.status === 'pending').length
     setNeedsCount(pending)
+    // 通知只在页面隐藏且出现新的 approval id 时弹；页面可见只更新角标。
+    applyApprovalSnapshot(list)
   } catch {
     // 角标只是提示：401/未就绪/网络失败都不改样例数字，也不弹错。
   }
@@ -1132,6 +1214,82 @@ function renderNotFound(main) {
   )
 }
 
+function renderWorkspaceMismatch(main, workspaceId) {
+  main.replaceChildren(
+    ui.pageHeader('这个工作区不在当前账号下'),
+    ui.emptyState({
+      title: '工作区不匹配',
+      body: `链接里的工作区 ${workspaceId || '（空）'} 不属于当前账号。为免把内容误跳到别的工作区，这里不自动打开。`,
+      action: ui.linkButton('回到当前工作区', '#/bots', { variant: 'primary' }),
+      secondary: ui.linkButton('去配对', '#/', { variant: 'ghost' }),
+    })
+  )
+}
+
+/**
+ * 多端深链（ui.md §4）：先解析当前 workspace，再规范化成内部路由。
+ * 一致时 replaceState 改写地址栏（不产生历史噪音）；不一致时显示空态，不静默跳错。
+ */
+async function openWorkspaceDeepLink(route, seq) {
+  if (!hasToken()) {
+    requirePair()
+    return
+  }
+  let workspaceId = ''
+  try {
+    workspaceId = await ensureWorkspaceId()
+  } catch (error) {
+    if (seq !== routeSeq) return
+    if (isAuthError(error)) {
+      requirePair()
+      return
+    }
+    showView('page')
+    setTitle('打不开这个链接')
+    const main = $('#page-main')
+    if (main) {
+      main.replaceChildren(
+        ui.pageHeader('打不开这个链接'),
+        ui.errorState({
+          error,
+          message: `工作区载入失败：${error instanceof Error ? error.message : String(error)}`,
+          onRetry: () => void renderRoute(),
+          onPair: true,
+        })
+      )
+    }
+    return
+  }
+  if (seq !== routeSeq) return
+
+  const canonical = canonicalWorkspaceRoute(route, workspaceId)
+  if (!canonical || canonical.status === 'invalid') {
+    showView('page')
+    setTitle('找不到页面')
+    const main = $('#page-main')
+    if (main) renderNotFound(main)
+    return
+  }
+  if (canonical.status === 'mismatch') {
+    showView('page')
+    setTitle('工作区不匹配')
+    const main = $('#page-main')
+    if (main) renderWorkspaceMismatch(main, canonical.workspaceId)
+    window.scrollTo(0, 0)
+    return
+  }
+
+  // replaceState 不触发 hashchange，所以改写后手动按内部路由重渲染。
+  try {
+    history.replaceState(history.state, '', canonical.hash)
+  } catch {
+    // file:// 等受限环境：退化为普通跳转，仍不留在 /w/ 深链地址上。
+    location.hash = canonical.hash
+    return
+  }
+  await renderRoute()
+}
+
 async function renderRoute() {
   const seq = ++routeSeq
   closeMentionMenu()
@@ -1143,6 +1301,14 @@ async function renderRoute() {
     showView('pair')
     setTitle('配对')
     focusPairCode()
+    return
+  }
+  if (
+    route.name === 'workspaceRoom' ||
+    route.name === 'workspaceBot' ||
+    route.name === 'workspaceApprovals'
+  ) {
+    await openWorkspaceDeepLink(route, seq)
     return
   }
   if (route.name === 'room') {
@@ -1771,6 +1937,7 @@ async function enterLiveRoom(token) {
   STORE.rooms = rooms
   STORE.roomsLoaded = true
   LIVE.active = true
+  startNeedsPolling()
   renderSidebarRooms()
   try {
     await loadBots()
@@ -2012,6 +2179,48 @@ function setupNeedsPanel() {
   })
 }
 
+/** 窄屏侧栏抽屉（≤720px，纯 CSS 控制显隐）：顶栏按钮开合、遮罩点击关闭、Esc 关闭。 */
+function setupSidebarDrawer() {
+  const room = $('#room-view')
+  const toggle = $('#sidebar-toggle')
+  const scrim = $('#sidebar-scrim')
+  const sidebar = $('#sidebar')
+  if (!room || !toggle) return
+  let lastFocus = null
+  const isOpen = () => room.classList.contains('sidebar-open')
+
+  const setOpen = (open, opener) => {
+    room.classList.toggle('sidebar-open', open)
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+    toggle.setAttribute('aria-label', open ? '收起导航' : '展开导航')
+    if (scrim) scrim.hidden = !open
+    if (open) {
+      lastFocus = opener || document.activeElement
+      if (sidebar) sidebar.focus()
+      return
+    }
+    if (lastFocus && document.contains(lastFocus)) lastFocus.focus()
+  }
+
+  toggle.addEventListener('click', () => setOpen(!isOpen(), toggle))
+  if (scrim) scrim.addEventListener('click', () => setOpen(false))
+  if (sidebar) {
+    // 点侧栏里的链接就关掉抽屉，别挡着刚打开的房间/设置页。
+    sidebar.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('a')) setOpen(false)
+    })
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isOpen()) {
+      event.preventDefault()
+      setOpen(false)
+    }
+  })
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 720 && isOpen()) setOpen(false)
+  })
+}
+
 function setupComposer() {
   const form = $('#composer-form')
   const input = $('#composer')
@@ -2098,6 +2307,7 @@ function boot() {
   renderNeeds()
   setupPairing()
   setupNeedsPanel()
+  setupSidebarDrawer()
   setupComposer()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
@@ -2109,11 +2319,14 @@ function boot() {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('pagehide', () => {
     stopStream()
+    stopNeedsPolling()
     resetAttachmentUrls()
   })
-  // 从往返缓存恢复时 pagehide 已经关过流，这里补一次重连。
+  // 从往返缓存恢复时 pagehide 已经关过流，这里补一次重连与待审批轮询。
   window.addEventListener('pageshow', () => {
-    if (!LIVE.active || LIVE.stream || LIVE.reconnectTimer) return
+    if (!LIVE.active) return
+    startNeedsPolling()
+    if (LIVE.stream || LIVE.reconnectTimer) return
     LIVE.reconnectAttempt = 0
     void reconnectStream()
   })

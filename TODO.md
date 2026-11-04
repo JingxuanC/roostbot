@@ -6,7 +6,7 @@
 
 ## 进度
 
-- 完成：108 / 152 · 进行中：1
+- 完成：111 / 152 · 进行中：0
 - 8 项为清单建立前完成，见末尾「已完成」
 - TODO 总数从 149 增至 152（新增 4.2.16 / 4.2.17 / 4.2.18）
 - 当前里程碑：**M4 产品闭环**
@@ -131,9 +131,9 @@
 - [x] 5.5.1 设备管理页（列表/吊销/当前设备标记；吊销当前设备后重新配对）
 - [x] 5.5.2 同一 workspace 两窗口同步（`LIVE.seen` 统一去重 + 按 seq 乱序插入）
 - [x] 5.5.3 离线态与重连补拉（after=seq，指数退避 + online/visibility 触发）
-- [ ] 5.5.4 深链（`/w/:id/room/:id`、`/w/:id/bot/:id`）
-- [ ] 5.5.5 移动端布局
-- [ ] 5.5.6 通知策略（只在"需要你"时提醒）
+- [x] 5.5.4 深链（`#/w/:id/room/:id`、`#/w/:id/bot/:id`、`#/w/:id/approvals`，规范化/不一致空态）
+- [x] 5.5.5 移动端布局（≤720px 抽屉、表格滚动、44px 触控目标）
+- [x] 5.5.6 通知策略（仅「需要你」，按 approval id 去重，页面可见不弹系统通知）
 
 ## M6 商业化与规模化（P2）
 
@@ -272,3 +272,4 @@
 - 2026-11-04 M6 连接器 UI（前端 agent）：`#/connectors` 卡片（连接/断开/状态）、按 Bot 的 read/write/actions 授权表单、空目录与 501 网关未配置降级。全仓 601 测试全绿（前端 170）。
 - 2026-11-04 公网部署阻塞修复（后端 agent）：CSRF Origin 校验支持「同源（X-Forwarded-Proto + Host）」与 `ROOST_ALLOWED_ORIGINS` 精确白名单，仍拒绝 `null`/`*`；`/api/config` 推导 https 与 `ROOST_DSH_PROXY_PUBLIC_PORT`/`ROOST_DSH_PUBLIC_ORIGIN`；`/healthz` 执行 `SELECT 1`，失败 503 `db:error`。436 后端测试全绿；deploy/README 已同步。
 - 2026-11-04 M6 记忆系统（后端 agent）：迁移 0017（memories/memory_evidence/memory_reads）、falsifier 必填、scope 可见性、supersede 原子替换、关键词×置信度×新鲜度检索与 1200 token/8 条预算、50/日写入上限、软删与导出、`memory.*` 事件。458 后端测试全绿。LLM 抽取器、BM25/向量、复盘清理留后续。
+- 2026-11-04 M5 多端收尾（前端 agent）：深链 `#/w/:ws/...` 规范化与不一致空态；≤720px 抽屉式侧栏、表格横向滚动、44px 触控目标；设置页通知开关（仅「需要你」，页面隐藏时按 approval id 去重提醒）。全仓 644 测试全绿（前端 186）。

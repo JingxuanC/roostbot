@@ -12,6 +12,15 @@ import { el } from '../lib/dom.js'
 import { isAuthError } from '../lib/api-client.js'
 import { approvalGrantPayload, approvalGrantsView } from '../lib/approvals.js'
 import { isSettingsForbidden, isSettingsNotReady } from '../lib/settings.js'
+import {
+  notificationPermission,
+  notificationUiState,
+  permissionDeniedText,
+  readNotificationPref,
+  requestNotificationPermission,
+  supportsNotifications,
+  writeNotificationPref,
+} from '../lib/notifications.js'
 import * as ui from '../lib/ui.js'
 import { membersSection } from './settings-members.js'
 import { devicesSection } from './settings-devices.js'
@@ -125,6 +134,64 @@ export async function mountSettingsPage(root, ctx) {
   if (main) main.focus()
 }
 
+/**
+ * 通知开关（ui.md §3.6，TODO 5.5.6）：只在 change 事件里请求权限（用户手势）。
+ * 权限被拒绝时如实说明，不把开关留在「开」。
+ */
+function notificationSection() {
+  const supported = supportsNotifications()
+  const permission = notificationPermission()
+  const state = notificationUiState({
+    supported,
+    permission,
+    enabled: supported && readNotificationPref(),
+  })
+
+  const checkbox = el('input', {
+    type: 'checkbox',
+    id: 'notify-needs',
+    checked: state.checked,
+    disabled: state.disabled,
+  })
+  const text = el('span', { class: 'notify-text' })
+  text.append(el('span', { class: 'notify-label', text: '仅「需要你」时提醒' }))
+  text.append(
+    el('span', {
+      class: 'notify-desc muted',
+      text: '页面隐藏且出现新的待审批时弹系统通知；页面可见时只用应用内角标。',
+    })
+  )
+  const row = el('label', { class: 'notify-row', for: 'notify-needs' }, [checkbox, text])
+  const status = ui.statusLine(state.status)
+  ui.setStatus(status, state.status, state.kind === 'error' ? 'error' : 'ok')
+
+  checkbox.addEventListener('change', async () => {
+    if (!checkbox.checked) {
+      writeNotificationPref(false)
+      ui.setStatus(status, '已关闭：只保留应用内角标。')
+      return
+    }
+    checkbox.disabled = true
+    try {
+      const result = await requestNotificationPermission()
+      if (result !== 'granted') {
+        checkbox.checked = false
+        writeNotificationPref(false)
+        ui.setStatus(status, permissionDeniedText(result), 'error')
+        return
+      }
+      writeNotificationPref(true)
+      ui.setStatus(status, '已开启：页面隐藏且出现新的待审批时提醒；点通知会打开「需要你」。')
+    } finally {
+      checkbox.disabled = false
+    }
+  })
+
+  return ui.section('通知', [row, status], {
+    description: '安静优先：只有新的审批会提醒，Bot 的主动消息不会弹通知。',
+  })
+}
+
 function settingsView(ctx, root, state) {
   const header = ui.pageHeader(PAGE_TITLE, {
     subtitle: '成员、设备与长期授权都在这里管理；单次批准不会写入长期授权。',
@@ -139,7 +206,7 @@ function settingsView(ctx, root, state) {
   board.append(membersSection(pageCtx, state.members, remount))
   board.append(devicesSection(pageCtx, state.devices, remount))
   for (const node of grantsSections(ctx, root, state)) board.append(node)
-  return el('div', { class: 'stack' }, [header, board])
+  return el('div', { class: 'stack' }, [header, notificationSection(), board])
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isKnownRoute, normalizeHash, routeMatch } from '../lib/routing.js'
+import {
+  canonicalWorkspaceRoute,
+  isKnownRoute,
+  normalizeHash,
+  routeMatch,
+} from '../lib/routing.js'
 
 test('空 hash / # / #/ 都是配对页', () => {
   for (const hash of ['', '#', '#/', '#//', '   ']) {
@@ -116,6 +121,80 @@ test('未知路径与坏编码都是 notFound，不抛异常', () => {
   assert.equal(routeMatch('#/rooms/a/settings/extra').name, 'notFound')
 })
 
+test('多端深链：解析 #/w/:ws/room/:id、#/w/:ws/bot/:id、#/w/:ws/approvals', () => {
+  const room = routeMatch('#/w/ws_1/room/r_1')
+  assert.equal(room.name, 'workspaceRoom')
+  assert.deepEqual(room.params, { workspaceId: 'ws_1', id: 'r_1' })
+
+  const bot = routeMatch('#/w/ws_1/bot/b_1')
+  assert.equal(bot.name, 'workspaceBot')
+  assert.deepEqual(bot.params, { workspaceId: 'ws_1', id: 'b_1' })
+
+  const approvals = routeMatch('#/w/ws_1/approvals')
+  assert.equal(approvals.name, 'workspaceApprovals')
+  assert.deepEqual(approvals.params, { workspaceId: 'ws_1' })
+
+  // 尾斜杠、不带 #、URL 编码都照常处理。
+  assert.equal(routeMatch('#/w/ws_1/room/r_1/').name, 'workspaceRoom')
+  assert.equal(routeMatch('w/ws_1/approvals').name, 'workspaceApprovals')
+  assert.equal(routeMatch('#/w/ws%201/room/r%202').params.id, 'r 2')
+})
+
+test('多端深链：缺段、多段、坏编码都是 notFound', () => {
+  for (const hash of [
+    '#/w',
+    '#/w/ws_1',
+    '#/w/ws_1/room',
+    '#/w/ws_1/bot',
+    '#/w/ws_1/room/r_1/extra',
+    '#/w/ws_1/settings',
+    '#/w//room/r_1',
+    '#/w/ws_1/room/%E4',
+  ]) {
+    assert.equal(routeMatch(hash).name, 'notFound', hash)
+  }
+})
+
+test('深链规范化：workspace 一致 → 内部路由与 canonical hash', () => {
+  const room = canonicalWorkspaceRoute(routeMatch('#/w/ws_1/room/r_1'), 'ws_1')
+  assert.deepEqual(room, {
+    status: 'ok',
+    match: { name: 'room', params: { id: 'r_1' }, path: '/rooms/r_1' },
+    hash: '#/rooms/r_1',
+  })
+
+  const bot = canonicalWorkspaceRoute(routeMatch('#/w/ws_1/bot/b_1'), 'ws_1')
+  assert.deepEqual(bot, {
+    status: 'ok',
+    match: { name: 'bot', params: { id: 'b_1' }, path: '/bots/b_1' },
+    hash: '#/bots/b_1',
+  })
+
+  const approvals = canonicalWorkspaceRoute(routeMatch('#/w/ws_1/approvals'), 'ws_1')
+  assert.deepEqual(approvals, {
+    status: 'ok',
+    match: { name: 'approvals', params: {}, path: '/approvals' },
+    hash: '#/approvals',
+  })
+
+  // id 进 hash 时重新编码，避免空格/中文破坏地址栏。
+  assert.equal(
+    canonicalWorkspaceRoute(routeMatch('#/w/ws_1/room/r%202'), 'ws_1')?.hash,
+    '#/rooms/r%202'
+  )
+})
+
+test('深链规范化：workspace 不一致 → mismatch，不静默跳转', () => {
+  assert.deepEqual(canonicalWorkspaceRoute(routeMatch('#/w/ws_other/room/r_1'), 'ws_1'), {
+    status: 'mismatch',
+    workspaceId: 'ws_other',
+  })
+  // 当前 workspace 未知时也按不一致处理，绝不猜。
+  assert.equal(canonicalWorkspaceRoute(routeMatch('#/w/ws_1/approvals'), '')?.status, 'mismatch')
+  // 非深链路由返回 null。
+  assert.equal(canonicalWorkspaceRoute(routeMatch('#/bots/b_1'), 'ws_1'), null)
+})
+
 test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('bots'), true)
   assert.equal(isKnownRoute('approvals'), true)
@@ -126,5 +205,8 @@ test('isKnownRoute 只认路由表里的名字', () => {
   assert.equal(isKnownRoute('usage'), true)
   assert.equal(isKnownRoute('schedules'), true)
   assert.equal(isKnownRoute('connectors'), true)
+  assert.equal(isKnownRoute('workspaceRoom'), true)
+  assert.equal(isKnownRoute('workspaceBot'), true)
+  assert.equal(isKnownRoute('workspaceApprovals'), true)
   assert.equal(isKnownRoute('nope'), false)
 })

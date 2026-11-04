@@ -16,6 +16,12 @@
 //   #/schedules         定时任务（cron / 运行历史）
 //   #/connectors        连接器（目录 + 按 Bot 授权）
 //   兼容旧地址 #room    房间预览（假数据）
+//
+// 多端深链（ui.md §4，M5-5.4）：进入时先按下面三条解析，再由
+// canonicalWorkspaceRoute 对照当前 workspace 规范化成上面的内部路由：
+//   #/w/:workspaceId/room/:roomId
+//   #/w/:workspaceId/bot/:botId
+//   #/w/:workspaceId/approvals
 
 const ROUTES = new Set([
   'pair',
@@ -33,8 +39,13 @@ const ROUTES = new Set([
   'usage',
   'schedules',
   'connectors',
+  'workspaceRoom',
+  'workspaceBot',
+  'workspaceApprovals',
   'notFound',
 ])
+
+const WORKSPACE_ROUTES = new Set(['workspaceRoom', 'workspaceBot', 'workspaceApprovals'])
 
 /** 去掉 #、补前导 /、去掉尾斜杠；空 hash 视为首页。 */
 export function normalizeHash(hash) {
@@ -87,6 +98,21 @@ export function routeMatch(hash) {
   // 兼容 v0 的 #room：房间页预览，没有 id。
   if (decoded.length === 1 && decoded[0] === 'room') return route('room', { id: null })
 
+  // 多端深链：#/w/:workspaceId/{room|bot}/:id 或 #/w/:workspaceId/approvals。
+  // 结构不完整或多了段一律 notFound，不在解析阶段猜测。
+  if (decoded[0] === 'w') {
+    if (decoded.length === 3 && decoded[2] === 'approvals') {
+      return route('workspaceApprovals', { workspaceId: decoded[1] })
+    }
+    if (decoded.length === 4 && decoded[2] === 'room') {
+      return route('workspaceRoom', { workspaceId: decoded[1], id: decoded[3] })
+    }
+    if (decoded.length === 4 && decoded[2] === 'bot') {
+      return route('workspaceBot', { workspaceId: decoded[1], id: decoded[3] })
+    }
+    return route('notFound')
+  }
+
   if (decoded[0] === 'bots') {
     if (decoded.length === 1) return route('bots')
     if (decoded.length === 2 && decoded[1] === 'new') return route('botNew')
@@ -111,6 +137,45 @@ export function routeMatch(hash) {
   }
 
   return route('notFound')
+}
+
+/**
+ * 把多端深链规范化成现有内部路由。纯函数：workspaceId 由调用方先解析（ensureWorkspaceId）。
+ *
+ * - 与本账号当前 workspace 一致：`{ status: 'ok', match, hash }`，hash 用于 replaceState，
+ *   match 是 routeMatch 同形状的内部路由（room / bot / approvals）。
+ * - 不一致：`{ status: 'mismatch', workspaceId }`。调用方展示空态，不静默跳到别的 workspace。
+ * - 不是深链路由：返回 null。
+ *
+ * @param {{name: string, params: Record<string, string|null>}} route
+ * @param {string} workspaceId 当前账号的 workspaceId
+ */
+export function canonicalWorkspaceRoute(route, workspaceId) {
+  if (!route || typeof route !== 'object' || !WORKSPACE_ROUTES.has(route.name)) return null
+  const params = route.params && typeof route.params === 'object' ? route.params : {}
+  const current = typeof workspaceId === 'string' ? workspaceId.trim() : ''
+  if (current === '' || params.workspaceId !== current) {
+    return {
+      status: 'mismatch',
+      workspaceId: typeof params.workspaceId === 'string' ? params.workspaceId : '',
+    }
+  }
+  if (route.name === 'workspaceApprovals') {
+    return {
+      status: 'ok',
+      match: { name: 'approvals', params: {}, path: '/approvals' },
+      hash: '#/approvals',
+    }
+  }
+  const id = typeof params.id === 'string' ? params.id : ''
+  if (id === '') return { status: 'invalid' }
+  const isRoom = route.name === 'workspaceRoom'
+  const segment = isRoom ? 'rooms' : 'bots'
+  return {
+    status: 'ok',
+    match: { name: isRoom ? 'room' : 'bot', params: { id }, path: `/${segment}/${id}` },
+    hash: `#/${segment}/${encodeURIComponent(id)}`,
+  }
 }
 
 /** 供测试与调用方确认路由名是已知值。 */

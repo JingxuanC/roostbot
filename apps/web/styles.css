@@ -549,6 +549,20 @@ button {
   display: none;
 }
 
+/* 窄屏侧栏抽屉：开关只在 ≤720px 出现；遮罩默认不占位。 */
+.sidebar-toggle {
+  display: none;
+  flex: none;
+}
+
+.sidebar-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.5);
+}
+
 .demo-strip {
   flex: none;
   margin: var(--space-md) var(--space-xl) 0;
@@ -2211,6 +2225,44 @@ button {
   gap: var(--space-lg);
 }
 
+/* 通知开关（设置页） */
+.notify-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  min-height: 44px;
+  padding: var(--space-sm) 0;
+  cursor: pointer;
+}
+
+.notify-row input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  accent-color: var(--roost-accent);
+  cursor: pointer;
+}
+
+.notify-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notify-label {
+  color: var(--roost-ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.notify-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .grant-list {
   display: flex;
   flex-direction: column;
@@ -3409,5 +3461,187 @@ button {
 @media (max-width: 640px) {
   .connector-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ==================================================================
+ * M5-5.5：移动端（≤720px）
+ * 侧栏抽屉 + 触控目标 44px + 表格横向滚动；不引入依赖。
+ * ================================================================== */
+
+@media (max-width: 720px) {
+  /* 侧栏：从底部抽屉规则里拿回显示，改成可收起的抽屉 */
+  .sidebar {
+    display: flex;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    width: min(84vw, 320px);
+    max-width: 100%;
+    background: var(--roost-bg);
+    border-right: 1px solid var(--roost-border);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform var(--motion-base) var(--easing);
+  }
+
+  .room.sidebar-open .sidebar {
+    transform: none;
+    visibility: visible;
+  }
+
+  .sidebar-scrim:not([hidden]) {
+    display: block;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex;
+  }
+
+  /* 顶栏：藏掉「谁在工作」，给标题和入口留空间；按钮至少 44px */
+  .room-head {
+    height: auto;
+    min-height: 56px;
+    gap: var(--space-sm);
+    padding: 0 var(--space-md);
+  }
+
+  .room-head-main {
+    flex: 1;
+  }
+
+  .room-name {
+    font-size: 15px;
+  }
+
+  .head-right {
+    flex: none;
+    gap: var(--space-sm);
+  }
+
+  .head-right .working {
+    display: none;
+  }
+
+  .head-link,
+  .room-settings-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .needs-btn-sm.btn-sm {
+    min-height: 44px;
+  }
+
+  /* 消息与输入区：窄边距，气泡不顶破 */
+  .messages,
+  .composer {
+    padding-left: var(--space-md);
+    padding-right: var(--space-md);
+  }
+
+  .demo-strip {
+    margin-left: var(--space-md);
+    margin-right: var(--space-md);
+  }
+
+  .bubble {
+    max-width: 92%;
+  }
+
+  .bubble-bot {
+    margin-left: 20px;
+  }
+
+  .composer-hint {
+    display: none;
+  }
+
+  /* 设置/列表页：导航换行，页面不横向溢出 */
+  .page-main {
+    padding: var(--space-md);
+  }
+
+  .page-head {
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .page-nav {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: var(--space-xs) var(--space-md);
+  }
+
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .page-note {
+    width: calc(100% - 2 * var(--space-md));
+  }
+
+  .page-card {
+    padding: var(--space-md);
+    min-width: 0;
+  }
+
+  /* 触控目标 ≥44px */
+  .btn,
+  .btn-sm,
+  .input,
+  .select {
+    min-height: 44px;
+  }
+
+  .needs-link,
+  .approvals-link,
+  .room-link,
+  .bot-link {
+    min-height: 44px;
+  }
+
+  .nav-add a,
+  .nav-muted-link a,
+  .nav-add-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .notify-row {
+    min-height: 44px;
+  }
+
+  /* 表格：在容器里横向滚动，不撑破页面 */
+  .usage-table-wrap,
+  .attachment-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .usage-table {
+    min-width: 520px;
+  }
+
+  .md-table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .grant-row {
+    flex-wrap: wrap;
+  }
+
+  .grant-actions {
+    width: 100%;
   }
 }
