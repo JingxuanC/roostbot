@@ -46,6 +46,8 @@ head -1 /tmp/roost-cloud-api.log
 echo "== 2) 配对与控制面资源"
 CODE=$(post /api/pairing/code '' '{"accountId":"acc_cloud"}' | json "d['code']")
 SESSION=$(post /api/pairing/claim '' "{\"code\":\"$CODE\"}" | json "d['sessionToken']")
+printf '%s' "$SESSION" > /tmp/roost-cloud-session
+chmod 600 /tmp/roost-cloud-session
 WS=$(post /api/workspaces "$SESSION" '{"name":"云端验收"}' | json "d['workspace']['id']")
 echo "  workspace=$WS"
 
@@ -72,20 +74,58 @@ for i in $(seq 1 60); do
   sleep 3
 done
 get "/api/rooms/$ROOM/messages" "$SESSION" | python3 -c '
-import sys,json
+import sys, json
 for m in json.load(sys.stdin)["messages"]:
-    print(f"  [{m[\"actor\"][\"kind\"]}] {m[\"text\"][:120]}")
+    kind = m["actor"]["kind"]
+    text = m["text"][:120].replace(chr(10), " ")
+    print("  [" + kind + "] " + text)
 '
 ROUND_STATE=$(get "/api/rooms/$ROOM" "$SESSION" | json "d.get('round') and d['round']['state'] or 'none'")
+
+MEMORY="skip"
+SB=$(openshell sandbox list 2>/dev/null | awk -v n="$WS" 'NR>1 && $1 ~ /^user-/ {print $1; exit}')
+if [ "${ROOST_CHECK_MEMORY:-0}" = "1" ] && [ -n "$SB" ]; then
+  echo "== 5) 多轮记忆 + stop/start =="
+  ask() { post "/api/rooms/$ROOM/messages" "$SESSION" "{\"text\":\"$1\"}" >/dev/null; }
+  wait_bots() {
+    for i in $(seq 1 60); do
+      C=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "sum(1 for m in d['messages'] if m['actor']['kind']=='bot')")
+      [ "${C:-0}" -ge "$1" ] && return 0
+      sleep 3
+    done
+    return 1
+  }
+  ask "请记住这个数字：4271。只回复：记住了。"; wait_bots 3 || true
+  ask "我刚才让你记住的数字是多少？只回答数字。"; wait_bots 4 || true
+  FIRST=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "d['messages'][-1]['text']" || true)
+  echo "  before restart: $FIRST"
+  openshell sandbox stop "$SB" >/dev/null 2>&1
+  sleep 4
+  post "/api/workspaces/$WS/start" "$SESSION" '{}' >/dev/null
+  for i in $(seq 1 60); do
+    P=$(get "/api/workspaces/$WS/runtime" "$SESSION" | json "d.get('runtime') and d['runtime']['phase'] or ''")
+    [ "$P" = "ready" ] && break
+    sleep 3
+  done
+  ask "重启之后：我刚才让你记住的数字是多少？只回答数字。"; wait_bots 5 || true
+  AFTER=$(get "/api/rooms/$ROOM/messages" "$SESSION" | json "d['messages'][-1]['text']" || true)
+  echo "  after restart:  $AFTER"
+  case "$FIRST$AFTER" in
+    *4271*4271*) MEMORY="pass" ;;
+    *) MEMORY="fail" ;;
+  esac
+  echo "  memory=$MEMORY"
+fi
 echo "  round=$ROUND_STATE"
 
-WEB_CODE=$(post /api/pairing/code '' '{"accountId":"acc_cloud"}' | json "d['code']")
+WEB_CODE=$(curl -sS -m 10 -X POST "$BASE/api/pairing/code" -H 'content-type: application/json' -H "authorization: Bearer $SESSION" -d '{}' | json "d.get('code','')")
 echo
 echo "== 完成"
 echo "  浏览器: http://<云主机>:$PORT/  配对码: $WEB_CODE"
 echo "  房间:   $ROOM"
-if [ "${COUNT:-0}" -ge 2 ] && [ "$ROUND_STATE" = "done" ]; then
-  echo "  结果: PASS（两个 Bot 都回复，轮次 done）"
+echo "  session: /tmp/roost-cloud-session（用于继续验证，600 权限）"
+if [ "${COUNT:-0}" -ge 2 ] && [ "$ROUND_STATE" = "done" ] && [ "$MEMORY" != "fail" ]; then
+  echo "  结果: PASS（两个 Bot 都回复，轮次 done；memory=${MEMORY}）"
   exit 0
 fi
 echo "  结果: 未达成（检查 /tmp/roost-cloud-api.log、openshell logs、镜像）"
