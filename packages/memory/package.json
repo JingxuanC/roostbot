@@ -1,0 +1,11 @@
+{
+  "name": "@roost/memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory claims as pure functions: extract/validate claims (falsifier, confidence, daily cap) and plan cleanup of falsified ones. No IO, no dependencies.",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "scripts": { "check": "node --check src/index.ts" }
+}
