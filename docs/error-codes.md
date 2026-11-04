@@ -16,14 +16,14 @@
 
 ## 总览
 
-- 调用点：**575** 个
-- 唯一 code：**93** 个
-- 覆盖模块：**20** 个文件
+- 调用点：**560** 个
+- 唯一 code：**94** 个
+- 覆盖模块：**21** 个文件
 - 有中文文案（`ERROR_TEXT`）：**23** 个；其余回退调用点 message
 
 ## 按模块
 
-### `approvals-routes.ts`（32 个调用点）
+### `approvals-routes.ts`（30 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -33,12 +33,11 @@
 | `forbidden` | 403 | — | 3 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 15 |
-| `not_found` | 404 | — | 3 |
+| `not_found` | 404 | — | 2 |
 | `runtime.not_configured` | 503 | — | 5 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
-### `attachments-routes.ts`（17 个调用点）
+### `attachments-routes.ts`（15 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -46,10 +45,9 @@
 | `forbidden` | 403 | — | 1 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 3 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 2 |
-| `not_found` | 404 | — | 5 |
+| `not_found` | 404 | — | 4 |
 | `payload_too_large` | 413 | 请求体过大 | 2 |
 | `runtime.not_configured` | 503 | — | 2 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 
 ### `audit-routes.ts`（4 个调用点）
 
@@ -86,7 +84,7 @@
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 3 |
 | `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 
-### `bot-rooms-routes.ts`（33 个调用点）
+### `bot-rooms-routes.ts`（31 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -101,12 +99,11 @@
 | `forbidden` | 403 | — | 2 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 5 |
-| `not_found` | 404 | — | 2 |
+| `not_found` | 404 | — | 1 |
 | `room.invalid` | 400 | 房间信息不合法 | 1 |
 | `room.members` | 400 | 房间成员不合法 | 1 |
 | `room.responder` | 400 | 「谁回答」必须指向房间成员 | 1 |
 | `runtime.not_configured` | 503 | — | 3 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
 ### `bots-routes.ts`（26 个调用点）
@@ -125,7 +122,7 @@
 | `not_found` | 404 | — | 4 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
-### `budget-routes.ts`（57 个调用点）
+### `budget-routes.ts`（55 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -133,15 +130,14 @@
 | `forbidden` | 403 | — | 4 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 42 |
-| `not_found` | 404 | — | 2 |
+| `not_found` | 404 | — | 1 |
 | `quota_exhausted` | 429 | — | 1 |
 | `quota_not_found` | 404 | — | 2 |
 | `reservation_not_found` | 404 | — | 1 |
 | `runtime.not_configured` | 503 | — | 1 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
-### `connectors-routes.ts`（37 个调用点）
+### `connectors-routes.ts`（35 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -154,9 +150,8 @@
 | `forbidden` | 403 | — | 5 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 13 |
-| `not_found` | 404 | — | 6 |
+| `not_found` | 404 | — | 5 |
 | `runtime.not_configured` | 503 | — | 1 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
 ### `dsh-proxy-routes.ts`（12 个调用点）
@@ -176,14 +171,14 @@
 | --- | --- | --- | ---: |
 | `method_not_allowed` | 405 | — | 1 |
 
-### `marketplace-install-routes.ts`（49 个调用点）
+### `marketplace-install-routes.ts`（47 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
 | `forbidden` | 403 | — | 8 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 7 |
-| `not_found` | 404 | — | 8 |
+| `not_found` | 404 | — | 7 |
 | `plugin.already_installed` | 409 | — | 1 |
 | `plugin.install_not_found` | 404 / 409 | — | 6 |
 | `plugin.invalid_slug` | 400 | — | 1 |
@@ -195,7 +190,6 @@
 | `plugin.version_not_found` | 404 | — | 2 |
 | `rate_limited` | 429 | 操作太频繁，请稍后再试 | 1 |
 | `runtime.not_configured` | 503 | — | 1 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
 ### `marketplace-routes.ts`（52 个调用点）
@@ -231,19 +225,19 @@
 | `workspace.last_owner` | 409 | — | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
-### `memories-routes.ts`（41 个调用点）
+### `memories-routes.ts`（40 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
 | `forbidden` | 403 | — | 3 |
+| `forbidden_workspace` | 403 | — | 1 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 20 |
 | `memory.daily_limit` | 429 | — | 1 |
 | `memory.invalid` | 400 | — | 6 |
 | `memory.not_found` | 404 | — | 2 |
-| `not_found` | 404 | — | 2 |
+| `not_found` | 404 | — | 1 |
 | `runtime.not_configured` | 503 | — | 1 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 4 |
 
 ### `model-proxy-routes.ts`（2 个调用点）
@@ -253,13 +247,11 @@
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `workspace_required` | 400 | — | 1 |
 
-### `plugins-sync-routes.ts`（3 个调用点）
+### `plugins-sync-routes.ts`（1 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
-| `not_found` | 404 | — | 1 |
 | `profile.lock_unavailable` | 500 | — | 1 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 
 ### `rooms-routes-ext.ts`（40 个调用点）
 
@@ -276,22 +268,29 @@
 | `room_not_found` | 404 | 找不到这个房间 | 3 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
-### `schedules-routes.ts`（33 个调用点）
+### `runtime-auth.ts`（3 个调用点）
+
+| code | HTTP | 中文文案 | 次数 |
+| --- | --- | --- | ---: |
+| `forbidden_workspace` | 403 | — | 1 |
+| `not_found` | 404 | — | 1 |
+| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
+
+### `schedules-routes.ts`（32 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
 | `forbidden` | 403 | — | 4 |
+| `forbidden_workspace` | 403 | — | 1 |
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 1 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 16 |
-| `not_found` | 404 | — | 1 |
 | `run.not_found` | 404 | — | 2 |
 | `runtime.not_configured` | 503 | — | 1 |
 | `schedule.exists` | 409 | — | 1 |
 | `schedule.invalid` | 400 | — | 2 |
 | `schedule.not_found` | 404 | — | 4 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 1 |
 
-### `server.ts`（81 个调用点）
+### `server.ts`（79 个调用点）
 
 | code | HTTP | 中文文案 | 次数 |
 | --- | --- | --- | ---: |
@@ -301,7 +300,7 @@
 | `internal_error` | 500 | 服务出错了，请稍后重试 | 4 |
 | `invalid_body` | 400 | 请求内容不完整或格式不对 | 17 |
 | `model_proxy_not_configured` | 501 | — | 1 |
-| `not_found` | 404 | — | 27 |
+| `not_found` | 404 | — | 26 |
 | `pairing_code_expired` | 401 | 配对码已过期，请重新生成 | 1 |
 | `pairing_code_invalid` | 401 | 配对码不对 | 1 |
 | `pairing_code_locked` | 429 | 尝试次数过多，请重新生成配对码 | 1 |
@@ -318,7 +317,7 @@
 | `session_create_failed` | 500 | — | 1 |
 | `session_expired` | 401 | 会话已过期，请重新配对 | 1 |
 | `too_many_attempts` | 429 | 尝试次数过多，请稍后再试 | 1 |
-| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 3 |
+| `unauthenticated` | 401 | 请先配对：缺少有效的会话令牌 | 2 |
 | `workspace_not_found` | 404 | 找不到这个 workspace | 1 |
 
 ## code 索引
@@ -364,6 +363,7 @@
 | `dsh.unavailable` | 502 | `dsh-proxy-routes.ts` |
 | `forbidden` | 403 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`audit-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`members-routes.ts`<br>`memories-routes.ts`<br>`rooms-routes-ext.ts`<br>`schedules-routes.ts`<br>`server.ts` |
 | `forbidden_origin` | 403 | `server.ts` |
+| `forbidden_workspace` | 403 | `memories-routes.ts`<br>`runtime-auth.ts`<br>`schedules-routes.ts` |
 | `internal_error` | 500 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`audit-routes.ts`<br>`auth-login-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`members-routes.ts`<br>`memories-routes.ts`<br>`model-proxy-routes.ts`<br>`rooms-routes-ext.ts`<br>`schedules-routes.ts`<br>`server.ts` |
 | `invalid_body` | 400 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`audit-routes.ts`<br>`auth-login-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`members-routes.ts`<br>`memories-routes.ts`<br>`rooms-routes-ext.ts`<br>`schedules-routes.ts`<br>`server.ts` |
 | `member_not_found` | 404 | `members-routes.ts` |
@@ -373,7 +373,7 @@
 | `method_not_allowed` | 405 | `health-deep.ts` |
 | `model_proxy_not_configured` | 501 | `server.ts` |
 | `no_workspace` | 409 | `bots-routes.ts`<br>`rooms-routes-ext.ts` |
-| `not_found` | 404 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`dsh-proxy-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`memories-routes.ts`<br>`plugins-sync-routes.ts`<br>`rooms-routes-ext.ts`<br>`schedules-routes.ts`<br>`server.ts` |
+| `not_found` | 404 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`dsh-proxy-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`memories-routes.ts`<br>`rooms-routes-ext.ts`<br>`runtime-auth.ts`<br>`server.ts` |
 | `pairing_code_expired` | 401 | `server.ts` |
 | `pairing_code_invalid` | 401 | `server.ts` |
 | `pairing_code_locked` | 429 | `server.ts` |
@@ -413,7 +413,7 @@
 | `session_create_failed` | 500 | `server.ts` |
 | `session_expired` | 401 | `server.ts` |
 | `too_many_attempts` | 429 | `server.ts` |
-| `unauthenticated` | 401 | `approvals-routes.ts`<br>`attachments-routes.ts`<br>`auth-login-routes.ts`<br>`bot-rooms-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`dsh-proxy-routes.ts`<br>`marketplace-install-routes.ts`<br>`memories-routes.ts`<br>`plugins-sync-routes.ts`<br>`schedules-routes.ts`<br>`server.ts` |
+| `unauthenticated` | 401 | `auth-login-routes.ts`<br>`dsh-proxy-routes.ts`<br>`runtime-auth.ts`<br>`server.ts` |
 | `workspace.invalid_role` | 400 | `members-routes.ts` |
 | `workspace.last_owner` | 409 | `members-routes.ts` |
 | `workspace_not_found` | 404 | `approvals-routes.ts`<br>`bot-rooms-routes.ts`<br>`bots-routes.ts`<br>`budget-routes.ts`<br>`connectors-routes.ts`<br>`dsh-proxy-routes.ts`<br>`marketplace-install-routes.ts`<br>`marketplace-routes.ts`<br>`members-routes.ts`<br>`memories-routes.ts`<br>`rooms-routes-ext.ts`<br>`server.ts` |

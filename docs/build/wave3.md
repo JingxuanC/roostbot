@@ -36,3 +36,13 @@
 node --experimental-strip-types --test packages/*/test/*.test.ts apps/*/test/*.test.ts
 sh scripts/verify.sh
 ```
+
+## 实现进度（2026-11-04）
+
+| 块 | 状态 | 证据 |
+|---|---|---|
+| A 审批桥 | 🟡 包完成 | 55 测试；`approval/request` waterfall 可用（16 条源码事实）；还差沙箱 profile 插件分发与端到端 |
+| B 短 runtime token | ✅ 接线 | 迁移 0021、store verifier、`runtime-auth.ts` 覆盖 14 个内部入口 + workspace 过滤；沙箱启动签发/吊销 |
+| C 缩略图/EXIF | ✅ 接线 | `attachments-thumbnails.ts` + 两个上传端点，14 测试；真实 sips 640x480→320x240、EXIF −78B |
+| D tokens/组件 | ✅ | 56 tokens / 47 CSS 变量、3 组件，241 web/tokens 测试 |
+| 全量 | ✅ | 1208 tests + verify.sh |
