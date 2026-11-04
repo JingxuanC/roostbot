@@ -82,3 +82,14 @@ ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
 | **room-agent 的回复 = 沙箱里的真实 DSH 回合**（DeepSeek，凭据由 OpenShell 注入） | 单机部署；没有多租户/账号体系 |
 | 网页端真实房间 + SSE 多端 + Markdown 渲染（截图 `docs/assets/m5-live-room.png`） | 沙箱空闲只能 stop/start（docker 驱动不支持 suspend） |
 
+## 官网
+
+`apps/site/` 是零构建静态官网（暖白、大留白，参考 dsbot.app 的气质；鸟形象来自 `apps/web/lib/bird.js`）：
+
+```bash
+node scripts/serve-site.mjs        # http://127.0.0.1:4173
+```
+
+截图：[桌面](docs/assets/roost-site.png) · [移动端](docs/assets/roost-site-mobile.png)。
+部署：把 `apps/site/` 直接放到任意静态托管即可，无构建、无外部字体/CDN。
+

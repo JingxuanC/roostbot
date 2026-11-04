@@ -13,7 +13,8 @@
     "dev:api": "node --experimental-strip-types apps/api/src/main.ts",
     "errors": "node scripts/error-codes.mjs",
     "release": "node scripts/release.mjs",
-    "e2e": "sh scripts/e2e-cloud.sh"
+    "e2e": "sh scripts/e2e-cloud.sh",
+    "site": "node scripts/serve-site.mjs"
   },
   "license": "Apache-2.0",
   "type": "module"
