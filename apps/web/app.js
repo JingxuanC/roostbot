@@ -929,6 +929,9 @@ const LIVE = {
   // 显式重连状态机（TODO 5.5.3 / E10）：idle → connecting → open → reconnecting。
   // 不依赖 EventSource 自带重连，因为它会复用打开时 URL 里的旧 after。
   streamState: 'idle',
+  // 已发出消息、还在等 Bot 回复；用于立刻显示思考动画。
+  pendingReply: false,
+  pendingReplyBotId: '',
   reconnectAttempt: 0,
   reconnectTimer: null,
   // 房间日志裁剪投影（rooms.md §3）：首看 12 条，before 向前翻到 60 条。
@@ -1864,6 +1867,13 @@ function renderWorking() {
     return
   }
   working.classList.remove('is-offline')
+  if (LIVE.pendingReply) {
+    working.hidden = false
+    working.classList.add('is-thinking')
+    text.textContent = '正在思考…'
+    markThinkingAvatar(LIVE.pendingReplyBotId)
+    return
+  }
   const round = LIVE.room && LIVE.room.round
   if (!round) {
     working.hidden = true
@@ -1927,6 +1937,10 @@ function insertEvent(event) {
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
   const placeholder = list.querySelector('.messages-empty')
   if (placeholder) placeholder.remove()
+  if (event && event.payload && event.payload.role === 'bot') {
+    LIVE.pendingReply = false
+    renderWorking()
+  }
   const node = renderEvent(event)
   if (Number.isFinite(seq)) node.dataset.seq = String(seq)
   if (isAppend) {
@@ -1962,6 +1976,35 @@ async function refreshMessages() {
     if (isAuthError(error)) requirePair()
     return false
   }
+}
+
+/** 发消息后短轮询房间轮次；让「正在思考」和头像动画跟真实 turn 同步。 */
+function watchRound(roomId) {
+  stopRoundWatch()
+  const startedAt = Date.now()
+  const tick = async () => {
+    roundWatchTimer = null
+    if (!LIVE.active || LIVE.roomId !== roomId) return
+    await refreshRoomState()
+    if (!LIVE.active || LIVE.roomId !== roomId) return
+    const round = LIVE.room && LIVE.room.round
+    const state = round && typeof round.state === 'string' ? round.state : ''
+    const running = state === 'running' || state === 'pending' || state === 'waiting'
+    const elapsed = Date.now() - startedAt
+    if (elapsed > 120_000) {
+      LIVE.pendingReply = false
+      renderWorking()
+      return
+    }
+    // 轮次还没落库时也给 8 秒窗口，避免刚发完就停止动画。
+    if (!running && (round || elapsed > 8_000)) {
+      LIVE.pendingReply = false
+      renderWorking()
+      return
+    }
+    roundWatchTimer = setTimeout(tick, 800)
+  }
+  roundWatchTimer = setTimeout(tick, 250)
 }
 
 async function refreshRoomState() {
@@ -2025,7 +2068,18 @@ function closeStream() {
 }
 
 /** 关流并清掉定时器：切房间、页面卸载、离开房间页时调用，避免旧房间还在重连。 */
+let roundWatchTimer = null
+function stopRoundWatch() {
+  if (roundWatchTimer) {
+    clearTimeout(roundWatchTimer)
+    roundWatchTimer = null
+  }
+  LIVE.pendingReply = false
+  LIVE.pendingReplyBotId = ''
+}
+
 function stopStream() {
+  stopRoundWatch()
   clearReconnectTimer()
   closeStream()
   LIVE.streamState = 'idle'
@@ -2523,7 +2577,10 @@ function setupComposer() {
         })
         if (posted && posted.message) appendLiveEvent(posted.message)
         else await refreshMessages()
-        void refreshRoomState()
+        LIVE.pendingReply = true
+        LIVE.pendingReplyBotId = LIVE.room?.responder?.botId || LIVE.room?.hostBotId || ''
+        renderWorking()
+        watchRound(LIVE.roomId)
       } catch (error) {
         if (isAuthError(error)) {
           requirePair()
