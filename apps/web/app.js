@@ -2170,7 +2170,8 @@ async function enterLiveRoom(token) {
   rooms = await ensureRoom()
   STORE.rooms = rooms
   renderSidebarRooms()
-  await ensureRuntimeStarted()
+  // 启动沙箱可能耗时；不要让它阻塞进入房间，消息会落在控制面等 room-agent 起来。
+  void ensureRuntimeStarted()
   const note = $('#pair-note')
   if (note) note.hidden = true
   const lastRoom = readLastRoom()
