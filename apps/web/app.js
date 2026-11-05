@@ -2025,7 +2025,9 @@ function openStream() {
   }
   // 首次打开是 connecting；重连期间保持 reconnecting，直到 open 才隐藏离线提示。
   if (LIVE.streamState === 'idle') LIVE.streamState = 'connecting'
-  const path = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?access_token=${encodeURIComponent(LIVE.token)}&after=${LIVE.lastSeq}`
+  const streamQuery = new URLSearchParams({ after: String(LIVE.lastSeq) })
+  if (LIVE.token !== '') streamQuery.set('access_token', LIVE.token)
+  const path = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?${streamQuery.toString()}`
   let stream
   try {
     stream = new EventSource(API_BASE ? `${API_BASE}${path}` : path)

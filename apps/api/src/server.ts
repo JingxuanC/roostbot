@@ -1529,10 +1529,14 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
 async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const headerToken = /^Bearer[ ]+(\S+)$/.exec((req.headers.authorization ?? '').trim())
   const queryToken = url.searchParams.get('access_token')
-  const token = headerToken?.[1] ?? queryToken
-  if (token === null || token === undefined || !SESSION_TOKEN_PATTERN.test(token)) {
+  // 账号登录使用 HttpOnly cookie；EventSource 不能设 Authorization，也不能读 cookie。
+  // 优先 Bearer/query token（配对会话），没有时回退到同源 cookie。
+  const cookieToken = readCookie(req, 'roost_session')
+  const candidate = headerToken?.[1] ?? (queryToken !== null && queryToken !== '' ? queryToken : cookieToken)
+  if (candidate === null || candidate === undefined || !SESSION_TOKEN_PATTERN.test(candidate)) {
     return sendError(res, 401, 'unauthenticated', 'stream needs a session token')
   }
+  const token = candidate
   const session = await ctx.store.findSessionByToken(hashSessionToken(token))
   if (session === null) return sendError(res, 401, 'unauthenticated', 'unknown session token')
   if (session.expiresAt <= ctx.now()) return sendError(res, 401, 'session_expired', 'session expired')

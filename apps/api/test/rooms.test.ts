@@ -135,6 +135,28 @@ test('空消息与超长消息被拒；错 id 的房间 404', async () => {
   })
 })
 
+test('SSE：账号 cookie 会话也能订阅，不要求 access_token 查询参数', async () => {
+  await withApi(async ({ base }) => {
+    const { token, workspaceId } = await pair(base)
+    const { room } = (await (
+      await fetch(`${base}/api/rooms`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...auth(token) },
+        body: JSON.stringify({ workspaceId, name: 'cookie 房间' })
+      })
+    ).json()) as { room: { id: string } }
+
+    const controller = new AbortController()
+    const response = await fetch(`${base}/api/rooms/${room.id}/stream`, {
+      signal: controller.signal,
+      headers: { accept: 'text/event-stream', cookie: `roost_session=${token}` }
+    })
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/)
+    controller.abort()
+  })
+})
+
 test('SSE：订阅后能收到新消息（event: message + cursor）', async () => {
   await withApi(
     async ({ base }) => {
