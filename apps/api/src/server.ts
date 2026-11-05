@@ -77,6 +77,7 @@ import {
 } from './marketplace-install-routes.ts'
 import { getApproval } from '../../../packages/store/src/approvals.ts'
 import { handleDeepHealth } from './health-deep.ts'
+import { setProxyWorkspace } from '../../../packages/budget/src/proxy.ts'
 import {
   DEFAULT_FREE_MODEL,
   handleDeleteModelSettings,
@@ -2131,6 +2132,7 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, resolved.status, resolved.code, resolved.message)
       return
     }
+    setProxyWorkspace(req, resolved.workspaceId)
     await resolved.proxy(req, res)
     return
   }
