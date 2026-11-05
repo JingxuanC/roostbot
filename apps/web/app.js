@@ -352,11 +352,12 @@ function renderSidebarBots() {
   const list = $('#bot-list')
   if (!list) return
   list.replaceChildren()
-  const bots = LIVE.active ? STORE.bots : Object.values(BOTS)
+  // 未进入实时 workspace 时不展示样例 Bot；生产界面不再用假数据充数。
+  const bots = LIVE.active ? STORE.bots : []
   if (bots.length === 0) {
     const row = el('li', { class: 'bot-row bot-row-empty' })
-    row.append(el('span', { class: 'muted', text: '还没有 Bot' }))
-    row.append(el('a', { class: 'nav-add-link', href: '#/bots/new', text: '新建' }))
+    row.append(el('span', { class: 'muted', text: LIVE.active ? '还没有 Bot' : '登录后显示 Bot' }))
+    if (LIVE.active) row.append(el('a', { class: 'nav-add-link', href: '#/bots/new', text: '新建' }))
     list.append(row)
     return
   }
@@ -404,29 +405,30 @@ function renderSidebarRooms() {
   const list = $('#room-list')
   if (!list) return
   list.replaceChildren()
-  if (LIVE.active && STORE.rooms.length > 0) {
-    for (const room of STORE.rooms) {
-      const current = room.id === LIVE.roomId
-      const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
-      const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
-      link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
-      const flock = roomFlock(room, 26)
-      if (flock) link.append(flock)
-      link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
-      const origin = roomOriginLabel(room)
-      if (origin !== '') {
-        link.append(el('span', { class: 'room-origin', text: origin, title: roomOriginTitle(room) }))
-      }
-      row.append(link)
-      list.append(row)
-    }
+  if (!LIVE.active) {
+    const row = el('li', { class: 'room-row room-row-empty' })
+    row.append(el('span', { class: 'muted', text: '登录后显示房间' }))
+    list.append(row)
     return
   }
-  for (const name of ['量化研究组', '复盘组']) {
-    const row = el('li', { class: 'room-row', 'aria-current': name === '量化研究组' ? 'true' : null })
-    const link = el('a', { class: 'room-link', href: '#room' })
+  if (STORE.rooms.length === 0) {
+    const row = el('li', { class: 'room-row room-row-empty' })
+    row.append(el('span', { class: 'muted', text: '还没有房间' }))
+    list.append(row)
+    return
+  }
+  for (const room of STORE.rooms) {
+    const current = room.id === LIVE.roomId
+    const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
+    const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
     link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
-    link.append(el('span', { class: 'room-name-text', text: name }))
+    const flock = roomFlock(room, 26)
+    if (flock) link.append(flock)
+    link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
+    const origin = roomOriginLabel(room)
+    if (origin !== '') {
+      link.append(el('span', { class: 'room-origin', text: origin, title: roomOriginTitle(room) }))
+    }
     row.append(link)
     list.append(row)
   }
