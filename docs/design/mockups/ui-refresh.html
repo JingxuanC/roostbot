@@ -2,20 +2,20 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><title>Roost UI 概念稿</title>
 <style>
 :root {
-  --canvas:#FBFAF7; --surface:#FFFFFF; --sunken:#F4EFE5; --ink:#17140F; --ink2:#4A443A; --muted:#7C7466;
-  --line:#E8E1D4; --accent:#B8761F; --accent-fill:#E8A23B; --danger:#B3423A; --ok:#5E7D4F;
+  --canvas:#F2F8FC; --surface:#FFFFFF; --sunken:#EAF2F8; --ink:#15232E; --ink2:#3B4E5D; --muted:#5F7485;
+  --line:#D9E6F0; --accent:#1F5C86; --accent-fill:#2F7CAF; --danger:#B24A45; --ok:#4E7D6A;
   --font:"Inter","SF Pro Display",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;
 }
 * { box-sizing:border-box; }
-body { margin:0; padding:44px 40px 64px; background:#ECE8DF; color:var(--ink); font-family:var(--font); }
-.label { margin:0 0 10px; color:#8A8173; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
-.artboard { margin:0 0 44px; background:var(--canvas); border:1px solid #DCD4C4; border-radius:18px; overflow:hidden; box-shadow:0 20px 50px -30px rgba(50,35,10,.35); }
+body { margin:0; padding:44px 40px 64px; background:#E4EEF5; color:var(--ink); font-family:var(--font); }
+.label { margin:0 0 10px; color:#6C8091; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
+.artboard { margin:0 0 44px; background:var(--canvas); border:1px solid #CFDEE9; border-radius:18px; overflow:hidden; box-shadow:0 20px 50px -30px rgba(30,60,90,.28); }
 .room { width:1180px; height:760px; display:flex; flex-direction:column; }
 .settings { width:1180px; height:760px; display:flex; flex-direction:column; }
 .mobile { width:390px; height:780px; display:flex; flex-direction:column; }
 
 /* top bar */
-.top { display:flex; align-items:center; gap:12px; height:60px; padding:0 20px; border-bottom:1px solid var(--line); background:rgba(251,250,247,.86); }
+.top { display:flex; align-items:center; gap:12px; height:60px; padding:0 20px; border-bottom:1px solid var(--line); background:rgba(255,255,255,.82); }
 .icon-btn { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid transparent; background:transparent; color:var(--ink2); font-size:17px; }
 .icon-btn:hover { background:var(--sunken); }
 .room-title { font-size:15px; font-weight:650; letter-spacing:-.01em; }
@@ -30,7 +30,7 @@ body { margin:0; padding:44px 40px 64px; background:#ECE8DF; color:var(--ink); f
 /* messages */
 .body { flex:1; overflow:hidden; padding:26px 0 0; display:flex; justify-content:center; }
 .thread { width:760px; display:flex; flex-direction:column; gap:22px; }
-.day { text-align:center; color:#A79D8D; font-size:11px; }
+.day { text-align:center; color:#7D92A3; font-size:11px; }
 .msg { display:flex; align-items:flex-start; gap:10px; }
 .msg.user { justify-content:flex-end; }
 .msg .avatar { flex:none; align-self:flex-start; margin-top:1px; }
@@ -38,28 +38,28 @@ body { margin:0; padding:44px 40px 64px; background:#ECE8DF; color:var(--ink); f
 .name { font-size:13px; font-weight:650; }
 .role { color:var(--muted); font-size:12px; }
 .text { font-size:14px; line-height:1.72; color:var(--ink); }
-.user-bubble { max-width:440px; padding:10px 14px; border-radius:14px 14px 4px 14px; background:#F2E5CB; color:#2E2619; font-size:14px; line-height:1.7; }
+.user-bubble { max-width:440px; padding:10px 14px; border-radius:14px 14px 4px 14px; background:#E1EFF9; color:#1B2C38; font-size:14px; line-height:1.7; }
 .tool { display:inline-flex; align-items:center; gap:7px; margin-top:8px; padding:5px 9px; border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:11.5px; background:rgba(255,255,255,.55); }
 .tool b { color:var(--ink2); font-weight:550; }
-.msg-actions { display:flex; gap:14px; margin-top:8px; color:#B3A996; font-size:11px; }
+.msg-actions { display:flex; gap:14px; margin-top:8px; color:#8FA3B2; font-size:11px; }
 
 /* composer */
 .composer-wrap { padding:14px 20px 18px; }
 .composer { width:760px; margin:0 auto; }
 .input { display:flex; align-items:center; gap:10px; height:52px; padding:0 10px 0 16px; background:var(--surface); border:1px solid var(--line); border-radius:14px; }
-.input.focus { border-color:#D9B477; box-shadow:0 0 0 3px rgba(232,162,59,.16); }
-.placeholder { flex:1; color:#A79D8D; font-size:14px; }
-.kbd { color:#A79D8D; font-size:11px; }
-.send { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:9px; background:var(--accent-fill); color:#2B1D08; font-size:15px; }
-.hint { margin:8px 2px 0; color:#A79D8D; font-size:11px; display:flex; gap:10px; }
+.input.focus { border-color:#8FC3E8; box-shadow:0 0 0 3px rgba(47,124,175,.14); }
+.placeholder { flex:1; color:#7D92A3; font-size:14px; }
+.kbd { color:#7D92A3; font-size:11px; }
+.send { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:9px; background:#1F5C86; color:#FFFFFF; font-size:15px; }
+.hint { margin:8px 2px 0; color:#7D92A3; font-size:11px; display:flex; gap:10px; }
 
 /* settings */
 .settings-body { flex:1; display:flex; min-height:0; }
-.settings-nav { width:232px; padding:18px 12px; background:#F7F3EA; border-right:1px solid var(--line); }
-.settings-nav h3 { margin:6px 10px 8px; color:#A79D8D; font-size:10px; letter-spacing:.12em; text-transform:uppercase; font-weight:650; }
+.settings-nav { width:232px; padding:18px 12px; background:#EAF3FA; border-right:1px solid var(--line); }
+.settings-nav h3 { margin:6px 10px 8px; color:#7D92A3; font-size:10px; letter-spacing:.12em; text-transform:uppercase; font-weight:650; }
 .nav-item { display:flex; align-items:center; gap:10px; height:36px; padding:0 10px; border-radius:8px; color:var(--ink2); font-size:13px; }
-.nav-item.active { background:var(--surface); color:var(--ink); box-shadow:inset 2px 0 0 var(--accent-fill); font-weight:600; }
-.nav-item .n { margin-left:auto; color:#A79D8D; font-size:11px; }
+.nav-item.active { background:var(--surface); color:var(--ink); box-shadow:inset 2px 0 0 #2F7CAF; font-weight:600; }
+.nav-item .n { margin-left:auto; color:#7D92A3; font-size:11px; }
 .settings-main { flex:1; padding:34px 56px; overflow:hidden; }
 .settings-title { margin:0; font-size:26px; letter-spacing:-.03em; font-weight:700; }
 .settings-desc { margin:8px 0 26px; color:var(--muted); font-size:13px; }
@@ -73,8 +73,8 @@ body { margin:0; padding:44px 40px 64px; background:#ECE8DF; color:var(--ink); f
 .seg span { padding:5px 12px; border-radius:7px; color:var(--muted); font-size:12px; }
 .seg span.on { background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(50,35,10,.08); }
 .swatches { display:flex; gap:8px; }
-.swatch { width:18px; height:18px; border-radius:50%; background:var(--accent-fill); box-shadow:0 0 0 2px var(--surface), 0 0 0 3px rgba(232,162,59,.5); }
-.switch { width:38px; height:22px; border-radius:999px; background:#E2DACB; position:relative; }
+.swatch { width:18px; height:18px; border-radius:50%; background:var(--accent-fill); box-shadow:0 0 0 2px var(--surface), 0 0 0 3px rgba(47,124,175,.35); }
+.switch { width:38px; height:22px; border-radius:999px; background:#D5E3EE; position:relative; }
 .switch.on { background:var(--accent-fill); }
 .switch::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; }
 .switch.on::after { left:19px; }
@@ -132,7 +132,7 @@ body { margin:0; padding:44px 40px 64px; background:#ECE8DF; color:var(--ink); f
       <div class="group">
         <div class="row"><div class="row-label">主题<div class="row-desc">跟随系统或固定</div></div><div class="row-control"><div class="select">跟随系统 <span>⌄</span></div></div></div>
         <div class="row"><div class="row-label">密度<div class="row-desc">长对话建议舒适</div></div><div class="row-control"><div class="seg"><span class="on">舒适</span><span>紧凑</span></div></div></div>
-        <div class="row"><div class="row-label">强调色<div class="row-desc">只影响主操作与焦点</div></div><div class="row-control"><div class="swatches"><span class="swatch"></span><span class="swatch" style="background:#7C9473;box-shadow:0 0 0 2px var(--surface)"></span><span class="swatch" style="background:#8B8FA3;box-shadow:0 0 0 2px var(--surface)"></span><span class="swatch" style="background:#C97F67;box-shadow:0 0 0 2px var(--surface)"></span></div></div></div>
+        <div class="row"><div class="row-label">强调色<div class="row-desc">只影响主操作与焦点</div></div><div class="row-control"><div class="swatches"><span class="swatch" style="background:#2F7CAF"></span><span class="swatch" style="background:#6FA8CC;box-shadow:0 0 0 2px var(--surface)"></span><span class="swatch" style="background:#8FB6CF;box-shadow:0 0 0 2px var(--surface)"></span><span class="swatch" style="background:#5E7F9B;box-shadow:0 0 0 2px var(--surface)"></span></div></div></div>
         <div class="row"><div class="row-label">减少动效<div class="row-desc">关闭呼吸环与过渡</div></div><div class="row-control"><div class="switch"></div></div></div>
         <div class="row"><div class="row-label">消息密度<div class="row-desc">房间里的行距</div></div><div class="row-control"><div class="select">舒适 <span>⌄</span></div></div></div>
       </div>
