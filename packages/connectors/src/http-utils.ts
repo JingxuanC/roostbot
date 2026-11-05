@@ -51,9 +51,15 @@ export function normalizeSummary(value: unknown, backendId: GatewayBackendId): C
   const rawTitle = value['title']
   const title = typeof rawTitle === 'string' && rawTitle.trim() !== '' ? rawTitle : slug
   const actions = Array.isArray(value['actions'])
-    ? value['actions']
-        .filter((action): action is string => typeof action === 'string' && action.trim() !== '')
-        .map((name) => ({ name, access: 'read' as const }))
+    ? value['actions'].flatMap((action) => {
+        if (typeof action === 'string' && action.trim() !== '') {
+          return [{ name: action.trim(), access: 'read' as const }]
+        }
+        if (!isRecord(action)) return []
+        const name = typeof action['name'] === 'string' ? action['name'].trim() : ''
+        if (name === '') return []
+        return [{ name, access: action['access'] === 'write' ? ('write' as const) : ('read' as const) }]
+      })
     : []
   return [{ slug, title, backend: backendId, actions }]
 }

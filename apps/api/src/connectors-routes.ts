@@ -172,14 +172,8 @@ export async function handleConnectorConnect(
     return sendError(res, 403, 'forbidden', `workspace ${workspaceId} requires owner/admin role`)
   }
 
-  let urlValue: string
-  try {
-    const authorized = await ctx.connectorBackend.authorize(slug)
-    urlValue = authorized.url
-  } catch (err) {
-    return sendBackendFailure(res, err)
-  }
-
+  // state 必须先于 gateway.authorize 生成并传下去：网关要把 state 拼进最终
+  // 回调 URL，否则浏览器完成授权后回不到本服务的 callback。
   const state = randomBytes(24).toString('hex')
   pendingStates.set(state, {
     workspaceId,
@@ -187,6 +181,15 @@ export async function handleConnectorConnect(
     slug,
     expiresAt: ctx.now() + CONNECTOR_STATE_TTL_MS,
   })
+
+  let urlValue: string
+  try {
+    const authorized = await ctx.connectorBackend.authorize(slug, { workspaceId, state })
+    urlValue = authorized.url
+  } catch (err) {
+    pendingStates.delete(state)
+    return sendBackendFailure(res, err)
+  }
   sendJson(res, 201, { url: urlValue, state })
 }
 
