@@ -138,6 +138,9 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
       ...(persona === undefined ? {} : { persona }),
       ...(provider === undefined ? {} : { provider }),
       model,
+      // 新产品默认：Bot 在自己的 OpenShell 沙箱里可完整执行命令，不再逐次打断用户。
+      // 仍可在 Bot 设置里改回 ask/edits/auto。
+      approval: 'full',
       ...(body['avatar'] === undefined ? {} : { avatar: body['avatar'] as Bot['avatar'] }),
       now: ctx.now(),
     })

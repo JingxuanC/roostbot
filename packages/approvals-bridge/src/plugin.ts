@@ -89,6 +89,8 @@ export function apply(
   // DSH 的 approval 事件带 callId，但桥的契约里只有 argsSummary/consequence。
   // 自己包一层 requestId，把 callId 留下来给 payload（展示与审计用）。
   const callIds = new Map<string, string>()
+  // 一条 DSH 进程里会有多个 Bot 的 session；approval 事件按 session id 归到真实 bot。
+  const botIds = new Map<string, string>()
   const nextRequestId = defaultRequestId()
 
   let bridge: ApprovalBridge
@@ -98,6 +100,8 @@ export function apply(
     request: async (request) => {
       const callId = callIds.get(request.id)
       callIds.delete(request.id)
+      const botId = botIds.get(request.id) ?? settings.botId
+      botIds.delete(request.id)
       const response = await doFetch(`${settings.apiBase}/api/internal/approvals`, {
         method: 'POST',
         headers: {
@@ -107,7 +111,7 @@ export function apply(
         body: JSON.stringify({
           workspaceId: settings.workspaceId,
           kind: 'tool.call',
-          requester: settings.botId,
+          requester: botId,
           requesterKind: 'bot',
           action: `调用工具 ${request.tool}`,
           target: request.id,
@@ -152,6 +156,9 @@ export function apply(
       const id = nextRequestId(request)
       const callId = typeof request.callId === 'string' ? request.callId.trim() : ''
       if (callId !== '') callIds.set(id, callId)
+      const sessionId = typeof request.agent?.session?.id === 'string' ? request.agent.session.id : ''
+      const botMatch = /-((?:bot_)[0-9A-Za-z]+)$/.exec(sessionId)
+      if (botMatch !== null) botIds.set(id, botMatch[1]!)
       return id
     },
   })

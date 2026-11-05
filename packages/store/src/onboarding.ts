@@ -57,6 +57,7 @@ export function ensureMainBot(store: Store, input: EnsureMainBotInput): EnsureMa
         name: MAIN_BOT_NAME,
         role: MAIN_BOT_ROLE,
         model: MAIN_BOT_MODEL,
+        approval: 'full',
         provider: 'deepseek-official',
         createdBy: accountId,
         createdAt: at

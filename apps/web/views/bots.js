@@ -21,10 +21,10 @@ export const APPROVAL_LABELS = {
 }
 
 const APPROVAL_OPTIONS = [
-  { value: 'ask', label: '每次询问（默认）' },
+  { value: 'ask', label: '每次询问' },
   { value: 'edits', label: '只有编辑免问' },
   { value: 'auto', label: '自动执行' },
-  { value: 'full', label: '完全放开（危险）' },
+  { value: 'full', label: '完全放开（默认）' },
 ]
 
 const MEMORY_OPTIONS = [

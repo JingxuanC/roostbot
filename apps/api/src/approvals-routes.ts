@@ -19,7 +19,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { StoreError } from '../../../packages/store/src/index.ts'
+import { StoreError, getBot, listBots } from '../../../packages/store/src/index.ts'
 import type { Approval, ApprovalGrant } from '../../../packages/store/src/approvals.ts'
 import {
   createApproval,
@@ -100,6 +100,23 @@ export async function handleInternalCreateApproval(
   }
 
   try {
+    // 0) Bot 级完全放开：tool.call 不再建审批单，直接返回 granted。
+    //    requester 必须是真实 bot_ id；旧 room-agent 发来的 selector 不匹配任何 Bot，
+    //    仍会走正常审批，避免把未知调用方误当全权。
+    if (kind === 'tool.call' && requesterKind === 'bot') {
+      const bot = getBot(store, requester)
+      // 旧版 room-agent 可能把多 Bot 会话的 requester 写成 selector；只要这个
+      // workspace 里所有 Bot 都是 full，就把这类调用也直接放行。
+      const legacyAllFull =
+        bot === null &&
+        listBots(store, workspaceId).every((item) => item.approval === 'full') &&
+        listBots(store, workspaceId).length > 0
+      if ((bot !== null && bot.approval === 'full') || legacyAllFull) {
+        sendJson(res, 200, { approval: null, granted: true })
+        return
+      }
+    }
+
     // 1) 长期授权：workspace + kind + action + target 全等才放行，不做通配。
     const grant = findApprovalGrant(store, { workspaceId, kind, action, target })
     if (grant !== null) {
