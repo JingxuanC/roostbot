@@ -96,6 +96,7 @@ async function main(): Promise<void> {
           image: process.env.ROOST_SANDBOX_IMAGE ?? 'roost/agent:dev',
           cpHost: process.env.ROOST_CP_HOST ?? 'host.openshell.internal',
           cpPort: Number(process.env.ROOST_CP_PORT ?? port),
+          lockApiBase: process.env.ROOST_CP_API_BASE ?? `http://127.0.0.1:${port}`,
           runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
           ...(sqlite === undefined ? {} : { rawStore: sqlite }),
           ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),

@@ -44,6 +44,8 @@ export interface OpenShellRuntimeConfig {
   image: string
   cpHost: string
   cpPort: number
+  /** 控制面自己访问 profile-lock 的地址；单机默认 loopback，分机部署要设公网/内网 URL。 */
+  lockApiBase?: string
   /** 旧部署兼容：全局 runtime token；没有 rawStore/issuer 时直接注入沙箱 env。 */
   runtimeToken: string
   /** 控制面 SQLite store；有它才签发每 workspace token。 */
@@ -129,7 +131,7 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
       try {
         // 用刚签发的 token 拉锁：同时验证它确实能通过控制面校验。
         const lock = await fetchProfileLock({
-          apiBase: `http://127.0.0.1:${config.cpPort}`,
+          apiBase: config.lockApiBase ?? `http://127.0.0.1:${config.cpPort}`,
           runtimeToken: token.token,
           workspaceId,
           ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
