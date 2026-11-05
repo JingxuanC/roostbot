@@ -39,6 +39,7 @@
 |---|---|---|
 | 邮箱 + 密码 | 主账号 | 密码 ≥ 12 位；Argon2id 哈希 |
 | 邮箱验证码 | 登录（免密码） | 一次性、10 分钟 |
+| 邮件 | SMTP（ROOST_SMTP_*）或默认写 journald | 注册验证、重置密码；未配置 SMTP 时不会真的发信 |
 | OIDC | 任意标准 OIDC（Keycloak / Logto / Casdoor / Authentik / Google / GitHub…） | 企业客户与自托管优先；不自动合并同名邮箱；接入见 [deploy/oidc/README.md](../../deploy/oidc/README.md) |
 | 邀请 | 加入 workspace | 邀请链接绑定邮箱 + 角色，7 天有效 |
 

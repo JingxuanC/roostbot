@@ -13,6 +13,7 @@ import { createMemoryStore } from './memory-store.ts'
 import { createStorePort } from './store-adapter.ts'
 import { openStore } from '../../../packages/store/src/index.ts'
 import { openShellRuntimeManager } from './runtime-manager-openshell.ts'
+import { createSmtpMailerFromEnv } from './smtp-mailer.ts'
 import { createSleeperRegistry } from './idle-sleepers.ts'
 
 function readPort(): number {
@@ -115,6 +116,7 @@ async function main(): Promise<void> {
     })
   }
 
+  const smtpMailer = createSmtpMailerFromEnv()
   let started: StartedServer
   try {
     started = await startServer({
@@ -123,6 +125,7 @@ async function main(): Promise<void> {
       host,
       ...(sqlite === undefined ? {} : { rawStore: sqlite }),
       ...(runtimeManager === undefined ? {} : { runtimeManager }),
+      ...(smtpMailer === null ? {} : { authMailer: smtpMailer }),
       ...(dshProxyPort === undefined ? {} : { dshProxyPort }),
       ...(sleepers === undefined
         ? {}
