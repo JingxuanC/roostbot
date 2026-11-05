@@ -2194,8 +2194,11 @@ function syncSend() {
 function growComposer() {
   const input = $('#composer')
   if (!input) return
+  // 原来固定在 160px，长消息只能在小框里滚动；放宽到 40vh（桌面最多 320px）。
+  const viewportCap = typeof window === 'undefined' ? 320 : Math.round(window.innerHeight * 0.4)
+  const maxHeight = Math.max(160, Math.min(320, viewportCap))
   input.style.height = 'auto'
-  input.style.height = `${Math.min(input.scrollHeight, 160)}px`
+  input.style.height = `${Math.min(input.scrollHeight, maxHeight)}px`
 }
 
 function setComposerEnabled(enabled, placeholder) {
