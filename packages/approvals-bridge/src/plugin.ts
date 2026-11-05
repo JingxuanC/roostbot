@@ -163,10 +163,110 @@ export function apply(
     },
   })
 
+  // 给 Bot 一个真正可调用的团队创建工具。复用同一个 runtime token / workspace 配置，
+  // 建房仍走控制面的 create_room 审批，不在沙箱里直接写控制面库。
+  const tools = (ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools
+  if (tools !== undefined && typeof tools.register === 'function') {
+    tools.register(createTeamTool(settings, doFetch))
+  }
+
   return { bridge, answerer }
 }
 
 /** Cordis 插件名：入口模块被 patch 的 `name` 引用，导出它只是让 meta 可见。 */
+/** 从 DSH session id（room-<roomId>-<botId>）取真实 bot id。 */
+function botIdFromSessionId(sessionId: string): string {
+  const match = /-((?:bot_)[0-9A-Za-z]+)$/.exec(sessionId)
+  return match === null ? '' : match[1]!
+}
+
+function createTeamTool(
+  settings: { apiBase: string; runtimeToken: string; workspaceId: string; botId: string },
+  doFetch: typeof fetch,
+): unknown {
+  const parameters = {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: '团队/房间名称，例如「量化研究组」' },
+      purpose: { type: 'string', description: '这个团队要解决的长期目标' },
+      members: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '成员 Bot 的名称或 id；不填默认把工作区所有 Bot 拉进来',
+      },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  }
+  return {
+    name: 'create_team',
+    description:
+      'Create a Roost team room with the selected bots. The request becomes a one-time ' +
+      'create_room approval; tell the user to approve it in 需要你. Use this when the user asks ' +
+      'to form a team/group of bots, not for a normal chat reply.',
+    parameters,
+    output: {
+      schema: { type: 'object' },
+      render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args: Record<string, unknown>, exec: { signal?: AbortSignal; agent?: { session?: { id?: string } } }) {
+      const name = typeof args['name'] === 'string' ? args['name'].trim() : ''
+      if (name === '') throw new Error('team name is required')
+      const purpose = typeof args['purpose'] === 'string' ? args['purpose'].trim() : ''
+      const requested = Array.isArray(args['members'])
+        ? args['members'].filter((member): member is string => typeof member === 'string' && member.trim() !== '').map((member) => member.trim())
+        : []
+      const headers = { 'content-type': 'application/json', 'x-runtime-token': settings.runtimeToken }
+      const botsResponse = await doFetch(
+        `${settings.apiBase}/api/internal/bots?workspaceId=${encodeURIComponent(settings.workspaceId)}`,
+        { headers, signal: exec.signal },
+      )
+      if (!botsResponse.ok) throw new Error(`list bots failed: HTTP ${botsResponse.status}`)
+      const botsBody = (await botsResponse.json()) as { bots?: Array<{ id?: unknown; name?: unknown }> }
+      const bots = Array.isArray(botsBody.bots) ? botsBody.bots.filter((bot) => typeof bot.id === 'string') : []
+      if (bots.length < 2) throw new Error('workspace needs at least two bots to create a team')
+      const byId = new Map(bots.map((bot) => [String(bot.id), String(bot.name ?? bot.id)]))
+      const byName = new Map(bots.map((bot) => [String(bot.name ?? ''), String(bot.id)]))
+      const sessionBotId = botIdFromSessionId(String(exec.agent?.session?.id ?? ''))
+      const callerBotId = sessionBotId !== '' && byId.has(sessionBotId) ? sessionBotId : settings.botId
+      if (!byId.has(callerBotId)) throw new Error(`caller bot ${callerBotId} is not a workspace bot`)
+      const selected = requested.length === 0
+        ? bots.map((bot) => String(bot.id))
+        : requested.map((member) => byName.get(member) ?? (byId.has(member) ? member : ''))
+      if (selected.some((id) => id === '')) throw new Error('unknown team member: use a bot name from this workspace')
+      const memberBotIds = Array.from(new Set([callerBotId, ...selected]))
+      if (memberBotIds.length < 2) throw new Error('a team needs at least two distinct bots')
+      const response = await doFetch(`${settings.apiBase}/api/internal/bot-rooms`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          workspaceId: settings.workspaceId,
+          botId: callerBotId,
+          name,
+          ...(purpose === '' ? {} : { purpose }),
+          memberBotIds,
+        }),
+        signal: exec.signal,
+      })
+      const body = (await response.json().catch(() => null)) as
+        | { approval?: { id?: unknown; status?: unknown }; error?: { message?: unknown } }
+        | null
+      if (!response.ok) {
+        const message = body && body.error && typeof body.error.message === 'string' ? body.error.message : `HTTP ${response.status}`
+        throw new Error(`create team failed: ${message}`)
+      }
+      const approvalId = body && body.approval && typeof body.approval.id === 'string' ? body.approval.id : ''
+      return {
+        status: 'pending_approval',
+        approvalId,
+        name,
+        members: memberBotIds.map((id) => byId.get(id) ?? id),
+        note: '告诉用户在「需要你」里批准这一次建团队请求。'
+      }
+    },
+  }
+}
+
 export const name = '@roost/approval-bridge'
 
 // ---- 控制面轮询 --------------------------------------------------------------

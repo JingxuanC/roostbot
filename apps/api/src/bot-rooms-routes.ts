@@ -20,6 +20,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { StoreError } from '../../../packages/store/src/index.ts'
 import type { Approval } from '../../../packages/store/src/approvals.ts'
 import { decideApproval, getApproval, listApprovals, storeErrorTag } from '../../../packages/store/src/approvals.ts'
+import { listBots } from '../../../packages/store/src/bots.ts'
 import type { ApprovalStatus } from '../../../packages/store/src/approvals.ts'
 import {
   BOT_ROOM_APPROVAL_KIND,
@@ -95,6 +96,28 @@ export async function handleBotCreateRoom(ctx: Ctx, req: IncomingMessage, res: S
   } catch (err) {
     sendApprovalFailure(res, err)
   }
+}
+
+/** runtime token：Bot 侧读取本 workspace 的 Bot 名单（建团队时解析成员用）。 */
+export async function handleInternalListBots(
+  ctx: Ctx,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  const store = ctx.rawStore
+  if (store === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'bot list needs the SQLite store')
+  }
+  const workspaceId = readId(url.searchParams.get('workspaceId'))
+  if (workspaceId === null) {
+    return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
+  }
+  if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
+  const bots = listBots(store, workspaceId).map((bot) => ({ id: bot.id, name: bot.name, role: bot.role }))
+  sendJson(res, 200, { bots })
 }
 
 // ---- 用户：审批列表 ----------------------------------------------------------

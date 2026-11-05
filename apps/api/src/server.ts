@@ -54,6 +54,7 @@ import {
 import {
   handleBotCreateRoom,
   handleDecideApproval,
+  handleInternalListBots,
   handleListApprovals,
 } from './bot-rooms-routes.ts'
 import {
@@ -2156,6 +2157,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleBotCreateRoom(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (path === '/api/internal/bots') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalListBots(ctx as RoomRouteContext, req, res, url)
     return
   }
 
