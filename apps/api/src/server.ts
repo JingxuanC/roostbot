@@ -270,7 +270,7 @@ export interface ServerOptions {
   modelProxy?: ModelProxyHandler
   /** BYO 模型 Key 加密主密钥；不传时读 ROOST_MODEL_KEY_SECRET。测试可注入固定 key。 */
   modelKeyMaster?: Buffer | null
-  /** 免费额度使用的模型；默认 ROOST_FREE_MODEL 或 deepseek-v4-flash。 */
+  /** 免费额度使用的模型；默认 ROOST_FREE_MODEL 或 deepseek-flash。 */
   freeModel?: string
   /** 测试连接的上游 fetch（测试注入）。 */
   modelTestFetch?: typeof fetch

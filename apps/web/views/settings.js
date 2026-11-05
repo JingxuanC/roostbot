@@ -572,8 +572,8 @@ function modelSection(ctx, workspaceId, role) {
     })
     const model = ui.input({
       id: 'model-name',
-      value: current?.model || 'deepseek-v4-flash',
-      placeholder: 'deepseek-v4-flash',
+      value: current?.model || 'deepseek-flash',
+      placeholder: 'deepseek-flash',
       required: true
     })
     const apiKey = ui.input({

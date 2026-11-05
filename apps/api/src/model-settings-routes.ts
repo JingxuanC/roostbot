@@ -27,7 +27,7 @@ export interface ModelSettingsContext {
 
 interface Ctx extends ModelSettingsContext {}
 
-export const DEFAULT_FREE_MODEL = 'deepseek-v4-flash'
+export const DEFAULT_FREE_MODEL = 'deepseek-flash'
 
 async function requireAdmin(ctx: Ctx, req: IncomingMessage, res: ServerResponse, workspaceId: string): Promise<string | null> {
   const auth = await authenticate(ctx, req)

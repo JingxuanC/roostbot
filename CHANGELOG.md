@@ -8,7 +8,7 @@
 ### 模型 Key 与免费额度（2026-11-05）
 
 - 每 workspace 可配自己的 DeepSeek / OpenAI-compatible Key；AES-256-GCM 加密存储，UI 只回显后 4 位。
-- 没配 Key 时走平台 Key；按账号一次性发放 1,000,000 tokens（90 天），只允许 `deepseek-v4-flash`，
+- 没配 Key 时走平台 Key；按账号一次性发放 1,000,000 tokens（90 天），只允许 `deepseek-flash`，
   只在使用平台 Key 时扣减。
 - 模型代理按 runtime token 解析 workspace，BYO 优先，平台兜底；上游请求强制使用对应模型。
 - DSH 沙箱改走控制面 `/v1`，`DEEPSEEK_API_KEY` 只是 workspace runtime token，真实 Key 不进沙箱。

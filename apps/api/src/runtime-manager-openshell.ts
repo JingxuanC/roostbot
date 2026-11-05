@@ -112,7 +112,7 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
       const store = resolveStore(context)
       const token = issueFor(store, workspaceId)
       const workspaceModel = store === undefined ? undefined : getWorkspaceModelCredential(store, workspaceId)?.model
-      const model = workspaceModel ?? ((process.env['ROOST_FREE_MODEL'] ?? '').trim() || 'deepseek-v4-flash')
+      const model = workspaceModel ?? ((process.env['ROOST_FREE_MODEL'] ?? '').trim() || 'deepseek-flash')
       const env: Record<string, string> = {
         ROOST_API: `${config.cpScheme ?? 'http'}://${config.cpHost}:${config.cpPort}`,
         ROOST_RUNTIME_TOKEN: token.token,

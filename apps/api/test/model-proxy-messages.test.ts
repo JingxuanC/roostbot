@@ -50,7 +50,7 @@ test('/v1/messages：runtime token 鉴权 + workspace 归属 + 免费额度扣�
         'x-api-key': runtime.token,
         'x-roost-workspace-id': workspace.id
       },
-      body: JSON.stringify({ model: 'deepseek-v4-flash', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] })
+      body: JSON.stringify({ model: 'deepseek-flash', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] })
     })
     assert.equal(response.status, 200)
     assert.equal(await response.text(), JSON.stringify({
@@ -61,7 +61,7 @@ test('/v1/messages：runtime token 鉴权 + workspace 归属 + 免费额度扣�
       usage: { input_tokens: 12, output_tokens: 8 }
     }))
     assert.equal(upstreamAuth, 'Bearer sk-platform-test')
-    assert.equal(upstreamModel, 'deepseek-v4-flash')
+    assert.equal(upstreamModel, 'deepseek-flash')
     assert.equal(getTokenCreditBalance(store, 'acc_proxy', 1_800_000_000_000).balance, 999_980)
   } finally {
     await started.close()
