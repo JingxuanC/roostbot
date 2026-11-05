@@ -1835,10 +1835,19 @@ function renderRoundStatus() {
   bar.hidden = false
 }
 
+/** 给正在思考/说话的 Bot 头像加一圈动画；其余头像保持安静。 */
+function markThinkingAvatar(botId) {
+  for (const node of document.querySelectorAll('.avatar[data-bot-id]')) {
+    node.classList.toggle('is-thinking', botId !== '' && node.getAttribute('data-bot-id') === botId)
+  }
+}
+
 function renderWorking() {
   const working = $('#working')
   const text = $('#working-text')
   if (!working || !text) return
+  working.classList.remove('is-thinking')
+  markThinkingAvatar('')
   if (!LIVE.active) {
     working.hidden = false
     working.classList.remove('is-offline')
@@ -1856,10 +1865,15 @@ function renderWorking() {
   const round = LIVE.room && LIVE.room.round
   if (!round) {
     working.hidden = true
+    working.classList.remove('is-thinking')
+    markThinkingAvatar('')
     return
   }
   const liveSpeaking = LIVE.room && typeof LIVE.room.speaking === 'string' ? LIVE.room.speaking : ''
   const slot = speakingSlot(round)
+  const activeBot = slot ? slot.botId : liveSpeaking
+  markThinkingAvatar(activeBot)
+  working.classList.toggle('is-thinking', activeBot !== '' || round.state === 'running')
   if (slot) {
     working.hidden = false
     text.textContent = `${botLabel(slot.botId)} 正在说`
@@ -2154,6 +2168,7 @@ async function enterLiveRoom(token) {
   rooms = await ensureRoom()
   STORE.rooms = rooms
   renderSidebarRooms()
+  await ensureRuntimeStarted()
   const note = $('#pair-note')
   if (note) note.hidden = true
   const lastRoom = readLastRoom()

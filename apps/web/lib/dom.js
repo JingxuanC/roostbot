@@ -40,7 +40,7 @@ export function svgNode(markup) {
 }
 
 export function avatar(botId, size) {
-  const wrap = el('span', { class: `avatar avatar-${size}` })
+  const wrap = el('span', { class: `avatar avatar-${size}`, 'data-bot-id': botId })
   wrap.append(svgNode(glyphSvg(botId, { size })))
   return wrap
 }
@@ -57,7 +57,7 @@ export function botAvatar(bot, size = 24, options = {}) {
   if (!isAvatarDataUrl(image)) {
     const state = options.state ?? (bot && typeof bot === 'object' && bot.status === 'paused' ? 'paused' : 'idle')
     const label = bot && typeof bot === 'object' && typeof bot.name === 'string' ? bot.name : 'Bot 头像'
-    const wrap = el('span', { class: `avatar avatar-${size}` })
+    const wrap = el('span', { class: `avatar avatar-${size}`, 'data-bot-id': id })
     wrap.append(
       svgNode(
         birdSvg(id, {
@@ -71,7 +71,7 @@ export function botAvatar(bot, size = 24, options = {}) {
     )
     return wrap
   }
-  const wrap = el('span', { class: `avatar avatar-${size}` })
+  const wrap = el('span', { class: `avatar avatar-${size}`, 'data-bot-id': id })
   wrap.append(
     el('img', {
       class: 'avatar-img',
