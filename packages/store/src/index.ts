@@ -400,3 +400,5 @@ export type {
   TokenCreditBalance,
   TokenGrant,
 } from './token-credits.ts'
+export { MAIN_BOT_NAME, MAIN_BOT_ROLE, MAIN_BOT_MODEL, ensureMainBot } from './onboarding.ts'
+export type { EnsureMainBotInput, EnsureMainBotResult } from './onboarding.ts'

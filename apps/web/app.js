@@ -2123,24 +2123,45 @@ async function enterLiveRoom(token) {
     writeSessionToken(token)
   }
   LIVE.token = sessionToken || ''
-  const rooms = await ensureRoom()
+  let rooms = await ensureRoom()
   STORE.rooms = rooms
   STORE.roomsLoaded = true
   LIVE.active = true
   startNeedsPolling()
   renderSidebarRooms()
+  let bots = []
   try {
-    await loadBots()
+    bots = await loadBots()
   } catch {
     // 侧栏空着也比假装有 Bot 好。
   }
+  // 首次进入空 workspace：自动创建一个主 Bot，Bot API 会同时建好它的私聊 DM。
+  // 这样用户进来是可直接说话的主 Bot，而不是空列表 / 新建表单。
+  if (bots.length === 0) {
+    try {
+      const workspaceId = await ensureWorkspaceId()
+      await api.post('/api/bots', {
+        workspaceId,
+        name: '主 Bot',
+        role: '主理人',
+        model: 'deepseek-flash',
+      })
+      bots = await loadBots({ force: true })
+    } catch {
+      // 创建失败仍走普通空列表兜底，不把用户卡在空白页。
+    }
+  }
+  rooms = await ensureRoom()
+  STORE.rooms = rooms
+  renderSidebarRooms()
   const note = $('#pair-note')
   if (note) note.hidden = true
   const lastRoom = readLastRoom()
+  const mainDm = rooms.find((room) => room.dm === true && (room.members || []).some((member) => member.botId === bots[0]?.id))
   const target =
-    pendingRoute || lastRoom || (rooms.length > 0 ? `#/rooms/${encodeURIComponent(rooms[0].id)}` : '#/bots')
+    pendingRoute || lastRoom || (mainDm ? `#/rooms/${encodeURIComponent(mainDm.id)}` : rooms.length > 0 ? `#/rooms/${encodeURIComponent(rooms[0].id)}` : '#/bots')
   pendingRoute = ''
-  if (rooms.length === 0) flash('还没有房间：先建两个 Bot，再建群。')
+  if (rooms.length === 0) flash('还没有房间：先建一个 Bot，再开始对话。')
   navigate(target)
 }
 
