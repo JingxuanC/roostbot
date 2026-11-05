@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Roost UI 概念稿</title>
+<style>
+:root {
+  --canvas:#FBFAF7; --surface:#FFFFFF; --sunken:#F4EFE5; --ink:#17140F; --ink2:#4A443A; --muted:#7C7466;
+  --line:#E8E1D4; --accent:#B8761F; --accent-fill:#E8A23B; --danger:#B3423A; --ok:#5E7D4F;
+  --font:"Inter","SF Pro Display",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:44px 40px 64px; background:#ECE8DF; color:var(--ink); font-family:var(--font); }
+.label { margin:0 0 10px; color:#8A8173; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
+.artboard { margin:0 0 44px; background:var(--canvas); border:1px solid #DCD4C4; border-radius:18px; overflow:hidden; box-shadow:0 20px 50px -30px rgba(50,35,10,.35); }
+.room { width:1180px; height:760px; display:flex; flex-direction:column; }
+.settings { width:1180px; height:760px; display:flex; flex-direction:column; }
+.mobile { width:390px; height:780px; display:flex; flex-direction:column; }
+
+/* top bar */
+.top { display:flex; align-items:center; gap:12px; height:60px; padding:0 20px; border-bottom:1px solid var(--line); background:rgba(251,250,247,.86); }
+.icon-btn { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid transparent; background:transparent; color:var(--ink2); font-size:17px; }
+.icon-btn:hover { background:var(--sunken); }
+.room-title { font-size:15px; font-weight:650; letter-spacing:-.01em; }
+.room-status { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; margin-left:4px; }
+.dot { width:6px; height:6px; border-radius:50%; background:var(--accent-fill); box-shadow:0 0 0 3px rgba(232,162,59,.18); }
+.spacer { flex:1; }
+.avatar-flock { display:flex; align-items:center; gap:2px; }
+.avatar-flock .a { display:inline-flex; border-radius:50%; background:var(--sunken); }
+.avatar-flock .a + .a { margin-left:-6px; }
+.avatar { display:inline-flex; border-radius:50%; background:var(--sunken); }
+
+/* messages */
+.body { flex:1; overflow:hidden; padding:26px 0 0; display:flex; justify-content:center; }
+.thread { width:760px; display:flex; flex-direction:column; gap:22px; }
+.day { text-align:center; color:#A79D8D; font-size:11px; }
+.msg { display:flex; align-items:flex-start; gap:10px; }
+.msg.user { justify-content:flex-end; }
+.msg .avatar { flex:none; align-self:flex-start; margin-top:1px; }
+.who { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
+.name { font-size:13px; font-weight:650; }
+.role { color:var(--muted); font-size:12px; }
+.text { font-size:14px; line-height:1.72; color:var(--ink); }
+.user-bubble { max-width:440px; padding:10px 14px; border-radius:14px 14px 4px 14px; background:#F2E5CB; color:#2E2619; font-size:14px; line-height:1.7; }
+.tool { display:inline-flex; align-items:center; gap:7px; margin-top:8px; padding:5px 9px; border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:11.5px; background:rgba(255,255,255,.55); }
+.tool b { color:var(--ink2); font-weight:550; }
+.msg-actions { display:flex; gap:14px; margin-top:8px; color:#B3A996; font-size:11px; }
+
+/* composer */
+.composer-wrap { padding:14px 20px 18px; }
+.composer { width:760px; margin:0 auto; }
+.input { display:flex; align-items:center; gap:10px; height:52px; padding:0 10px 0 16px; background:var(--surface); border:1px solid var(--line); border-radius:14px; }
+.input.focus { border-color:#D9B477; box-shadow:0 0 0 3px rgba(232,162,59,.16); }
+.placeholder { flex:1; color:#A79D8D; font-size:14px; }
+.kbd { color:#A79D8D; font-size:11px; }
+.send { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:9px; background:var(--accent-fill); color:#2B1D08; font-size:15px; }
+.hint { margin:8px 2px 0; color:#A79D8D; font-size:11px; display:flex; gap:10px; }
+
+/* settings */
+.settings-body { flex:1; display:flex; min-height:0; }
+.settings-nav { width:232px; padding:18px 12px; background:#F7F3EA; border-right:1px solid var(--line); }
+.settings-nav h3 { margin:6px 10px 8px; color:#A79D8D; font-size:10px; letter-spacing:.12em; text-transform:uppercase; font-weight:650; }
+.nav-item { display:flex; align-items:center; gap:10px; height:36px; padding:0 10px; border-radius:8px; color:var(--ink2); font-size:13px; }
+.nav-item.active { background:var(--surface); color:var(--ink); box-shadow:inset 2px 0 0 var(--accent-fill); font-weight:600; }
+.nav-item .n { margin-left:auto; color:#A79D8D; font-size:11px; }
+.settings-main { flex:1; padding:34px 56px; overflow:hidden; }
+.settings-title { margin:0; font-size:26px; letter-spacing:-.03em; font-weight:700; }
+.settings-desc { margin:8px 0 26px; color:var(--muted); font-size:13px; }
+.group { border-top:1px solid var(--line); }
+.row { display:flex; align-items:center; gap:24px; min-height:58px; border-bottom:1px solid var(--line); }
+.row-label { width:150px; flex:none; font-size:13px; font-weight:550; }
+.row-desc { color:var(--muted); font-size:12px; margin-top:2px; font-weight:400; }
+.row-control { flex:1; display:flex; justify-content:flex-end; align-items:center; gap:10px; }
+.select { min-width:180px; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:9px; background:var(--surface); display:flex; align-items:center; justify-content:space-between; color:var(--ink2); font-size:13px; }
+.seg { display:inline-flex; padding:3px; background:var(--sunken); border-radius:9px; gap:2px; }
+.seg span { padding:5px 12px; border-radius:7px; color:var(--muted); font-size:12px; }
+.seg span.on { background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(50,35,10,.08); }
+.swatches { display:flex; gap:8px; }
+.swatch { width:18px; height:18px; border-radius:50%; background:var(--accent-fill); box-shadow:0 0 0 2px var(--surface), 0 0 0 3px rgba(232,162,59,.5); }
+.switch { width:38px; height:22px; border-radius:999px; background:#E2DACB; position:relative; }
+.switch.on { background:var(--accent-fill); }
+.switch::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; }
+.switch.on::after { left:19px; }
+
+/* mobile */
+.mobile .top { height:52px; padding:0 10px; }
+.mobile .thread { width:auto; padding:0 16px; gap:18px; }
+.mobile .user-bubble { max-width:250px; }
+.mobile .composer-wrap { padding:10px 12px 16px; }
+.mobile .input { height:46px; }
+.mobile .text { font-size:13.5px; }
+.mobile .name { font-size:12.5px; }
+.mobile .role { font-size:11px; }
+</style></head>
+<body>
+<p class="label">默认 · 打开就是房间（无侧栏、无顶部导航）</p>
+<div class="artboard room" id="room">
+  <div class="top">
+    <button class="icon-btn" aria-label="房间和设置">≡</button>
+    <span class="avatar-flock"><span class="a"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="44" height="44" role="img" aria-label="雏鸟" focusable="false"><g opacity="1" transform="rotate(0 48 48)"><circle cx="48" cy="48" r="45" fill="#E2E7EE" opacity="0.28"/><path d="M72 59l13 3-10 6z" fill="#5A6678"/><path d="M48 17c28.5 0 30 17.05 30 31 0 19.22 -19.8 29.139999999999997 -30 29.139999999999997 -10.200000000000001 0 -30 -9.92 -30 -29.139999999999997 0 -13.950000000000001 1.5 -31 30 -31z" fill="#9AA6B8"/><ellipse cx="48" cy="62" rx="18.6" ry="13.6" fill="#E2E7EE" opacity="0.85"/><ellipse cx="24" cy="56" rx="7" ry="12" fill="#5A6678" opacity="0.85"/><ellipse cx="72" cy="56" rx="7" ry="12" fill="#5A6678" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="#E2E7EE" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/><path d="M40 17l2-7 4 6 3-8 4 8 3-6 2 7" fill="none" stroke="#5A6678" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 28c4-2 10-2 14 0M68 28c-4-2-10-2-14 0" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/><circle cx="36.5" cy="40" r="8.6" fill="#FFFDF7"/><circle cx="59.5" cy="40" r="8.6" fill="#FFFDF7"/><circle cx="37.9" cy="41" r="3.8" fill="#26211C"/><circle cx="60.9" cy="41" r="3.8" fill="#26211C"/><circle cx="39.1" cy="38.8" r="1.4" fill="#FFFFFF" opacity="0.9"/><circle cx="62.1" cy="38.8" r="1.4" fill="#FFFFFF" opacity="0.9"/><path d="M43 53l5 4 5-4-5 7z" fill="#E9A23B"/><circle cx="26" cy="53" r="4.2" fill="#5A6678" opacity="0.5"/><circle cx="70" cy="53" r="4.2" fill="#5A6678" opacity="0.5"/><path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg></span></span>
+    <span class="room-title">量化研究组</span>
+    <span class="room-status"><span class="dot"></span>选股师正在工作</span>
+    <span class="spacer"></span>
+    <button class="icon-btn" aria-label="更多">⋯</button>
+  </div>
+  <div class="body"><div class="thread">
+    <div class="day">今天 · 盘前</div>
+    <div class="msg user"><div class="user-bubble">盘前看一下有什么异动，先说结论。</div></div>
+    <div class="msg"><span class="avatar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="32" height="32" role="img" aria-label="选股师" focusable="false"><g opacity="1" transform="rotate(-4 48 48)"><circle cx="48" cy="48" r="45" fill="#E4DCF5" opacity="0.28"/><path d="M72 59l13 3-10 6z" fill="#6C4FB0"/><path d="M48 15c32.3 0 34 18.150000000000002 34 33 0 20.46 -22.44 31.02 -34 31.02 -11.56 0 -34 -10.56 -34 -31.02 0 -14.85 1.7000000000000002 -33 34 -33z" fill="#A78BDB"/><ellipse cx="48" cy="62" rx="21.1" ry="13.8" fill="#E4DCF5" opacity="0.85"/><ellipse cx="20" cy="56" rx="7" ry="12" fill="#6C4FB0" opacity="0.85"/><ellipse cx="76" cy="56" rx="7" ry="12" fill="#6C4FB0" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="#E4DCF5" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/><path d="M28 21C21 12 22 5 29 4c2 6 4 10 8 12zM68 21c7-9 6-16-1-17-2 6-4 10-8 12z" fill="#6C4FB0"/><path d="M28 29c4-2 10-2 14 0M68 29c-4-2-10-2-14 0" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/><circle cx="35" cy="41" r="11.4" fill="#FFFDF7"/><circle cx="61" cy="41" r="11.4" fill="#FFFDF7"/><circle cx="36.4" cy="42" r="5" fill="#26211C"/><circle cx="62.4" cy="42" r="5" fill="#26211C"/><circle cx="37.6" cy="39.8" r="1.8" fill="#FFFFFF" opacity="0.9"/><circle cx="63.6" cy="39.8" r="1.8" fill="#FFFFFF" opacity="0.9"/><path d="M42 51l6 5 6-5-6 8z" fill="#E9A23B"/><path d="M42 55h12" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/><circle cx="26" cy="53" r="4.2" fill="#6C4FB0" opacity="0.5"/><circle cx="70" cy="53" r="4.2" fill="#6C4FB0" opacity="0.5"/><g stroke="#2E2A24" stroke-width="2.6"><circle cx="35" cy="41" r="14" fill="#FFFFFF" fill-opacity="0.12"/><circle cx="61" cy="41" r="14" fill="#FFFFFF" fill-opacity="0.12"/><path d="M49 41h-2M21 41h-7M75 41h7" fill="none" stroke-linecap="round"/></g><path d="M32 36l5-4M58 36l5-4" stroke="#FFFFFF" stroke-width="1.8" opacity="0.55" stroke-linecap="round"/><path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg></span><div><div class="who"><span class="name">选股师</span><span class="role">研究</span></div><div class="text">先拉一遍涨跌幅和成交额异常。结论：3 只异动，其中 2 只流动性不足，先不动。</div><div class="tool">▸ <b>调用 get_a_realtime</b><span>· 1.2s · 600519</span></div><div class="msg-actions"><span>展开工具</span><span>复制</span></div></div></div>
+    <div class="msg"><span class="avatar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="32" height="32" role="img" aria-label="数据官" focusable="false"><g opacity="1" transform="rotate(0 48 48)"><circle cx="48" cy="48" r="45" fill="#F7F5EE" opacity="0.28"/><path d="M74 62l11-3-6 9z" fill="#1B2026"/><path d="M48 15c28.5 0 30 18.150000000000002 30 33 0 20.46 -19.8 31.02 -30 31.02 -10.200000000000001 0 -30 -10.56 -30 -31.02 0 -14.85 1.5 -33 30 -33z" fill="#2E3440"/><ellipse cx="48" cy="62" rx="18.6" ry="16.7" fill="#F7F5EE" opacity="0.85"/><ellipse cx="48" cy="58" rx="20" ry="22" fill="#F7F5EE"/><path d="M40 70c2 3 5 4 8 4s6-1 8-4" stroke="#D9D4C7" stroke-width="1.6" fill="none"/><ellipse cx="24" cy="56" rx="7" ry="12" fill="#1B2026" opacity="0.85"/><ellipse cx="72" cy="56" rx="7" ry="12" fill="#1B2026" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="#F7F5EE" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/><path d="M28 29c5-4 10-4 14-1M68 29c-5-4-10-4-14-1" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/><circle cx="37.5" cy="38" r="8.2" fill="#FFFDF7"/><circle cx="58.5" cy="38" r="8.2" fill="#FFFDF7"/><circle cx="38.9" cy="39" r="3.6" fill="#26211C"/><circle cx="59.9" cy="39" r="3.6" fill="#26211C"/><circle cx="40.1" cy="36.8" r="1.3" fill="#FFFFFF" opacity="0.9"/><circle cx="61.1" cy="36.8" r="1.3" fill="#FFFFFF" opacity="0.9"/><path d="M42 51l6 5 6-5-6 8z" fill="#E9A23B"/><path d="M42 55h12" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/><path d="M24 33c2-18 46-18 48 0" fill="none" stroke="#1B2026" stroke-width="4.5" stroke-linecap="round"/><rect x="16" y="32" width="10" height="17" rx="4.5" fill="#1B2026" stroke="#1B1B1F" stroke-width="1.4"/><rect x="70" y="32" width="10" height="17" rx="4.5" fill="#1B2026" stroke="#1B1B1F" stroke-width="1.4"/><path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg></span><div><div class="who"><span class="name">风控官</span><span class="role">风控</span></div><div class="text">同意，流动性条件没过的先剔除。等选股师补齐成交额明细，我再复核一遍。</div></div></div>
+  </div></div>
+  <div class="composer-wrap"><div class="composer">
+    <div class="input focus"><span class="placeholder">说点什么…</span><span class="kbd">⌘↵</span><span class="send">↑</span></div>
+    <div class="hint"><span>投递：立即读取</span><span>·</span><span>@ 提醒成员</span></div>
+  </div></div>
+</div>
+
+<p class="label">设置 · 所有配置页都住在这里</p>
+<div class="artboard settings" id="settings">
+  <div class="top"><button class="icon-btn" aria-label="返回">←</button><span class="room-title">设置</span><span class="spacer"></span><button class="icon-btn" aria-label="关闭">✕</button></div>
+  <div class="settings-body">
+    <aside class="settings-nav">
+      <h3>通用</h3>
+      <div class="nav-item active">外观</div><div class="nav-item">通知</div><div class="nav-item">设备与配对</div>
+      <h3>团队</h3>
+      <div class="nav-item">Bot <span class="n">4</span></div><div class="nav-item">房间 <span class="n">2</span></div>
+      <h3>能力</h3>
+      <div class="nav-item">插件与面板</div><div class="nav-item">定时任务</div><div class="nav-item">连接器</div><div class="nav-item">用量与预算</div>
+      <h3>系统</h3>
+      <div class="nav-item">审计日志</div>
+    </aside>
+    <main class="settings-main">
+      <h1 class="settings-title">外观</h1>
+      <p class="settings-desc">只影响这台设备的显示，不改变团队里的任何行为。</p>
+      <div class="group">
+        <div class="row"><div class="row-label">主题<div class="row-desc">跟随系统或固定</div></div><div class="row-control"><div class="select">跟随系统 <span>⌄</span></div></div></div>
+        <div class="row"><div class="row-label">密度<div class="row-desc">长对话建议舒适</div></div><div class="row-control"><div class="seg"><span class="on">舒适</span><span>紧凑</span></div></div></div>
+        <div class="row"><div class="row-label">强调色<div class="row-desc">只影响主操作与焦点</div></div><div class="row-control"><div class="swatches"><span class="swatch"></span><span class="swatch" style="background:#7C9473;box-shadow:0 0 0 2px var(--surface)"></span><span class="swatch" style="background:#8B8FA3;box-shadow:0 0 0 2px var(--surface)"></span><span class="swatch" style="background:#C97F67;box-shadow:0 0 0 2px var(--surface)"></span></div></div></div>
+        <div class="row"><div class="row-label">减少动效<div class="row-desc">关闭呼吸环与过渡</div></div><div class="row-control"><div class="switch"></div></div></div>
+        <div class="row"><div class="row-label">消息密度<div class="row-desc">房间里的行距</div></div><div class="row-control"><div class="select">舒适 <span>⌄</span></div></div></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<p class="label">移动端 · 同一套结构，抽屉放导航</p>
+<div class="artboard mobile" id="mobile">
+  <div class="top"><button class="icon-btn" aria-label="房间和设置">≡</button><span class="avatar-flock"><span class="a"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="32" height="32" role="img" aria-label="选股师" focusable="false"><g opacity="1" transform="rotate(-4 48 48)"><circle cx="48" cy="48" r="45" fill="#E4DCF5" opacity="0.28"/><path d="M72 59l13 3-10 6z" fill="#6C4FB0"/><path d="M48 15c32.3 0 34 18.150000000000002 34 33 0 20.46 -22.44 31.02 -34 31.02 -11.56 0 -34 -10.56 -34 -31.02 0 -14.85 1.7000000000000002 -33 34 -33z" fill="#A78BDB"/><ellipse cx="48" cy="62" rx="21.1" ry="13.8" fill="#E4DCF5" opacity="0.85"/><ellipse cx="20" cy="56" rx="7" ry="12" fill="#6C4FB0" opacity="0.85"/><ellipse cx="76" cy="56" rx="7" ry="12" fill="#6C4FB0" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="#E4DCF5" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/><path d="M28 21C21 12 22 5 29 4c2 6 4 10 8 12zM68 21c7-9 6-16-1-17-2 6-4 10-8 12z" fill="#6C4FB0"/><path d="M28 29c4-2 10-2 14 0M68 29c-4-2-10-2-14 0" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/><circle cx="35" cy="41" r="11.4" fill="#FFFDF7"/><circle cx="61" cy="41" r="11.4" fill="#FFFDF7"/><circle cx="36.4" cy="42" r="5" fill="#26211C"/><circle cx="62.4" cy="42" r="5" fill="#26211C"/><circle cx="37.6" cy="39.8" r="1.8" fill="#FFFFFF" opacity="0.9"/><circle cx="63.6" cy="39.8" r="1.8" fill="#FFFFFF" opacity="0.9"/><path d="M42 51l6 5 6-5-6 8z" fill="#E9A23B"/><path d="M42 55h12" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/><circle cx="26" cy="53" r="4.2" fill="#6C4FB0" opacity="0.5"/><circle cx="70" cy="53" r="4.2" fill="#6C4FB0" opacity="0.5"/><g stroke="#2E2A24" stroke-width="2.6"><circle cx="35" cy="41" r="14" fill="#FFFFFF" fill-opacity="0.12"/><circle cx="61" cy="41" r="14" fill="#FFFFFF" fill-opacity="0.12"/><path d="M49 41h-2M21 41h-7M75 41h7" fill="none" stroke-linecap="round"/></g><path d="M32 36l5-4M58 36l5-4" stroke="#FFFFFF" stroke-width="1.8" opacity="0.55" stroke-linecap="round"/><path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg></span></span><span class="room-title">量化研究组</span><span class="spacer"></span><button class="icon-btn">⋯</button></div>
+  <div class="body"><div class="thread">
+    <div class="day">今天</div>
+    <div class="msg user"><div class="user-bubble">盘前看一下有什么异动。</div></div>
+    <div class="msg"><span class="avatar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="32" height="32" role="img" aria-label="选股师" focusable="false"><g opacity="1" transform="rotate(-4 48 48)"><circle cx="48" cy="48" r="45" fill="#E4DCF5" opacity="0.28"/><path d="M72 59l13 3-10 6z" fill="#6C4FB0"/><path d="M48 15c32.3 0 34 18.150000000000002 34 33 0 20.46 -22.44 31.02 -34 31.02 -11.56 0 -34 -10.56 -34 -31.02 0 -14.85 1.7000000000000002 -33 34 -33z" fill="#A78BDB"/><ellipse cx="48" cy="62" rx="21.1" ry="13.8" fill="#E4DCF5" opacity="0.85"/><ellipse cx="20" cy="56" rx="7" ry="12" fill="#6C4FB0" opacity="0.85"/><ellipse cx="76" cy="56" rx="7" ry="12" fill="#6C4FB0" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="#E4DCF5" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/><path d="M28 21C21 12 22 5 29 4c2 6 4 10 8 12zM68 21c7-9 6-16-1-17-2 6-4 10-8 12z" fill="#6C4FB0"/><path d="M28 29c4-2 10-2 14 0M68 29c-4-2-10-2-14 0" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/><circle cx="35" cy="41" r="11.4" fill="#FFFDF7"/><circle cx="61" cy="41" r="11.4" fill="#FFFDF7"/><circle cx="36.4" cy="42" r="5" fill="#26211C"/><circle cx="62.4" cy="42" r="5" fill="#26211C"/><circle cx="37.6" cy="39.8" r="1.8" fill="#FFFFFF" opacity="0.9"/><circle cx="63.6" cy="39.8" r="1.8" fill="#FFFFFF" opacity="0.9"/><path d="M42 51l6 5 6-5-6 8z" fill="#E9A23B"/><path d="M42 55h12" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/><circle cx="26" cy="53" r="4.2" fill="#6C4FB0" opacity="0.5"/><circle cx="70" cy="53" r="4.2" fill="#6C4FB0" opacity="0.5"/><g stroke="#2E2A24" stroke-width="2.6"><circle cx="35" cy="41" r="14" fill="#FFFFFF" fill-opacity="0.12"/><circle cx="61" cy="41" r="14" fill="#FFFFFF" fill-opacity="0.12"/><path d="M49 41h-2M21 41h-7M75 41h7" fill="none" stroke-linecap="round"/></g><path d="M32 36l5-4M58 36l5-4" stroke="#FFFFFF" stroke-width="1.8" opacity="0.55" stroke-linecap="round"/><path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg></span><div><div class="who"><span class="name">选股师</span><span class="role">研究</span></div><div class="text">结论：3 只异动，其中 2 只流动性不足，先不动。</div></div></div>
+    <div class="msg"><span class="avatar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="32" height="32" role="img" aria-label="数据官" focusable="false"><g opacity="1" transform="rotate(0 48 48)"><circle cx="48" cy="48" r="45" fill="#F7F5EE" opacity="0.28"/><path d="M74 62l11-3-6 9z" fill="#1B2026"/><path d="M48 15c28.5 0 30 18.150000000000002 30 33 0 20.46 -19.8 31.02 -30 31.02 -10.200000000000001 0 -30 -10.56 -30 -31.02 0 -14.85 1.5 -33 30 -33z" fill="#2E3440"/><ellipse cx="48" cy="62" rx="18.6" ry="16.7" fill="#F7F5EE" opacity="0.85"/><ellipse cx="48" cy="58" rx="20" ry="22" fill="#F7F5EE"/><path d="M40 70c2 3 5 4 8 4s6-1 8-4" stroke="#D9D4C7" stroke-width="1.6" fill="none"/><ellipse cx="24" cy="56" rx="7" ry="12" fill="#1B2026" opacity="0.85"/><ellipse cx="72" cy="56" rx="7" ry="12" fill="#1B2026" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="#F7F5EE" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/><path d="M28 29c5-4 10-4 14-1M68 29c-5-4-10-4-14-1" stroke="#3A2A1A" stroke-width="3" stroke-linecap="round" fill="none"/><circle cx="37.5" cy="38" r="8.2" fill="#FFFDF7"/><circle cx="58.5" cy="38" r="8.2" fill="#FFFDF7"/><circle cx="38.9" cy="39" r="3.6" fill="#26211C"/><circle cx="59.9" cy="39" r="3.6" fill="#26211C"/><circle cx="40.1" cy="36.8" r="1.3" fill="#FFFFFF" opacity="0.9"/><circle cx="61.1" cy="36.8" r="1.3" fill="#FFFFFF" opacity="0.9"/><path d="M42 51l6 5 6-5-6 8z" fill="#E9A23B"/><path d="M42 55h12" stroke="#B9741F" stroke-width="1.4" stroke-linecap="round"/><path d="M24 33c2-18 46-18 48 0" fill="none" stroke="#1B2026" stroke-width="4.5" stroke-linecap="round"/><rect x="16" y="32" width="10" height="17" rx="4.5" fill="#1B2026" stroke="#1B1B1F" stroke-width="1.4"/><rect x="70" y="32" width="10" height="17" rx="4.5" fill="#1B2026" stroke="#1B1B1F" stroke-width="1.4"/><path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg></span><div><div class="who"><span class="name">风控官</span><span class="role">风控</span></div><div class="text">等成交额明细，我再复核。</div></div></div>
+  </div></div>
+  <div class="composer-wrap"><div class="composer"><div class="input"><span class="placeholder">说点什么…</span><span class="send">↑</span></div></div></div>
+</div>
+</body></html>
