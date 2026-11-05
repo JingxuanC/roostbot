@@ -70,7 +70,7 @@ test('SMTP mailer 发送验证邮件并带正确链接', async () => {
     await mailer.sendVerificationEmail?.({ to: 'a@example.com', token: 'abc123', expiresAt: Date.now() + 1000 })
     const text = fake.mail()
     assert.match(text, /To: a@example\.com/)
-    assert.match(text, /https:\/\/roostbots\.com\/#\/verify-email\?token=abc123/)
+    assert.match(text, /https:\/\/roostbots\.com\/api\/auth\/verify-email\/link\?token=abc123/)
     assert.match(text, /验证你的 Roost 邮箱|verify-email/)
   } finally {
     await fake.close()

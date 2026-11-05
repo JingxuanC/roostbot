@@ -2789,6 +2789,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (path === '/api/auth/verify-email/link') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await AUTH_LOGIN_ROUTES.verifyEmailLink(ctx.authRoutes as never, req, res, url)
+    return
+  }
+
   const authTable: Record<string, [string, (c: never, q: IncomingMessage, r: ServerResponse) => Promise<void>]> = {
     '/api/auth/register': ['POST', AUTH_LOGIN_ROUTES.register],
     '/api/auth/verify-email': ['POST', AUTH_LOGIN_ROUTES.verifyEmail],

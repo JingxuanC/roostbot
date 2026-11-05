@@ -513,6 +513,48 @@ export async function handleVerifyEmail(
   sendJson(res, 200, {})
 }
 
+/** 邮件里的 GET 链接：验证成功后 302 回前端，避免邮件客户端丢掉 URL 的 hash 片段。 */
+export async function handleVerifyEmailLink(
+  ctx: AuthRoutesContext,
+  _req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const store = requireStore(ctx, res)
+  if (store === null) return
+  const publicBase = (process.env['ROOST_PUBLIC_BASE_URL'] ?? 'https://roostbots.com').replace(/\/+$/, '')
+  const token = readAuthTokenValue(url.searchParams.get('token'))
+  if (token === null) {
+    redirectTo(res, `${publicBase}/#/verify-email?error=invalid`)
+    return
+  }
+  const now = ctx.now()
+  const consumed = consumeAuthToken(store, { token, kind: 'email_verify', now })
+  if (consumed === null) {
+    redirectTo(res, `${publicBase}/#/verify-email?error=invalid`)
+    return
+  }
+  try {
+    markEmailVerified(store, consumed.accountId, now)
+    try {
+      grantTokenCredit(store, { accountId: consumed.accountId, amount: SIGNUP_CREDIT_TOKENS, at: now })
+    } catch (err) {
+      logError('signup-credit', err)
+    }
+  } catch (err) {
+    logError('verify-email-link', err)
+    redirectTo(res, `${publicBase}/#/verify-email?error=failed`)
+    return
+  }
+  redirectTo(res, `${publicBase}/#/verify-email?verified=1`)
+}
+
+function redirectTo(res: ServerResponse, location: string): void {
+  if (res.writableEnded) return
+  res.writeHead(302, { location, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+  res.end()
+}
+
 export async function handleResendVerification(
   ctx: AuthRoutesContext,
   req: IncomingMessage,
@@ -1076,6 +1118,7 @@ export async function handleOidcCallback(
 export const AUTH_LOGIN_ROUTES = {
   register: handleRegister,
   verifyEmail: handleVerifyEmail,
+  verifyEmailLink: handleVerifyEmailLink,
   resendVerification: handleResendVerification,
   login: handleLogin,
   logout: handleLogout,

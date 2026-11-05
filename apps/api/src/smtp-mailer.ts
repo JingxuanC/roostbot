@@ -42,7 +42,7 @@ export function createSmtpMailerFromEnv(env: Record<string, string | undefined> 
 export function createSmtpMailer(config: SmtpConfig): Mailer {
   return {
     async sendVerificationEmail(mail: VerificationMail): Promise<void> {
-      const link = appLink(config.baseUrl, `#/verify-email?token=${encodeURIComponent(mail.token)}`)
+      const link = appLink(config.baseUrl, `api/auth/verify-email/link?token=${encodeURIComponent(mail.token)}`)
       await sendOne(config, mail.to, '验证你的 Roost 邮箱', [
         '欢迎使用 Roost。',
         '',
