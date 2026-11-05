@@ -11,14 +11,21 @@
 //   docs/design/auth.md        §3 配对流程、§7 token 不进 Web 存储
 //
 // 状态说明：配对、Bot、建群、房间消息都走控制面 REST；预览（#room）与「需要你」仍是固定样例。
-// token 只在内存变量里（sessionToken），不写 localStorage / sessionStorage，刷新即丢；
-// 受保护页面遇到 401 会回配对页并用 pendingRoute 记住原地址（见 README）。
+// 设备会话 token 存在 localStorage（见 lib/session-store.js），刷新/重开手机网页仍回到房间；
+// 受保护页面遇到 401 会清 token 并回登录页，用 pendingRoute 记住原地址。
 
 import { $, avatar, botAvatar, el } from './lib/dom.js'
 import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
 import { isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
+import {
+  clearSessionToken,
+  readLastRoom,
+  readSessionToken,
+  writeLastRoom,
+  writeSessionToken
+} from './lib/session-store.js'
 import { canonicalWorkspaceRoute, routeMatch } from './lib/routing.js'
 import {
   NOTIFICATION_TITLE,
@@ -743,7 +750,8 @@ function renderNeeds() {
 // 三、配对
 // ---------------------------------------------------------------------------
 
-let sessionToken = null // 只在内存：不写 localStorage、不写 URL、不渲染（auth.md §7）
+// 配对 token 持久化到 localStorage，刷新/重开页面仍回到上次的房间；不写 URL、不渲染。
+let sessionToken = readSessionToken()
 
 async function serverMessage(response) {
   const type = response.headers.get('content-type') || ''
@@ -874,7 +882,10 @@ function setupPairing() {
       }
       // 会话正常情况下在 HttpOnly cookie 里，前端看不到；真返回了 token 也只在内存。
       const token = body && (body.token || body.sessionToken || (body.session && body.session.token))
-      if (typeof token === 'string' && token) sessionToken = token
+      if (typeof token === 'string' && token) {
+        sessionToken = token
+        writeSessionToken(token)
+      }
 
       try {
         await enterLiveRoom(token)
@@ -1014,6 +1025,10 @@ function navigate(hash) {
 
 /** 受保护页面发现 401：记住原地址并去 #/login；登录成功后回原路由。 */
 function requirePair(message = '') {
+  // 401/失效：清掉持久化的设备会话，避免刷新后继续拿旧 token 撞墙。
+  clearSessionToken()
+  sessionToken = null
+  LIVE.token = ''
   const target = pendingRouteAfter(location.hash)
   if (target !== '') pendingRoute = target
   // 401 说明 cookie/token 都不再有效；登录页应显示表单，而不是“已登录”。
@@ -1030,6 +1045,10 @@ function requirePair(message = '') {
 
 /** 登录/注册成功后接手：更新会话状态，并把用户送回 pendingRoute。 */
 async function completeAuth(account) {
+  // 账号登录（cookie 会话）优先：清掉之前配对留下的 Bearer token，避免两套会话打架。
+  clearSessionToken()
+  sessionToken = null
+  LIVE.token = ''
   authState.status = 'authenticated'
   authState.available = true
   if (account && typeof account === 'object') authState.account = { ...authState.account, ...account }
@@ -1106,6 +1125,7 @@ async function loadRooms(options = {}) {
     STORE.roomsLoaded = true
     if (!STORE.workspaceId && STORE.rooms[0]?.workspaceId) STORE.workspaceId = STORE.rooms[0].workspaceId
     renderSidebarRooms()
+    updatePageBackLink()
     return STORE.rooms
   })()
   STORE.roomsLoading = task
@@ -1278,6 +1298,19 @@ async function refreshNeedsCount() {
 // 五、路由与页面切换
 // ---------------------------------------------------------------------------
 
+/** 管理页左上角的「← 房间」：回到最近一个房间，不把用户丢回配对页。 */
+function roomBackHash() {
+  const id = LIVE.roomId || (STORE.rooms.length > 0 ? STORE.rooms[STORE.rooms.length - 1].id : '')
+  if (id) return `#/rooms/${encodeURIComponent(id)}`
+  // 页面状态被重置（例如从设置页刷新）时，仍能靠持久化的最近房间回去。
+  return readLastRoom() || '#/bots'
+}
+
+function updatePageBackLink() {
+  const link = $('#page-back')
+  if (link) link.href = roomBackHash()
+}
+
 function showView(name) {
   const pair = $('#pair-view')
   const auth = $('#auth-view')
@@ -1287,6 +1320,7 @@ function showView(name) {
   if (auth) auth.hidden = name !== 'auth'
   if (room) room.hidden = name !== 'room'
   if (page) page.hidden = name !== 'page'
+  if (name === 'page') updatePageBackLink()
   document.body.dataset.view = name
 }
 
@@ -1615,6 +1649,7 @@ function resetRoomChrome() {
 }
 
 function applyLiveRoomChrome(room) {
+  if (typeof room.id === 'string' && room.id !== '') writeLastRoom(`#/rooms/${encodeURIComponent(room.id)}`)
   const name = room.name || '房间'
   ROOM.name = name
   const heading = $('#room-name')
@@ -2081,7 +2116,10 @@ function handleVisibilityChange() {
 
 /** 配对成功后进入：有房间去房间，没房间先去建 Bot。 */
 async function enterLiveRoom(token) {
-  if (typeof token === 'string' && token !== '') sessionToken = token
+  if (typeof token === 'string' && token !== '') {
+    sessionToken = token
+    writeSessionToken(token)
+  }
   LIVE.token = sessionToken || ''
   const rooms = await ensureRoom()
   STORE.rooms = rooms
@@ -2096,7 +2134,9 @@ async function enterLiveRoom(token) {
   }
   const note = $('#pair-note')
   if (note) note.hidden = true
-  const target = pendingRoute || (rooms.length > 0 ? `#/rooms/${encodeURIComponent(rooms[0].id)}` : '#/bots')
+  const lastRoom = readLastRoom()
+  const target =
+    pendingRoute || lastRoom || (rooms.length > 0 ? `#/rooms/${encodeURIComponent(rooms[0].id)}` : '#/bots')
   pendingRoute = ''
   if (rooms.length === 0) flash('还没有房间：先建两个 Bot，再建群。')
   navigate(target)
@@ -2345,11 +2385,14 @@ function setupSidebarDrawer() {
   if (!room || !toggle) return
   let lastFocus = null
   const isOpen = () => room.classList.contains('sidebar-open')
+  // 抽屉关着时不可聚焦，否则键盘会 Tab 进看不见的导航。
+  if (sidebar) sidebar.inert = true
 
   const setOpen = (open, opener) => {
     room.classList.toggle('sidebar-open', open)
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false')
     toggle.setAttribute('aria-label', open ? '收起导航' : '展开导航')
+    if (sidebar) sidebar.inert = !open
     if (scrim) scrim.hidden = !open
     if (open) {
       lastFocus = opener || document.activeElement
@@ -2485,13 +2528,23 @@ function boot() {
   renderSidebarRooms()
   renderNeeds()
   setupPairing()
+  const pageBack = $('#page-back')
+  if (pageBack) {
+    // href 在渲染时可能还没拿到房间；点击时按当前状态再决定一次，保证「← 房间」不会回到配对页。
+    pageBack.addEventListener('click', (event) => {
+      event.preventDefault()
+      location.hash = roomBackHash()
+    })
+  }
   setupNeedsPanel()
   setupSidebarDrawer()
   setupSkipLinks()
   setupComposer()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
-    void renderRoute()
+    void renderRoute().then(() => {
+      updatePageBackLink()
+    })
   })
   // 离线/回到前台时显式补拉；页面卸载时清掉定时器与 EventSource。
   window.addEventListener('online', handleOnline)
@@ -2510,6 +2563,15 @@ function boot() {
     LIVE.reconnectAttempt = 0
     void reconnectStream()
   })
+  const hash = location.hash
+  const authHash = hash === '' || hash === '#/' || hash === '#/login'
+  if (sessionToken && authHash) {
+    // 重新打开/刷新手机网页：直接回到上次的房间，不先闪一下登录页。
+    enterLiveRoom().catch(() => {
+      void renderRoute()
+    })
+    return
+  }
   void renderRoute()
 }
 

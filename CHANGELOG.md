@@ -15,6 +15,16 @@
 - 状态：working 呼吸环、paused 去饱和闭眼、alert 眉眼上扬；尊重 `prefers-reduced-motion`。
 - 设计说明 `docs/design/bot-avatar.md`；预览图 `docs/assets/bot-birds.png`、应用内 `docs/assets/bot-birds-app.png`；9 条测试。
 
+## [Unreleased]
+
+### UI 重设计（2026-11-05）
+
+- 浅蓝 × 白主题（`apps/web/styles-blue.css`）：浅蓝页面底、白色 surface、单一深蓝强调；鸟保留全部羽毛颜色。
+- 打开即房间：去掉常驻侧栏与顶部功能导航；`≡` 抽屉进入房间/设置，管理入口统一收进抽屉。
+- 设置页统一 `← 房间` 返回，旧 `page-nav` 隐藏；房间消息改为排版式 Bot 消息 + 浅蓝用户气泡。
+- 移动端：抽屉、44px 触控、16px 输入、safe-area、375/390 无横向滚动。
+- 设备配对 token 持久化（localStorage），手机刷新/重开回到上次房间；新增 7 条前端测试。
+
 ## [0.1.0] - 2026-11-04
 
 首个可运行版本：**M4 产品闭环 + M5 平台能力主体**。零依赖，Node ≥ 22.18 直接跑

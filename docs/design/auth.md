@@ -79,7 +79,7 @@
 | 设备丢失 | 设备列表一键吊销；吊销写 `auth.session.revoked` |
 | token 重放 | 会话 token 绑 device_id + UA 指纹（弱绑定，只用于异常检测） |
 | CSRF | 控制面所有写操作要求 `Origin` 校验 + 自定义头 |
-| XSS 偷 token | token 放 HttpOnly cookie；不用 localStorage |
+| XSS 偷 token | 账号会话放 HttpOnly cookie；设备配对的 sessionToken 为支持手机网页刷新持久化，存 localStorage（同源、仅 token；所有渲染走 textContent，避免注入） |
 | URL 泄漏 | **禁止把 token 放 query string**（DSH 桌面端那样是本地妥协，云上不学） |
 | 日志泄漏 | 全链路脱敏（与 bot-events 同一套规则） |
 | 内部越权 | 控制面每个路由显式声明所需角色 |

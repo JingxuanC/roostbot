@@ -7,7 +7,9 @@
 - **记忆**：由 [causal-memory](../causal-memory) 提供，不是聊天记录，是可检索、可追溯的判断
 - **模型**：用户自带 token（BYO），平台不转售推理
 
-状态：**TODO 152/152 完成**：M4 产品闭环、M5 平台能力、M6 商业化与工程债全部落地，含远端真实模型 + 沙箱重启记忆（4.5.3）、浏览器全流程（4.5.4）与 DSH 工具审批端到端（5.4.3）。验收证据见 [docs/build/wave3.md](docs/build/wave3.md)、[docs/assets/m5-browser-e2e.png](docs/assets/m5-browser-e2e.png)。
+状态：**TODO 152/152 完成**；前端已切到浅蓝白极简壳（打开即房间，管理收进设置/抽屉，见 [ui-refresh.md](docs/design/ui-refresh.md) 与 [截图](docs/assets/ui-app-room.png)）。
+
+原状态：：M4 产品闭环、M5 平台能力、M6 商业化与工程债全部落地，含远端真实模型 + 沙箱重启记忆（4.5.3）、浏览器全流程（4.5.4）与 DSH 工具审批端到端（5.4.3）。验收证据见 [docs/build/wave3.md](docs/build/wave3.md)、[docs/assets/m5-browser-e2e.png](docs/assets/m5-browser-e2e.png)。
 
 ## 文档
 

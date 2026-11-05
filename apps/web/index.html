@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#F2F8FC" />
     <meta name="description" content="Roost 网页端：配对、房间、Bot 与建群设置。" />
     <title>Roost · 配对</title>
     <!-- 图标内联成 data URI：不额外加文件，也不让浏览器为 /favicon.ico 404 一次 -->
@@ -12,6 +13,7 @@
       href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2096%2096'%3E%3Crect%20width='96'%20height='96'%20rx='24'%20fill='%23141619'/%3E%3Cpath%20d='M48%2020C62%2020%2072%2034%2072%2050C72%2066%2061%2076%2048%2076C35%2076%2024%2066%2024%2050C24%2034%2034%2020%2048%2020Z'%20fill='none'%20stroke='%23D8AB52'%20stroke-width='6'/%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles-blue.css" />
   </head>
   <body>
     <div id="boot-warning" class="boot-warning" role="alert" hidden>
@@ -136,13 +138,16 @@
         <ul class="room-list" id="room-list" aria-labelledby="rooms-title"></ul>
         <p class="nav-add"><a href="#/rooms/new">＋ 新建房间</a></p>
 
-        <h2 class="nav-title" id="bots-title">
-          <a class="nav-title-link" href="#/bots">Bot</a>
-        </h2>
-        <ul class="bot-list" id="bot-list" aria-labelledby="bots-title"></ul>
-        <p class="nav-add"><a href="#/bots/new">＋ 新建 Bot</a></p>
-
-        <p class="nav-muted-link"><a href="#/schedules">定时任务</a> · <a href="#/connectors">连接器</a> · <a href="#/settings">设置</a> · <a href="#/usage">用量</a> · <a href="#/plugins">插件</a> · <a href="#/installs">已安装</a> · <a href="#/panels">插件面板</a></p>
+        <div class="drawer-manage">
+          <h2 class="nav-title">管理</h2>
+          <a class="drawer-link" href="#/bots">Bot 与身份</a>
+          <a class="drawer-link" href="#/plugins">插件与面板</a>
+          <a class="drawer-link" href="#/usage">用量与预算</a>
+          <a class="drawer-link" href="#/schedules">定时任务</a>
+          <a class="drawer-link" href="#/connectors">连接器</a>
+          <a class="drawer-link" href="#/approvals">审批</a>
+          <a class="drawer-link" href="#/settings">设置</a>
+        </div>
 
         <p class="sidebar-foot muted" id="sidebar-foot">未连接控制面</p>
       </nav>
@@ -157,7 +162,8 @@
             aria-controls="sidebar"
             aria-label="展开导航"
           >
-            导航
+            <span aria-hidden="true">≡</span>
+            <span class="sr-only">打开菜单</span>
           </button>
           <div class="room-head-main">
             <div class="room-head-title">
@@ -251,7 +257,8 @@
     <div id="page-view" class="page" hidden>
       <a class="skip-link" href="#page-main">跳到主内容</a>
       <header class="page-head">
-        <a class="brand-link" href="#/">Roost</a>
+        <a class="brand-link" id="page-back" href="#/" aria-label="返回房间">Roost</a>
+        <a class="page-settings-link" href="#/settings">设置</a>
         <nav class="page-nav" aria-label="导航">
           <a href="#/bots">Bot</a>
           <a href="#/approvals">需要你</a>
