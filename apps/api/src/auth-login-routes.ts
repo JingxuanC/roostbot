@@ -765,6 +765,12 @@ const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google',
   github: 'GitHub',
   feishu: '飞书',
+  keycloak: 'Keycloak',
+  logto: 'Logto',
+  casdoor: 'Casdoor',
+  authentik: 'Authentik',
+  zitadel: 'Zitadel',
+  ory: 'Ory',
 }
 
 function requestScheme(req: IncomingMessage): 'http' | 'https' {
@@ -879,15 +885,18 @@ function configuredProviderIds(ctx: AuthRoutesContext): string[] {
   const config = ctx.oidc
   if (config !== undefined && config !== null) {
     if (typeof (config as OidcProvider).authorizeUrl === 'function') {
-      ids.add('oidc')
+      ids.add('custom')
     } else {
-      for (const name of Object.keys(config as Record<string, OidcProvider>)) ids.add(name)
+      for (const key of Object.keys(config as Record<string, OidcProvider>)) ids.add(key)
     }
   }
-  for (const name of Object.keys(PROVIDER_LABELS)) {
-    if (oidcProviderFromEnv(name) !== null) ids.add(name)
+  // 任意 ROOST_OIDC_<PROVIDER>_CLIENT_ID 都可启用（Keycloak / Logto / Casdoor / 自建），
+  // 不再要求提供方出现在 label 白名单里；label 只是展示名。
+  for (const name of Object.keys(process.env)) {
+    const match = /^ROOST_OIDC_([A-Z0-9_]+)_CLIENT_ID$/.exec(name)
+    if (match !== null) ids.add(match[1]!.toLowerCase())
   }
-  return [...ids].sort()
+  return [...ids].filter((id) => resolveOidcProvider(ctx, id) !== null).sort()
 }
 
 /** 供前端决定要不要显示 OIDC 按钮（wave1.md §D）。 */
@@ -1027,7 +1036,7 @@ export async function handleOidcCallback(
     account = upsertOidcAccount(store, { subject: info.subject, email: info.email, now })
   } catch (err) {
     if (isStoreError(err) && err.code === 'ACCOUNT_EXISTS') {
-      sendError(res, 409, 'auth.email_taken', '这个邮箱已有密码账号：请先用密码登录，再绑定 OIDC')
+      sendError(res, 409, 'auth.email_taken', '这个邮箱已有密码账号：请使用密码登录；当前版本不支持自动合并 OIDC 账号')
       return
     }
     logError('oidc/callback(account)', err)

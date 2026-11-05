@@ -544,6 +544,33 @@ test('OIDC start：下发 authorizeUrl（含 state + PKCE S256）；providers �
   }
 })
 
+test('任意 OIDC 提供方（Keycloak/Casdoor/Logto）凭 env 即可出现在 providers', async () => {
+  const env = {
+    ROOST_OIDC_KEYCLOAK_CLIENT_ID: 'roostbot',
+    ROOST_OIDC_KEYCLOAK_SECRET: 'secret',
+    ROOST_OIDC_KEYCLOAK_AUTHORIZE_URL: 'https://id.example/realms/roost/protocol/openid-connect/auth',
+    ROOST_OIDC_KEYCLOAK_TOKEN_URL: 'https://id.example/realms/roost/protocol/openid-connect/token',
+    ROOST_OIDC_KEYCLOAK_USERINFO_URL: 'https://id.example/realms/roost/protocol/openid-connect/userinfo',
+    ROOST_OIDC_KEYCLOAK_SCOPE: 'openid email profile',
+  }
+  const before = new Map(Object.keys(env).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, env)
+  const harness = await startAuthHarness()
+  try {
+    const providers = await harness.call('GET', '/api/auth/providers')
+    assert.deepEqual(providers.json, { providers: [{ id: 'keycloak', label: 'Keycloak' }] })
+    const start = await harness.call('POST', '/api/auth/oidc/start', { body: { provider: 'keycloak' } })
+    assert.equal(start.status, 200)
+    assert.match((start.json as { authorizeUrl: string }).authorizeUrl, /^https:\/\/id\.example\/realms\/roost\//)
+  } finally {
+    await harness.close()
+    for (const [key, value] of before) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('OIDC callback：PKCE 校验通过 → 建 OIDC 账号 + 302 + cookie；state 重放 → 400', async () => {
   const { provider, calls } = fakeProvider()
   const harness = await startAuthHarness({ oidc: { github: provider } })

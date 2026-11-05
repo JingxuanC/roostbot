@@ -39,7 +39,7 @@
 |---|---|---|
 | 邮箱 + 密码 | 主账号 | 密码 ≥ 12 位；Argon2id 哈希 |
 | 邮箱验证码 | 登录（免密码） | 一次性、10 分钟 |
-| OIDC | Google / GitHub / 飞书 | 企业客户优先；不自动合并同名邮箱 |
+| OIDC | 任意标准 OIDC（Keycloak / Logto / Casdoor / Authentik / Google / GitHub…） | 企业客户与自托管优先；不自动合并同名邮箱；接入见 [deploy/oidc/README.md](../../deploy/oidc/README.md) |
 | 邀请 | 加入 workspace | 邀请链接绑定邮箱 + 角色，7 天有效 |
 
 **会话续期**：剩余有效期 < 15 天时，任意一次有效请求把会话续到 180 天（自配对起算）。超过 180 天必须重新配对——防止"一次配对永久有效"。

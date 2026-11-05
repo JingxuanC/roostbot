@@ -1,0 +1,24 @@
+# 本地开发用 Keycloak（Apache-2.0）：一条命令得到一个可注册/登录的 OIDC 提供方。
+#   cd deploy/oidc/keycloak && docker compose up -d
+# 管理台：http://localhost:8080  admin / admin
+# 演示用户：demo@roostbot.local / demo
+services:
+  # 开发用邮件箱：注册验证邮件会进这里（http://localhost:8025），点链接完成邮箱验证。
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    depends_on:
+      - mailpit
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./realm-roostbot.json:/opt/keycloak/data/import/realm-roostbot.json:ro

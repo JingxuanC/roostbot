@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+### 开源 OIDC 登录 / 注册（2026-11-05）
+
+- 登录页支持任意标准 OIDC 提供方（Keycloak / Logto / Casdoor / Authentik / Zitadel / Google / GitHub…）；
+  `ROOST_OIDC_<ID>_CLIENT_ID/_SECRET/_AUTHORIZE_URL/_TOKEN_URL/_USERINFO_URL` 配置即可出现按钮。
+- 注册、找回密码、多因素交给开源 IdP；首次 OIDC 登录自动创建 Roost 账号并分配工作区。
+- 提供 Keycloak + Mailpit 本地参考：`deploy/oidc/keycloak/docker-compose.yml`，含注册与邮箱验证。
+- 新增 provider env 发现测试；`deploy/oidc/README.md` 记录账号合并限制与安全清单。
+
+
 ## [Unreleased]
 
 ### Bot 小鸟头像（2026-11-05）

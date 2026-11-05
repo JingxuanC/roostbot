@@ -94,6 +94,7 @@ async function providerSection(ctx, errorNode) {
     row.append(button)
   }
   host.append(row)
+  host.append(el('p', { class: 'field-hint', text: '首次使用会在提供方完成注册，然后自动创建 Roost 账号。' }))
   return host
 
   async function startOidc(provider, button, error) {
