@@ -44,6 +44,8 @@ export interface OpenShellRuntimeConfig {
   image: string
   cpHost: string
   cpPort: number
+  /** 沙箱访问控制面用的 scheme；默认 http，分机走 HTTPS 时设 https。 */
+  cpScheme?: 'http' | 'https'
   /** 控制面自己访问 profile-lock 的地址；单机默认 loopback，分机部署要设公网/内网 URL。 */
   lockApiBase?: string
   /** 旧部署兼容：全局 runtime token；没有 rawStore/issuer 时直接注入沙箱 env。 */
@@ -112,7 +114,7 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
       const workspaceModel = store === undefined ? undefined : getWorkspaceModelCredential(store, workspaceId)?.model
       const model = workspaceModel ?? ((process.env['ROOST_FREE_MODEL'] ?? '').trim() || 'deepseek-v4-flash')
       const env: Record<string, string> = {
-        ROOST_API: `http://${config.cpHost}:${config.cpPort}`,
+        ROOST_API: `${config.cpScheme ?? 'http'}://${config.cpHost}:${config.cpPort}`,
         ROOST_RUNTIME_TOKEN: token.token,
         ROOST_BOT_ID: config.botId ?? 'selector',
         ROOST_WORKSPACE_ID: workspaceId,
@@ -120,7 +122,7 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
         ROOST_DSH_PROVIDER: 'deepseek-official',
         ROOST_DSH_MODEL: model,
         // 模型请求统一走控制面代理：DSH 只拿到 runtime token，真实 Key 不落沙箱。
-        DEEPSEEK_BASE_URL: `http://${config.cpHost}:${config.cpPort}`,
+        DEEPSEEK_BASE_URL: `${config.cpScheme ?? 'http'}://${config.cpHost}:${config.cpPort}`,
         DEEPSEEK_API_KEY: token.token,
         // 沙箱内的边界是 OpenShell，不是 DSH 自带的 sandbox：
         // 不设这个的话 fresh session 会 pin 到 workspace-write + ask，每条 bash 都要人批。
