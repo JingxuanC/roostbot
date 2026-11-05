@@ -16,6 +16,7 @@
 //   * 没有 rawStore（内存 port / 旧部署）时退回 config.runtimeToken（全局 env），
 //     行为与 E6 之前完全一致。
 
+import { getWorkspaceModelCredential } from '../../../packages/store/src/model-credentials.ts'
 import { issueRuntimeToken, revokeRuntimeToken } from '../../../packages/store/src/runtime-tokens.ts'
 import type { IssuedRuntimeToken } from '../../../packages/store/src/runtime-tokens.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
@@ -106,6 +107,8 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
     async ensure(workspaceId, context) {
       const store = resolveStore(context)
       const token = issueFor(store, workspaceId)
+      const workspaceModel = store === undefined ? undefined : getWorkspaceModelCredential(store, workspaceId)?.model
+      const model = workspaceModel ?? ((process.env['ROOST_FREE_MODEL'] ?? '').trim() || 'deepseek-v4-flash')
       const env: Record<string, string> = {
         ROOST_API: `http://${config.cpHost}:${config.cpPort}`,
         ROOST_RUNTIME_TOKEN: token.token,
@@ -113,7 +116,10 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
         ROOST_WORKSPACE_ID: workspaceId,
         ROOST_STATE_FILE: '/workspace/.dsh/room-cursors.json',
         ROOST_DSH_PROVIDER: 'deepseek-official',
-        ROOST_DSH_MODEL: 'deepseek-chat',
+        ROOST_DSH_MODEL: model,
+        // 模型请求统一走控制面代理：DSH 只拿到 runtime token，真实 Key 不落沙箱。
+        DEEPSEEK_BASE_URL: `http://${config.cpHost}:${config.cpPort}`,
+        DEEPSEEK_API_KEY: token.token,
         // 沙箱内的边界是 OpenShell，不是 DSH 自带的 sandbox：
         // 不设这个的话 fresh session 会 pin 到 workspace-write + ask，每条 bash 都要人批。
         DSH_PERMISSION_MODE: 'danger-full-access',
@@ -148,7 +154,7 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
             name,
             image: config.image,
             policyYaml: userSandboxPolicy({ host: config.cpHost, port: config.cpPort }),
-            providers: ['deepseek'],
+            providers: [],
             env,
             log: config.log ?? (() => {}),
           })

@@ -77,6 +77,16 @@ import {
 } from './marketplace-install-routes.ts'
 import { getApproval } from '../../../packages/store/src/approvals.ts'
 import { handleDeepHealth } from './health-deep.ts'
+import {
+  DEFAULT_FREE_MODEL,
+  handleDeleteModelSettings,
+  handleGetModelSettings,
+  handlePutModelSettings,
+  handleTestModelSettings
+} from './model-settings-routes.ts'
+import type { ModelSettingsContext } from './model-settings-routes.ts'
+import { readModelKeyMaster } from './model-key-crypto.ts'
+import { resolveModelProxy } from './model-proxy-resolver.ts'
 import { handleMemoryClaims, handleMemoryCleanup } from './memory-claims-routes.ts'
 import { createModelProxy } from '../../../packages/budget/src/index.ts'
 import type { ModelProxyHandler } from '../../../packages/budget/src/index.ts'
@@ -257,6 +267,12 @@ export interface ServerOptions {
   authSessionTtlMs?: number
   /** 模型代理（测试注入）；不传时按 ROOST_MODEL_* / DEEPSEEK_* 构造。 */
   modelProxy?: ModelProxyHandler
+  /** BYO 模型 Key 加密主密钥；不传时读 ROOST_MODEL_KEY_SECRET。测试可注入固定 key。 */
+  modelKeyMaster?: Buffer | null
+  /** 免费额度使用的模型；默认 ROOST_FREE_MODEL 或 deepseek-v4-flash。 */
+  freeModel?: string
+  /** 测试连接的上游 fetch（测试注入）。 */
+  modelTestFetch?: typeof fetch
   /** 事件出口（宿主空闲睡眠/外部审计用）；与指标 sink 并行调用。 */
   onEvent?: (event: unknown) => void
   /** workspace 启动成功（运行时就绪）后的回调。 */
@@ -1856,6 +1872,44 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (/^\/api\/workspaces\/[^/]+\/model$/.test(path)) {
+    const match = /^\/api\/workspaces\/([^/]+)\/model$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null || workspaceId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace model path')
+      return
+    }
+    if (method === 'GET') {
+      await handleGetModelSettings(ctx.modelSettings!, req, res, workspaceId)
+      return
+    }
+    if (method === 'PUT') {
+      await handlePutModelSettings(ctx.modelSettings!, req, res, workspaceId)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteModelSettings(ctx.modelSettings!, req, res, workspaceId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/workspaces\/[^/]+\/model\/test$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/model\/test$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null || workspaceId === '') {
+      sendError(res, 404, 'not_found', 'malformed workspace model path')
+      return
+    }
+    await handleTestModelSettings(ctx.modelSettings!, req, res, workspaceId)
+    return
+  }
+
   if (/^\/api\/workspaces\/[^/]+\/members$/.test(path)) {
     if (method !== 'GET') {
       notFound(req, res, method, path)
@@ -2039,6 +2093,45 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleMemoryCleanup({ store: ctx.rawStore, rawStore: ctx.rawStore, now: ctx.now, ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }) }, req, res)
+    return
+  }
+
+  if (path === '/v1/models' || path === '/models') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.modelProxy?.resolve === undefined) {
+      sendError(res, 503, 'model_proxy_not_configured', 'model proxy is not configured')
+      return
+    }
+    const resolved = await ctx.modelProxy.resolve(req)
+    if (!resolved.ok) {
+      sendError(res, resolved.status, resolved.code, resolved.message)
+      return
+    }
+    sendJson(res, 200, {
+      object: 'list',
+      data: [{ id: resolved.model, object: 'model', owned_by: resolved.byo ? 'byo' : 'roost' }]
+    })
+    return
+  }
+
+  if (path === '/v1/messages') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    if (ctx.modelProxy?.resolve === undefined) {
+      sendError(res, 503, 'model_proxy_not_configured', 'model proxy is not configured')
+      return
+    }
+    const resolved = await ctx.modelProxy.resolve(req)
+    if (!resolved.ok) {
+      sendError(res, resolved.status, resolved.code, resolved.message)
+      return
+    }
+    await resolved.proxy(req, res)
     return
   }
 
@@ -2911,32 +3004,52 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
   })
 
   // 模型代理（6.4.5）：/v1/chat/completions 转发并记账。
+  // 有 rawStore 时走 per-workspace 解析（BYO Key / 平台 Key + 免费额度）；否则退回旧单 key。
   const modelKey = (process.env['ROOST_MODEL_API_KEY'] ?? process.env['DEEPSEEK_API_KEY'] ?? '').trim()
-  if (options.modelProxy !== undefined) {
+  const modelKeyMaster = options.modelKeyMaster ?? readModelKeyMaster()
+  const freeModel = options.freeModel ?? ((process.env['ROOST_FREE_MODEL'] ?? '').trim() || DEFAULT_FREE_MODEL)
+  const platformBase =
+    process.env['ROOST_MODEL_UPSTREAM_BASE'] ?? process.env['DEEPSEEK_BASE_URL'] ?? 'https://api.deepseek.com'
+  if (ctx.rawStore !== undefined) {
+    ctx.modelProxy = {
+      workspaceIdFrom: modelProxyWorkspaceId,
+      resolve: (req) =>
+        resolveModelProxy(
+          {
+            rawStore: ctx.rawStore,
+            ...(ctx.runtimeToken === undefined ? {} : { runtimeToken: ctx.runtimeToken }),
+            now: ctx.now,
+            masterKey: modelKeyMaster,
+            platformKey: modelKey,
+            platformBase,
+            freeModel,
+            limiter: ctx.rateLimiter,
+            ...(options.modelTestFetch === undefined ? {} : { fetchImpl: options.modelTestFetch })
+          },
+          req
+        )
+    }
+  } else if (options.modelProxy !== undefined) {
     ctx.modelProxy = { proxy: options.modelProxy, workspaceIdFrom: modelProxyWorkspaceId }
   } else if (modelKey !== '') {
     ctx.modelProxy = {
       proxy: createModelProxy({
-        upstreamBase: process.env['ROOST_MODEL_UPSTREAM_BASE'] ?? process.env['DEEPSEEK_BASE_URL'] ?? 'https://api.deepseek.com',
+        upstreamBase: platformBase,
         key: modelKey,
         limiter: ctx.rateLimiter,
-        recordUsage: (usage) => {
-          if (options.rawStore === undefined) return
-          try {
-            recordUsage(options.rawStore, {
-              workspaceId: usage.workspaceId,
-              source: usage.estimated ? 'estimated' : 'provider_report',
-              idem: usage.idem,
-              at: usage.at,
-              outputTokens: usage.tokens
-            })
-          } catch {
-            // 记账失败不影响代理响应。
-          }
-        }
+        recordUsage: () => {}
       }),
       workspaceIdFrom: modelProxyWorkspaceId
     }
+  }
+
+  ctx.modelSettings = {
+    store: ctx.store,
+    ...(ctx.rawStore === undefined ? {} : { rawStore: ctx.rawStore }),
+    now: ctx.now,
+    masterKey: options.modelKeyMaster ?? readModelKeyMaster(),
+    freeModel: options.freeModel ?? ((process.env['ROOST_FREE_MODEL'] ?? '').trim() || DEFAULT_FREE_MODEL),
+    ...(options.modelTestFetch === undefined ? {} : { fetchImpl: options.modelTestFetch })
   }
 
   const server = http.createServer((req, res) => {

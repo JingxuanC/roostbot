@@ -13,10 +13,15 @@ import type { ModelProxyHandler } from '../../../packages/budget/src/proxy.ts'
 import { sendError } from './server.ts'
 
 export interface ModelProxyRouteContext {
-  /** createModelProxy(...) 的返回值。 */
-  proxy: ModelProxyHandler
+  /** 默认/平台代理；有 resolve 时可不传。 */
+  proxy?: ModelProxyHandler
   /** 本次调用归属的 workspace；返回 null 时拒绝（无法记账）。 */
   workspaceIdFrom: (req: IncomingMessage) => string | null
+  /** 按请求解析 BYO/平台 Key；存在时优先于默认 proxy。 */
+  resolve?: (req: IncomingMessage) => Promise<
+    | { ok: true; proxy: ModelProxyHandler; workspaceId: string }
+    | { ok: false; status: number; code: string; message: string }
+  >
 }
 
 export async function handleModelProxy(
@@ -26,6 +31,21 @@ export async function handleModelProxy(
 ): Promise<void> {
   if (req.method !== 'POST') {
     await ctx.proxy(req, res)
+    return
+  }
+
+  if (ctx.resolve !== undefined) {
+    const resolved = await ctx.resolve(req)
+    if (!resolved.ok) {
+      sendError(res, resolved.status, resolved.code, resolved.message)
+      return
+    }
+    setProxyWorkspace(req, resolved.workspaceId)
+    await resolved.proxy(req, res)
+    return
+  }
+  if (ctx.proxy === undefined) {
+    sendError(res, 503, 'model_proxy_not_configured', 'model proxy is not configured')
     return
   }
 

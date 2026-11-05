@@ -43,6 +43,7 @@ import {
   verifyPassword,
 } from '../../../packages/store/src/accounts-auth.ts'
 import type { Account } from '../../../packages/store/src/accounts-auth.ts'
+import { grantTokenCredit, SIGNUP_CREDIT_TOKENS } from '../../../packages/store/src/token-credits.ts'
 import { isStoreError } from '../../../packages/store/src/errors.ts'
 import { appendEvent } from '../../../packages/store/src/events.ts'
 import { listSessionsByAccount, revokeSession } from '../../../packages/store/src/sessions.ts'
@@ -493,6 +494,12 @@ export async function handleVerifyEmail(
 
   try {
     markEmailVerified(store, consumed.accountId, now)
+    // 注册赠送：邮箱验证通过才发，一次性、90 天有效；失败不能反过来让验证失败。
+    try {
+      grantTokenCredit(store, { accountId: consumed.accountId, amount: SIGNUP_CREDIT_TOKENS, at: now })
+    } catch (err) {
+      logError('signup-credit', err)
+    }
   } catch (err) {
     if (isStoreError(err) && err.code === 'ACCOUNT_NOT_FOUND') {
       sendError(res, 400, 'auth.token_invalid', '验证链接对应的账号不存在')
@@ -584,6 +591,12 @@ export async function handleLogin(
   if (account.emailVerifiedAt === null) {
     sendError(res, 401, 'auth.email_unverified', '邮箱还没验证：请先点验证邮件里的链接，或重新发送验证邮件')
     return
+  }
+
+  try {
+    grantTokenCredit(store, { accountId: account.id, amount: SIGNUP_CREDIT_TOKENS, at: ctx.now() })
+  } catch (err) {
+    logError('signup-credit(oidc)', err)
   }
 
   const issued = await issueSession(ctx, res, account.id, 'web')
@@ -1042,6 +1055,12 @@ export async function handleOidcCallback(
     logError('oidc/callback(account)', err)
     sendError(res, 500, 'internal_error', 'OIDC account upsert failed')
     return
+  }
+
+  try {
+    grantTokenCredit(store, { accountId: account.id, amount: SIGNUP_CREDIT_TOKENS, at: ctx.now() })
+  } catch (err) {
+    logError('signup-credit(oidc)', err)
   }
 
   const issued = await issueSession(ctx, res, account.id, 'web')

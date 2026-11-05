@@ -376,3 +376,27 @@ export type {
   SetGrantInput,
   UpsertConnectionInput,
 } from './connectors.ts'
+
+export {
+  deleteWorkspaceModelCredential,
+  getWorkspaceModelCredential,
+  saveWorkspaceModelCredential,
+} from './model-credentials.ts'
+export type {
+  SaveModelCredentialInput,
+  WorkspaceModelCredential,
+} from './model-credentials.ts'
+export {
+  SIGNUP_CREDIT_TOKENS,
+  SIGNUP_CREDIT_TTL_MS,
+  consumeTokenCredit,
+  getTokenCreditBalance,
+  grantTokenCredit,
+} from './token-credits.ts'
+export type {
+  ConsumeTokenCreditInput,
+  ConsumeTokenCreditResult,
+  GrantTokenCreditInput,
+  TokenCreditBalance,
+  TokenGrant,
+} from './token-credits.ts'

@@ -206,7 +206,7 @@ function settingsView(ctx, root, state) {
   board.append(membersSection(pageCtx, state.members, remount))
   board.append(devicesSection(pageCtx, state.devices, remount))
   for (const node of grantsSections(ctx, root, state)) board.append(node)
-  return el('div', { class: 'stack' }, [header, notificationSection(), board])
+  return el('div', { class: 'stack' }, [header, notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
 }
 
 // ---------------------------------------------------------------------------
@@ -470,4 +470,203 @@ function grantsSections(ctx, root, state) {
       description: '按授权时间升序；撤销后立即失效。',
     }),
   ]
+}
+
+// ---------------------------------------------------------------------------
+// 模型服务：BYO Key / 平台免费额度（2026-11-05）
+// ---------------------------------------------------------------------------
+
+const MODEL_PATH = (workspaceId) => `/api/workspaces/${encodeURIComponent(workspaceId)}/model`
+
+function fmtTokens(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value ?? '—')
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`
+  return String(n)
+}
+
+function modelSection(ctx, workspaceId, role) {
+  const box = el('div', { class: 'stack' })
+  const section = ui.section('模型服务', [box], {
+    description: '用自己的 DeepSeek / OpenAI-compatible Key；不填则使用平台免费额度。Key 只保存密文，页面只显示后 4 位。',
+  })
+
+  if (role !== 'owner' && role !== 'admin') {
+    box.append(notice('仅 owner/admin 可管理模型 Key', '成员可以使用平台免费额度；自带 Key 需要 workspace owner/admin 设置。'))
+    return section
+  }
+  void load()
+
+  async function load() {
+    box.replaceChildren(ui.loading('正在载入模型设置…'))
+    let data
+    try {
+      data = await ctx.api.get(MODEL_PATH(workspaceId))
+    } catch (error) {
+      if (isAuthError(error)) {
+        ctx.requirePair()
+        return
+      }
+      box.replaceChildren(
+        ui.errorState({
+          error,
+          message: `模型设置载入失败：${error instanceof Error ? error.message : String(error)}`,
+          onRetry: () => void load(),
+        })
+      )
+      return
+    }
+    render(data)
+  }
+
+  function render(data) {
+    box.replaceChildren()
+    const free = data?.free
+    if (free) {
+      const expires =
+        typeof free.expiresAt === 'number' && free.expiresAt > 0
+          ? ` · ${new Date(free.expiresAt).toLocaleDateString('zh-CN')} 过期`
+          : ''
+      box.append(
+        el('p', {
+          class: 'field-hint',
+          text: `平台免费额度：${fmtTokens(free.balance)} tokens${expires} · 免费模型 ${free.model}`,
+        })
+      )
+    }
+
+    if (data?.byo) {
+      const byo = data.byo
+      box.append(
+        el('div', { class: 'page-card model-current' }, [
+          el('p', { class: 'field-label', text: '当前使用：自带 Key' }),
+          el('p', { class: 'field-hint', text: `${byo.provider} · ${byo.model} · ${byo.baseUrl} · 密钥 ${byo.keyHint}` })
+        ])
+      )
+      const actions = el('div', { class: 'section-actions' })
+      actions.append(ui.button('测试连接', { variant: 'outline', onClick: () => void testSaved() }))
+      actions.append(ui.button('更换 Key', { variant: 'primary', onClick: () => renderForm(byo) }))
+      actions.append(ui.button('删除 Key', { variant: 'ghost', onClick: () => void remove() }))
+      box.append(actions)
+      return
+    }
+    renderForm(null)
+  }
+
+  function renderForm(current) {
+    box.querySelectorAll('.model-form').forEach((node) => node.remove())
+    const provider = ui.select({
+      id: 'model-provider',
+      options: [
+        { value: 'deepseek', label: 'DeepSeek' },
+        { value: 'openai-compatible', label: 'OpenAI-compatible' }
+      ],
+      value: current?.provider || 'deepseek'
+    })
+    const baseUrl = ui.input({
+      id: 'model-base-url',
+      value: current?.baseUrl || 'https://api.deepseek.com',
+      placeholder: 'https://api.deepseek.com',
+      required: true
+    })
+    const model = ui.input({
+      id: 'model-name',
+      value: current?.model || 'deepseek-v4-flash',
+      placeholder: 'deepseek-v4-flash',
+      required: true
+    })
+    const apiKey = ui.input({
+      id: 'model-api-key',
+      type: 'password',
+      placeholder: current ? `留空则保留当前密钥（${current.keyHint}）` : 'sk-...',
+      autocomplete: 'off',
+      required: !current
+    })
+    const status = ui.statusLine('')
+    status.hidden = true
+    const saveButton = ui.button('保存并测试', {
+      variant: 'primary',
+      onClick: () => void save({ provider, baseUrl, model, apiKey, status, button: saveButton })
+    })
+    const form = el('div', { class: 'stack model-form' }, [
+      ui.field('Provider', provider, { id: 'model-provider' }),
+      ui.field('Base URL', baseUrl, { id: 'model-base-url', hint: '只接受 https；本地开发允许 http://localhost。末尾 /v1 会自动去掉。' }),
+      ui.field('模型', model, { id: 'model-name', hint: '免费额度只允许平台免费模型；BYO 可填自己的模型名。' }),
+      ui.field('API Key', apiKey, { id: 'model-api-key', hint: '只保存密文，服务端不会回显；留空表示只更新上面三项。' }),
+      status,
+      el('div', { class: 'section-actions' }, [
+        saveButton,
+        ui.button('取消', { variant: 'ghost', onClick: () => load() })
+      ])
+    ])
+    box.append(form)
+  }
+
+  async function save({ provider, baseUrl, model, apiKey, status, button }) {
+    ui.setBusy(button, true, '保存中…')
+    status.hidden = true
+    try {
+      await ctx.api.request('PUT', MODEL_PATH(workspaceId), {
+        provider: provider.value.trim(),
+        baseUrl: baseUrl.value.trim(),
+        model: model.value.trim(),
+        ...(apiKey.value.trim() === '' ? {} : { apiKey: apiKey.value.trim() })
+      })
+      ui.setStatus(status, '已保存，正在测试连接…')
+      status.hidden = false
+      await test({
+        provider: provider.value.trim(),
+        baseUrl: baseUrl.value.trim(),
+        model: model.value.trim(),
+        apiKey: apiKey.value.trim(),
+        status
+      })
+      await load()
+    } catch (error) {
+      if (isAuthError(error)) return ctx.requirePair()
+      ui.setStatus(status, error instanceof Error ? error.message : String(error), 'error')
+      status.hidden = false
+    } finally {
+      ui.setBusy(button, false)
+    }
+  }
+
+  async function testSaved() {
+    await test({ status: null })
+  }
+
+  async function test({ provider, baseUrl, model, apiKey, status }) {
+    if (status) {
+      status.hidden = false
+      ui.setStatus(status, '正在测试连接…')
+    }
+    try {
+      const result = await ctx.api.post(`${MODEL_PATH(workspaceId)}/test`, {
+        ...(provider ? { provider } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(model ? { model } : {}),
+        ...(apiKey ? { apiKey } : {})
+      })
+      if (status) {
+        if (result?.ok) ui.setStatus(status, `连接正常（${result.latencyMs ?? 0}ms）`)
+        else ui.setStatus(status, `连接失败${result?.status ? `：HTTP ${result.status}` : result?.error ? `：${result.error}` : ''}`, 'error')
+      }
+    } catch (error) {
+      if (status) ui.setStatus(status, error instanceof Error ? error.message : String(error), 'error')
+      if (isAuthError(error)) ctx.requirePair()
+    }
+  }
+
+  async function remove() {
+    try {
+      await ctx.api.del(MODEL_PATH(workspaceId))
+      await load()
+    } catch (error) {
+      if (isAuthError(error)) return ctx.requirePair()
+      box.prepend(el('p', { class: 'field-hint', text: `删除失败：${error instanceof Error ? error.message : String(error)}` }))
+    }
+  }
+
+  return section
 }

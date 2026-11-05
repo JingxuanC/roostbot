@@ -48,6 +48,8 @@ export const STORE_ERROR_CODES = [
   // ---- 每 workspace 短期 runtime token（0021_runtime_tokens.sql / runtime-tokens.ts）--
   'INVALID_RUNTIME_TOKEN',
   'RUNTIME_TOKEN_NOT_FOUND',
+  'MODEL_CREDENTIAL_WRITE_FAILED',
+  'TOKEN_CREDIT_WRITE_FAILED',
   'RUNTIME_TOKEN_WRITE_FAILED',
 ] as const
 

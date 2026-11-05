@@ -45,6 +45,8 @@ export interface ModelProxyOptions {
   upstreamPath?: string
   /** 上游 Bearer key；只放进 Authorization，不落日志。 */
   key: string
+  /** 固定模型：请求体里的 model 被改写成它（免费额度只允许免费模型）。 */
+  forcedModel?: string
   /** 注入 fetch（测试/自定义传输）；默认全局 fetch。 */
   fetchImpl?: typeof fetch
   /** 记账回调（生产注入 store.recordUsage，测试注入采集器）。 */
@@ -171,11 +173,16 @@ function forwardHeaders(req: IncomingMessage, key: string): Record<string, strin
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
     if (HOP_BY_HOP_HEADERS.has(lower) || INTERNAL_HEADERS.has(lower)) continue
+    if (lower === 'x-api-key') continue
     if (lower.startsWith('x-roost-')) continue
     if (value === undefined) continue
     headers[lower] = Array.isArray(value) ? value.join(', ') : value
   }
-  if (key !== '') headers['authorization'] = `Bearer ${key}`
+  if (key !== '') {
+    headers['authorization'] = `Bearer ${key}`
+    // DSH 的 Messages 传输发 x-api-key；上游可能是 Anthropic 兼容端点。
+    headers['x-api-key'] = key
+  }
   return headers
 }
 
@@ -230,7 +237,8 @@ function readTokenCount(value: unknown): number | null {
 function usageFromPayload(value: unknown): TokenUsage | null {
   const record = asRecord(value)
   if (record === null) return null
-  const usage = asRecord(record['usage'])
+  // Anthropic Messages：message_start 把 usage 放在 message 里，message_delta 放顶层。
+  const usage = asRecord(record['usage']) ?? asRecord(asRecord(record['message'])?.['usage'])
   if (usage === null) return null
   const input = readTokenCount(usage['prompt_tokens']) ?? readTokenCount(usage['input_tokens'])
   const output = readTokenCount(usage['completion_tokens']) ?? readTokenCount(usage['output_tokens'])
@@ -242,6 +250,13 @@ function usageFromPayload(value: unknown): TokenUsage | null {
 function contentFromPayload(value: unknown): string | null {
   const record = asRecord(value)
   if (record === null) return null
+  const anthropicDelta = asRecord(record['delta'])
+  const anthropicText = textOf(anthropicDelta?.['text'])
+  if (anthropicText !== null) return anthropicText
+  const block = asRecord(record['content_block'])
+  const blockText = textOf(block?.['text'])
+  if (blockText !== null) return blockText
+
   const choices = record['choices']
   if (!Array.isArray(choices) || choices.length === 0) return null
   const choice = asRecord(choices[0])
@@ -315,7 +330,13 @@ function processSseLine(state: SseState, line: string): void {
     return
   }
   const usage = usageFromPayload(payload)
-  if (usage !== null) state.usage = usage
+  if (usage !== null) {
+    // 流式 usage 是累计值；不同帧可能只带 input 或 output，逐字段取最大。
+    state.usage = {
+      input: Math.max(state.usage?.input ?? 0, usage.input),
+      output: Math.max(state.usage?.output ?? 0, usage.output)
+    }
+  }
   const content = contentFromPayload(payload)
   if (content !== null) state.contentChars += content.length
 }
@@ -446,7 +467,21 @@ export function createModelProxy(options: ModelProxyOptions): ModelProxyHandler 
       sendError(res, read.status ?? 400, read.code ?? 'invalid_body', read.message ?? 'invalid body')
       return
     }
-    const body = read.body
+    let body = read.body
+    if (options.forcedModel !== undefined) {
+      try {
+        const parsed = JSON.parse(body.toString('utf8')) as unknown
+        const record = asRecord(parsed)
+        if (record === null) {
+          sendError(res, 400, 'invalid_body', 'request body must be a JSON object')
+          return
+        }
+        body = Buffer.from(JSON.stringify({ ...record, model: options.forcedModel }), 'utf8')
+      } catch {
+        sendError(res, 400, 'invalid_json', 'request body is not valid JSON')
+        return
+      }
+    }
     const idem = idemFor(req, workspaceId)
     const inputChars = promptChars(body)
     const headers = forwardHeaders(req, key)

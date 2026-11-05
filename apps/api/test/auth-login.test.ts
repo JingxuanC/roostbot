@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { openStore } from '../../../packages/store/src/index.ts'
+import { getTokenCreditBalance, SIGNUP_CREDIT_TOKENS } from '../../../packages/store/src/token-credits.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import {
   handleListProviders,
@@ -500,6 +501,29 @@ function fakeProvider(): {
   }
   return { provider, calls }
 }
+
+test('邮箱验证通过发放注册赠送 100 万 tokens（一次性、90 天）', async () => {
+  const harness = await startAuthHarness()
+  try {
+    const registered = await harness.call('POST', '/api/auth/register', {
+      body: { email: 'grant@example.com', password: PASSWORD },
+    })
+    assert.equal(registered.status, 201)
+    const mail = harness.mail.find((item) => item.kind === 'verify')
+    assert.ok(mail)
+    assert.equal(getTokenCreditBalance(harness.rawStore, harness.rawStore.db.prepare('SELECT id FROM accounts WHERE email = ?').get('grant@example.com').id).balance, 0)
+    const verified = await harness.call('POST', '/api/auth/verify-email', { body: { token: mail.token } })
+    assert.equal(verified.status, 200)
+    const accountId = harness.rawStore.db.prepare('SELECT id FROM accounts WHERE email = ?').get('grant@example.com').id
+    const balance = getTokenCreditBalance(harness.rawStore, accountId)
+    assert.equal(balance.balance, SIGNUP_CREDIT_TOKENS)
+    // 重放/再次验证不会重复发
+    await harness.call('POST', '/api/auth/verify-email', { body: { token: mail.token } })
+    assert.equal(getTokenCreditBalance(harness.rawStore, accountId).balance, SIGNUP_CREDIT_TOKENS)
+  } finally {
+    await harness.close()
+  }
+})
 
 test('OIDC 未配置：start 404 auth.oidc_unavailable，providers 为空', async () => {
   const harness = await startAuthHarness()

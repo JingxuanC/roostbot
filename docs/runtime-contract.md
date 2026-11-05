@@ -185,7 +185,9 @@ OpenShell 沙箱 user-<workspaceId 的 8 位 hex>（每 workspace 一个，固�
 | `ROOST_WORKSPACE_ID` | workspace id | 房间过滤 |
 | `ROOST_STATE_FILE` | `/workspace/.dsh/room-cursors.json` | 游标 |
 | `ROOST_WORKDIR` | `/workspace` | dsh 工作目录 |
-| `ROOST_DSH_PROVIDER` | `deepseek-official` | provider 名（凭据由 OpenShell 注入） |
+| `ROOST_DSH_PROVIDER` | `deepseek-official` | provider 名；模型请求走控制面代理（2026-11 起） |
+| `DEEPSEEK_BASE_URL` | `http://<control-plane>:<port>` | 指向 Roost 模型代理；沙箱不持有真实 Key |
+| `DEEPSEEK_API_KEY` | workspace runtime token | 仅作为代理鉴权占位，不是模型 Key |
 | `ROOST_DSH_MODEL` | `deepseek-chat` | 模型 |
 
 ### 9.3 约束
