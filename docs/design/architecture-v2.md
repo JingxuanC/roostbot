@@ -214,7 +214,7 @@ sequenceDiagram
 
 1. `appendEvent` 成功之后才通知总线。通知失败不影响写入（现有 `setEventSink` 已经是这个契约）。
 2. SSE 先读后等。写入发生在「读完、还没开始等」的窗口里时，监听器要记住这次唤醒，避免干等到兜底超时。
-3. 兜底超时仍然存在，给「另一个进程直接写了 SQLite、本进程总线没看见」留后路。默认不再是 700ms。测试可以把间隔调小。
+3. 兜底超时仍然存在，默认 15 秒，测试可以把间隔调小。另一个进程写完 SQLite 后应立刻 `POST /api/internal/notify`（runtime token，body `{roomId, seq?}`）。这条路由不写事件，只敲本进程总线，SSE 和长轮询马上再读库，不用干等兜底。
 4. 续传：`?after=` 与 `Last-Event-ID` 取较大者。`event: message` 的 JSON 形状保持 `{seq, at, actor, text, attachments}`，新字段只追加。
 5. 沙箱侧优先 `GET /api/internal/events`。这是 workspace 范围的长轮询，避免「每个房间各挂一个 15 秒请求」串成队。404 表示对面还是旧控制面，room-agent 退回原来的按房间 `messages?after=`。
 

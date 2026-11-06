@@ -98,7 +98,7 @@ import { metricsFromEvent } from '../../../packages/observability/src/index.ts'
 import { readWorkspaceRoomEvents, setEventSink } from '../../../packages/store/src/events.ts'
 import { appendRoomSignal, readRoomEvents } from '../../../packages/store/src/room-log.ts'
 import type { Event } from '../../../packages/store/src/types.ts'
-import { armRoomWait, publishFromStoredEvent } from './room-bus.ts'
+import { armRoomWait, publishFromStoredEvent, publishRoomWake } from './room-bus.ts'
 import { encodeSseFrame, framesForRoomEvent, internalEventJson } from './room-stream.ts'
 import {
   handleCreateApprovalGrant,
@@ -1814,6 +1814,30 @@ async function handleInternalDelta(ctx: RoomRouteContext, req: IncomingMessage, 
   }
 }
 
+/**
+ * POST /api/internal/notify { roomId, seq? }
+ * 另一个进程写完 SQLite 后敲一下，本进程的 SSE / 长轮询立刻醒。
+ * 不写事件；醒来的连接自己再读库。
+ */
+async function handleInternalNotify(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const roomId = typeof body.roomId === 'string' ? body.roomId.trim() : ''
+  if (roomId === '' || roomId.length > 80) {
+    return sendError(res, 400, 'invalid_body', 'body.roomId is required')
+  }
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
+  const seq = typeof body.seq === 'number' && Number.isSafeInteger(body.seq) && body.seq >= 0 ? body.seq : 0
+  publishRoomWake({ roomId, seq, kind: 'notify' })
+  sendJson(res, 202, { ok: true, roomId, seq })
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms)
@@ -2941,6 +2965,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     } catch (error) {
       sendError(res, 502, 'runtime.start_failed', error instanceof Error ? error.message : String(error))
     }
+    return
+  }
+
+  if (path === '/api/internal/notify') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalNotify(ctx as RoomRouteContext, req, res)
     return
   }
 

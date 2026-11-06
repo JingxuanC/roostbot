@@ -152,6 +152,62 @@ test('SSE 在 15s 兜底之前就把新消息推下来（内存 store 走总线�
   }
 })
 
+test('POST /api/internal/notify 让长轮询立刻返回，不用等 15 秒', async () => {
+  const store = createMemoryStore()
+  const started = await startServer({
+    store,
+    port: 0,
+    host: '127.0.0.1',
+    runtimeToken: 'rt_notify',
+    streamPollMs: 15_000,
+  })
+  try {
+    const code = ((await (await fetch(`${started.url}/api/pairing/code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accountId: 'acc_notify' }),
+    })).json()) as { code: string }).code
+    const token = ((await (await fetch(`${started.url}/api/pairing/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })).json()) as { sessionToken: string }).sessionToken
+    const workspace = ((await (await fetch(`${started.url}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: '通知' }),
+    })).json()) as { workspace: { id: string } }).workspace
+    const room = ((await (await fetch(`${started.url}/api/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ workspaceId: workspace.id, name: '房间' }),
+    })).json()) as { room: { id: string } }).room
+
+    const startedAt = Date.now()
+    let releasedAt = 0
+    const pending = fetch(`${started.url}/api/internal/rooms/${room.id}/messages?after=0&waitMs=8000`, {
+      headers: { 'x-runtime-token': 'rt_notify' },
+    }).then((response) => {
+      releasedAt = Date.now()
+      return response
+    })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    assert.equal(releasedAt, 0)
+    const notify = await fetch(`${started.url}/api/internal/notify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-runtime-token': 'rt_notify' },
+      body: JSON.stringify({ roomId: room.id, seq: 0 }),
+    })
+    assert.equal(notify.status, 202)
+    const waited = await pending
+    assert.equal(waited.status, 200)
+    assert.ok(releasedAt >= startedAt)
+    assert.ok(Date.now() - startedAt < 2_000)
+  } finally {
+    await started.close()
+  }
+})
+
 test('内部事件长轮询、续传与 workspace 隔离；delta 进同一条日志', async () => {
   const rawStore = openStore(':memory:')
   const store = createStorePort(rawStore)

@@ -1912,6 +1912,7 @@ function appendLiveEvent(message) {
     LIVE.seen.add(seq)
     LIVE.lastSeq = Math.max(LIVE.lastSeq, seq)
   }
+  clearStreaming()
   insertEvent(toEvent(message, LIVE.roomId))
   return true
 }
@@ -2035,6 +2036,39 @@ function handleRoundEvent(event) {
   }
 }
 
+let streamingText = ''
+
+function clearStreaming() {
+  streamingText = ''
+  document.getElementById('streaming-line')?.remove()
+}
+
+function handleDeltaEvent(event) {
+  let payload
+  try {
+    payload = JSON.parse(event.data)
+  } catch {
+    return
+  }
+  const delta = payload && typeof payload.delta === 'string' ? payload.delta : ''
+  if (delta === '') return
+  streamingText += delta
+  const list = $('#messages')
+  if (!list) return
+  let node = document.getElementById('streaming-line')
+  if (!node) {
+    node = el('article', { class: 'msg msg-bot streaming-line', id: 'streaming-line' })
+    list.append(node)
+  }
+  node.replaceChildren(el('p', { class: 'streaming-text', text: streamingText }))
+  const dots = el('span', { class: 'thinking-dots typing-indicator', 'aria-hidden': 'true' })
+  dots.append(el('i'), el('i'), el('i'))
+  node.append(dots)
+  list.scrollTop = list.scrollHeight
+  LIVE.pendingReply = true
+  renderWorking()
+}
+
 function handleSpeakingEvent(event) {
   try {
     const payload = JSON.parse(event.data)
@@ -2121,6 +2155,7 @@ function openStream() {
   stream.addEventListener('round', handleRoundEvent)
   stream.addEventListener('status', handleRoundEvent)
   stream.addEventListener('speaking', handleSpeakingEvent)
+  stream.addEventListener('message.delta', handleDeltaEvent)
   stream.addEventListener('error', () => {
     if (stream !== LIVE.stream) return
     // 关掉浏览器自动重连：它会带着旧的 after 重放，可能漏掉断线期间的消息。
