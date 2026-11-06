@@ -600,6 +600,14 @@
   padding: 0;
 }
 
+#room-view .voice-btn:disabled {
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: default;
+}
+
+#room-view .mic-btn { color: var(--text-2); background: transparent; }
+
 #room-view .voice-btn kbd { display: none; }
 
 #room-view .composer-error {

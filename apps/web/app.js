@@ -475,10 +475,12 @@ function renderRoomMessage(event) {
   head.append(el('span', { class: 'msg-name', text: bot.name }))
   article.append(head)
   const bubble = el('div', { class: 'bubble bubble-bot' })
-  if (typeof event.payload.text === 'string' && event.payload.text.trim() !== '') {
-    bubble.append(markdownFragment(event.payload.text))
-  }
-  article.append(bubble)
+  const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : ''
+  const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
+  const choice = parts.find((part) => part && part.type === 'choice')
+  const question = choice && typeof choice.prompt === 'string' ? choice.prompt.trim() : ''
+  if (text !== '' && text !== question) bubble.append(markdownFragment(event.payload.text))
+  if (bubble.childNodes.length > 0) article.append(bubble)
   appendRichParts(article, event, false)
   if (!hasImagePart(event.payload)) {
     const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
@@ -529,7 +531,8 @@ function renderImagePart(part, event) {
   const card = el('button', { class: 'img-card', type: 'button' })
   const img = el('img', { alt: part.name || '图片' })
   card.append(img)
-  card.append(el('span', { class: 'cap', text: '点按可全屏查看 / 转发' }))
+  const caption = typeof part.caption === 'string' ? part.caption.trim() : ''
+  if (caption !== '') card.append(el('span', { class: 'cap', text: caption }))
   const title = part.name || '图片'
   const open = () => openImageViewer({ src: img.src || src, title, detail: part.artifactId || '' })
   card.addEventListener('click', open)
@@ -1922,8 +1925,9 @@ function conversationEntries() {
   const used = new Set()
   const entries = []
   for (const bot of STORE.bots) {
-    const matches = STORE.rooms.filter((item) => item.hostBotId === bot.id || (item.members || []).some((member) => member.botId === bot.id))
-    const room = matches.sort((a, b) => ((b.members || []).length) - ((a.members || []).length))[0] || null
+    const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id)
+    const joined = STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
+    const room = (hosted.length > 0 ? hosted : joined)[0] || null
     if (room) used.add(room.id)
     const members = room && Array.isArray(room.members) ? room.members : []
     entries.push({
@@ -1957,15 +1961,28 @@ function messagePreviewText(message) {
 function formatShanghai(iso) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
+  const delta = Date.now() - date.getTime()
+  if (delta >= 0 && delta < 60_000) return '刚刚'
+  if (delta >= 0 && delta < 60 * 60_000) return `${Math.max(1, Math.floor(delta / 60_000))} 分钟前`
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
   const today = day.format(new Date())
   const that = day.format(date)
-  if (that === today) return '今天'
+  if (that === today) return `今天 ${clock.format(date)}`
   const yesterday = day.format(new Date(Date.now() - 24 * 60 * 60 * 1000))
   if (that === yesterday) return '昨天'
-  const month = Number(that.slice(5, 7))
-  const dateOfMonth = Number(that.slice(8, 10))
-  return `${month}月${dateOfMonth}日`
+  return `${Number(that.slice(5, 7))}月${Number(that.slice(8, 10))}日`
+}
+
+function previewLine(message, entry) {
+  const body = messagePreviewText(message)
+  const actor = message && message.actor
+  if (!actor) return body
+  if (actor.kind === 'user') return `你：${body}`
+  if (actor.kind === 'bot' && entry && entry.bot && actor.id !== entry.bot.id) {
+    return `${botIdentity(actor.id).name}：${body}`
+  }
+  return body
 }
 
 async function loadRoomPreview(roomId) {
@@ -1973,9 +1990,16 @@ async function loadRoomPreview(roomId) {
   const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages?limit=1`)
   const messages = Array.isArray(data?.messages) ? data.messages : []
   const last = messages[messages.length - 1]
-  const preview = { text: messagePreviewText(last), at: last && last.at ? formatShanghai(last.at) : '' }
+  const preview = { message: last || null, at: last && last.at ? formatShanghai(last.at) : '' }
   roomPreviews.set(roomId, preview)
   return preview
+}
+
+function roomsForBot(bot) {
+  if (!bot) return []
+  const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id)
+  if (hosted.length > 0) return hosted
+  return STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
 }
 
 function renderChatRow(entry) {
@@ -1984,20 +2008,30 @@ function renderChatRow(entry) {
   row.append(botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
   const text = el('div', { class: 'home-copy' })
   text.append(el('strong', { text: entry.title }))
-  const preview = el('span', { class: 'home-preview', text: entry.room ? '…' : '点开看看' })
+  const preview = el('span', { class: 'home-preview', text: '…' })
   text.append(preview)
   row.append(text)
   const time = el('time', { class: 'home-time', text: '' })
   row.append(time)
-  if (entry.room) {
-    void loadRoomPreview(entry.room.id).then((item) => {
-      if (!preview.isConnected) return
-      preview.textContent = item.text
-      time.textContent = item.at
-    }).catch(() => {
-      if (preview.isConnected) preview.textContent = '点开看看'
-    })
+  const candidates = roomsForBot(entry.bot)
+  if (candidates.length === 0) {
+    preview.textContent = '点开看看'
+    return row
   }
+  void (async () => {
+    let best = null
+    for (const room of candidates) {
+      const item = await loadRoomPreview(room.id)
+      const at = item.message && item.message.at ? Date.parse(item.message.at) : 0
+      if (!best || at >= best.at) best = { room, item, at }
+    }
+    if (!preview.isConnected || !best) return
+    row.href = `#/rooms/${encodeURIComponent(best.room.id)}`
+    preview.textContent = best.item.message ? previewLine(best.item.message, entry) : '还没有消息'
+    time.textContent = best.item.at
+  })().catch(() => {
+    if (preview.isConnected) preview.textContent = '点开看看'
+  })
   return row
 }
 
@@ -2672,8 +2706,10 @@ async function enterLiveRoom(token) {
 function syncSend() {
   const input = $('#composer')
   const send = $('#send')
+  const files = $('#composer-files')
   if (!input || !send) return
-  send.disabled = input.disabled || input.value.trim() === ''
+  const hasFile = Boolean(files && !files.hidden && files.childElementCount > 0)
+  send.disabled = input.disabled || (input.value.trim() === '' && !hasFile)
 }
 
 function growComposer() {
@@ -3060,6 +3096,7 @@ function setupComposer() {
           chips.hidden = false
           chips.append(el('span', { text: chosen.name || '图片' }))
         }
+        syncSend()
       } catch (error) {
         showComposerError(error instanceof Error ? error.message : '上传失败')
       }
