@@ -169,8 +169,15 @@ test('SSE：订阅后能收到新消息（event: message + cursor）', async () 
         })
       ).json()) as { room: { id: string } }
 
+      const minted = await fetch(`${base}/api/rooms/${room.id}/stream-ticket`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...auth(token) },
+        body: '{}'
+      })
+      assert.equal(minted.status, 200)
+      const { ticket } = (await minted.json()) as { ticket: string }
       const controller = new AbortController()
-      const response = await fetch(`${base}/api/rooms/${room.id}/stream?access_token=${token}`, {
+      const response = await fetch(`${base}/api/rooms/${room.id}/stream?ticket=${ticket}`, {
         signal: controller.signal,
         headers: { accept: 'text/event-stream' }
       })

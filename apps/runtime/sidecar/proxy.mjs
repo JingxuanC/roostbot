@@ -11,7 +11,8 @@
 //                              the newest session file mtime (the only in-process signals
 //                              available without kernel changes)
 //   *    <base>/...            proxied to DSH with <base> stripped; every proxied
-//                              call needs the runtime token or the DSH cookie
+//                              call needs the runtime bearer token. A Cookie header
+//                              is not a credential.
 //
 // Config (env):
 //   UPSTREAM       http://127.0.0.1:<dsh port>   (required)
@@ -20,6 +21,7 @@
 //   RUNTIME_TOKEN  bearer required by the proxy; empty disables the check (local dev)
 //   DSH_DATA_DIR   data dir holding bot/inflight.json, default $HOME/.dsh/alpha-desk
 import http from 'node:http'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -42,12 +44,25 @@ const send = (res, status, body, headers = {}) => {
   res.end(payload)
 }
 
+function bearerToken(header) {
+  if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null
+  const token = header.slice('Bearer '.length)
+  if (token === '' || /\s/.test(token)) return null
+  return token
+}
+
+function tokenEqual(presented, expected) {
+  const left = createHash('sha256').update(presented).digest()
+  const right = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(left, right)
+}
+
 function authorized(req) {
   if (TOKEN === '') return true
-  const header = req.headers.authorization ?? ''
-  if (header === `Bearer ${TOKEN}`) return true
-  // Browser navigation after pairing: the DSH cookie is host-scoped, so it still arrives.
-  return typeof req.headers.cookie === 'string' && req.headers.cookie !== ''
+  const header = req.headers.authorization
+  const presented = bearerToken(Array.isArray(header) ? header[0] : header)
+  if (presented === null) return false
+  return tokenEqual(presented, TOKEN)
 }
 
 /** Busy and last-activity from the signals DSH already writes on disk. */

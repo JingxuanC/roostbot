@@ -15,7 +15,8 @@
 
 import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
 import { spawn } from 'node:child_process'
-import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
 import { installProfilePlugin } from './profile-plugins.mjs'
@@ -210,6 +211,23 @@ function loadCursors(path) {
   }
 }
 
+function claimTurn(stateFile, roomId, seq, botId, memory) {
+  const key = `${roomId}\0${seq}\0${botId}`
+  if (memory.has(key)) return false
+  if (typeof stateFile === 'string' && stateFile !== '') {
+    const safe = `${roomId}-${seq}-${botId}`.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const path = `${stateFile}.claims/${safe}`
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, String(Date.now()), { flag: 'wx' })
+    } catch (error) {
+      if (error && error.code === 'EEXIST') return false
+    }
+  }
+  memory.add(key)
+  return true
+}
+
 function saveCursors(path, cursors) {
   if (path === undefined || path === '') return
   try {
@@ -275,6 +293,7 @@ export async function startRoomAgent(options) {
   const token = options.runtimeToken
   const headers = { 'content-type': 'application/json', 'x-runtime-token': token }
   const cursors = loadCursors(options.stateFile)
+  const claimedTurns = new Set()
   const assistant = new Map()
   const idleWaiters = new Map()
   const lastStatus = new Map()
@@ -798,6 +817,11 @@ export async function startRoomAgent(options) {
     for (const message of messages) {
       if (!Number.isSafeInteger(message?.seq)) continue
       if (message.actor?.kind !== 'user') {
+        cursors[room.id] = Math.max(cursors[room.id] ?? 0, message.seq)
+        saveCursors(options.stateFile, cursors)
+        continue
+      }
+      if (!claimTurn(options.stateFile, room.id, message.seq, botId, claimedTurns)) {
         cursors[room.id] = Math.max(cursors[room.id] ?? 0, message.seq)
         saveCursors(options.stateFile, cursors)
         continue

@@ -27,6 +27,7 @@ export function userSandboxPolicy(controlPlane) {
           binary: '/usr/local/bin/node',
           host: `${controlPlane.host}:${controlPlane.port}`,
           port: controlPlane.port,
+          transport: 'tcp',
           methods: []
         }
       ]
