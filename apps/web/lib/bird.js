@@ -318,3 +318,18 @@ export function birdSvg(id, options = {}) {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="${size}" height="${size}" role="img" aria-label="${esc(label)}" focusable="false"><g opacity="${pausedOpacity}" transform="rotate(${spec.tilt} 48 48)">${ring}<circle cx="48" cy="48" r="45" fill="${p.belly}" opacity="0.28"/>${tailMarkup(shape.tail, p)}<path d="${body}" fill="${p.body}"/><ellipse cx="48" cy="62" rx="${round(shape.bodyRx * 0.62)}" ry="${round(shape.bodyRy * 0.44 * (shape.belly ?? 1))}" fill="${p.belly}" opacity="0.85"/>${extrasMarkup(shape, p)}<ellipse cx="${48 - shape.bodyRx + 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><ellipse cx="${48 + shape.bodyRx - 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="${p.belly}" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>${crestMarkup(shape.crest, p)}${browMarkup(spec.brow, state, shape.eyeY, shape.mood)}${eyesMarkup(shape, state, p, shape.mood)}${beakMarkup(shape, p)}${marking}${state === 'paused' ? '' : accessoryMarkup(accessory, shape, p)}<path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg>`
 }
+
+/**
+ * 对话列表用的圆鸟：圆身、喙、两只眼、头顶一簇。
+ * 主 Bot 是白身；星标由外层徽章画，不画进 SVG，避免被裁掉。
+ */
+export function roundBirdSvg(id, options = {}) {
+  const size = Number.isFinite(options.size) && options.size > 0 ? Math.round(options.size) : 36
+  const primary = options.primary === true
+  const palette = BIRD_PALETTES[birdHash(id) % BIRD_PALETTES.length]
+  const body = primary ? '#ffffff' : palette.body
+  const tuft = primary ? '#e7e7ea' : palette.wing
+  const eye = primary ? '#1c1c1e' : '#ffffff'
+  const pupil = '#1c1c1e'
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path d="M30 18c1-9 8-8 7 1" fill="${tuft}"/><path d="M27 16c2-7 5-7 6 0" fill="${tuft}" opacity="0.85"/><circle cx="30" cy="36" r="20" fill="${body}"/><circle cx="24" cy="34" r="3.3" fill="${eye}"/><circle cx="36" cy="34" r="3.3" fill="${eye}"/><circle cx="25" cy="34.4" r="1.45" fill="${pupil}"/><circle cx="37" cy="34.4" r="1.45" fill="${pupil}"/><path d="M46 33.5l12 4.2-12 4.2z" fill="#E9A23B"/></svg>`
+}

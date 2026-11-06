@@ -3,7 +3,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { BIRD_ACCESSORIES, BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, accessoryForId, accessoryForRole, birdSpecFor, birdSvg } from '../lib/bird.js'
+import { BIRD_ACCESSORIES, BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, accessoryForId, accessoryForRole, birdSpecFor, birdSvg, roundBirdSvg } from '../lib/bird.js'
+
+test('圆鸟带喙、眼睛和额羽；主 Bot 是白身', () => {
+  const colored = roundBirdSvg('selector', { size: 48 })
+  const primary = roundBirdSvg('host', { primary: true, size: 48 })
+  assert.equal(colored, roundBirdSvg('selector', { size: 48 }))
+  assert.match(colored, /<circle cx="24"/)
+  assert.match(colored, /<circle cx="36"/)
+  assert.match(colored, /#E9A23B/)
+  assert.match(colored, /M30 18/)
+  assert.doesNotMatch(colored, /r="20" fill="#ffffff"/)
+  assert.match(primary, /r="20" fill="#ffffff"/)
+  assert.match(primary, /#E9A23B/)
+})
 
 test('同一个 id 永远得到同一只鸟（改名不影响形象的前提）', () => {
   const a = birdSpecFor('bot_01M6KMHFHMNJ4S8286D7VS8MEQ')

@@ -156,6 +156,7 @@
 
       <main id="room-main" class="main" tabindex="-1">
         <header class="room-head">
+          <a id="room-back" class="head-icon" href="#/home" aria-label="返回">‹</a>
           <button
             id="sidebar-toggle"
             class="btn btn-ghost sidebar-toggle"
@@ -168,6 +169,7 @@
             <span class="sr-only">打开菜单</span>
           </button>
           <div class="room-head-main">
+            <span id="room-pill-avatar" class="room-pill-avatar"></span>
             <div class="room-head-title">
               <span id="room-flock" class="room-flock" aria-hidden="true"></span>
               <h1 class="room-name" id="room-name">Roost</h1>
@@ -192,6 +194,17 @@
             >
               需要你
             </button>
+          </div>
+          <button id="room-more" class="head-icon" type="button" aria-label="更多" aria-expanded="false" aria-controls="room-menu">···</button>
+          <div id="room-menu" class="room-menu" hidden>
+            <a href="#/bots">Bot 与身份</a>
+            <a href="#/plugins">插件与面板</a>
+            <a href="#/usage">用量与预算</a>
+            <a href="#/schedules">定时任务</a>
+            <a href="#/routines">房间定时</a>
+            <a href="#/connectors">连接器</a>
+            <a href="#/approvals">审批</a>
+            <a href="#/settings">设置</a>
           </div>
         </header>
 

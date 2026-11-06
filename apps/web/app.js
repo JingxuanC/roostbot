@@ -406,7 +406,7 @@ function renderSidebarRooms() {
   const list = $('#room-list')
   if (!list) return
   list.replaceChildren()
-  if (!LIVE.active) {
+  if (!LIVE.active && !STORE.roomsLoaded) {
     const row = el('li', { class: 'room-row room-row-empty' })
     row.append(el('span', { class: 'muted', text: '登录后显示房间' }))
     list.append(row)
@@ -418,19 +418,10 @@ function renderSidebarRooms() {
     list.append(row)
     return
   }
-  for (const room of STORE.rooms) {
-    const current = room.id === LIVE.roomId
+  for (const entry of conversationEntries()) {
+    const current = entry.room !== null && entry.room.id === LIVE.roomId
     const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
-    const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
-    link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
-    const flock = roomFlock(room, 26)
-    if (flock) link.append(flock)
-    link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
-    const origin = roomOriginLabel(room)
-    if (origin !== '') {
-      link.append(el('span', { class: 'room-origin', text: origin, title: roomOriginTitle(room) }))
-    }
-    row.append(link)
+    row.append(renderChatRow(entry))
     list.append(row)
   }
 }
@@ -480,10 +471,8 @@ function renderRoomMessage(event) {
   const primary = LIVE.room && LIVE.room.hostBotId === event.actor.id
   const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 36))
-  const name = el('span', { class: 'msg-name', text: bot.name })
-  if (primary) name.append(document.createTextNode(' ★'))
-  head.append(name)
+  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 36, { round: true, primary }))
+  head.append(el('span', { class: 'msg-name', text: bot.name }))
   article.append(head)
   const bubble = el('div', { class: 'bubble bubble-bot' })
   if (typeof event.payload.text === 'string' && event.payload.text.trim() !== '') {
@@ -522,7 +511,8 @@ function appendRichParts(parent, event, fromUser) {
   }
 }
 
-function attachmentUrl(event, artifactId) {
+function attachmentUrl(event, artifactId, part) {
+  if (part && typeof part.url === 'string' && part.url !== '') return part.url
   const list = Array.isArray(event.payload.attachments) ? event.payload.attachments : []
   const found = list.find((item) => item && item.artifactId === artifactId)
   if (found && typeof found.url === 'string' && found.url !== '') return found.url
@@ -531,14 +521,15 @@ function attachmentUrl(event, artifactId) {
 }
 
 function renderImagePart(part, event) {
-  const src = attachmentUrl(event, part.artifactId)
+  const src = attachmentUrl(event, part.artifactId, part)
   const card = el('button', { class: 'image-card', type: 'button' })
   const img = el('img', { alt: part.name || '图片' })
   card.append(img)
   const title = part.name || '图片'
   const open = () => openImageViewer({ src: img.src || src, title, detail: part.artifactId || '' })
   card.addEventListener('click', open)
-  if (src && LIVE.token && src.startsWith('/api/')) {
+  const signed = typeof src === 'string' && src.includes('token=')
+  if (src && LIVE.token && src.startsWith('/api/') && !signed) {
     fetch(src, { headers: { authorization: `Bearer ${LIVE.token}` } })
       .then((response) => (response.ok ? response.blob() : Promise.reject(new Error('image'))))
       .then((blob) => {
@@ -1825,6 +1816,7 @@ function applyLiveRoomChrome(room) {
   ROOM.name = name
   const heading = $('#room-name')
   if (heading) heading.textContent = name
+  paintRoomPill(room)
   const flockHolder = $('#room-flock')
   if (flockHolder) {
     const flock = roomFlock(room, 40)
@@ -1890,6 +1882,120 @@ function enterPreviewRoom() {
   if (composer) composer.focus()
 }
 
+const roomPreviews = new Map()
+
+function conversationEntries() {
+  const used = new Set()
+  const entries = []
+  for (const bot of STORE.bots) {
+    const matches = STORE.rooms.filter((item) => item.hostBotId === bot.id || (item.members || []).some((member) => member.botId === bot.id))
+    const room = matches.sort((a, b) => ((b.members || []).length) - ((a.members || []).length))[0] || null
+    if (room) used.add(room.id)
+    const members = room && Array.isArray(room.members) ? room.members : []
+    entries.push({
+      bot,
+      room,
+      title: bot.name || 'Bot',
+      primary: room !== null && room.hostBotId === bot.id && members.length >= 2,
+    })
+  }
+  for (const room of STORE.rooms) {
+    if (used.has(room.id)) continue
+    const memberIds = (room.members || []).map((member) => member.botId).filter(Boolean)
+    if (memberIds.length > 0 && memberIds.every((id) => entries.some((entry) => entry.bot && entry.bot.id === id))) continue
+    const hostId = room.hostBotId || (room.members && room.members[0] && room.members[0].botId) || room.id
+    entries.push({ bot: { id: hostId, name: room.name || '房间' }, room, title: room.name || '房间', primary: true })
+  }
+  return entries
+}
+
+function messagePreviewText(message) {
+  if (!message) return '还没有消息'
+  const text = typeof message.text === 'string' ? message.text.trim() : ''
+  if (text !== '') return text
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  if (parts.some((part) => part && part.type === 'image')) return '图片'
+  if (parts.some((part) => part && part.type === 'choice')) return '请选择'
+  if (parts.some((part) => part && part.type === 'approval')) return '需要你确认'
+  return '还没有消息'
+}
+
+function formatShanghai(iso) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
+  const today = day.format(new Date())
+  const that = day.format(date)
+  if (that === today) return clock.format(date)
+  const yesterday = day.format(new Date(Date.now() - 24 * 60 * 60 * 1000))
+  if (that === yesterday) return '昨天'
+  return that.slice(5)
+}
+
+async function loadRoomPreview(roomId) {
+  if (roomPreviews.has(roomId)) return roomPreviews.get(roomId)
+  const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages?limit=1`)
+  const messages = Array.isArray(data?.messages) ? data.messages : []
+  const last = messages[messages.length - 1]
+  const preview = { text: messagePreviewText(last), at: last && last.at ? formatShanghai(last.at) : '' }
+  roomPreviews.set(roomId, preview)
+  return preview
+}
+
+function renderChatRow(entry) {
+  const href = entry.room ? `#/rooms/${encodeURIComponent(entry.room.id)}` : `#/bots/${encodeURIComponent(entry.bot.id)}`
+  const row = el('a', { class: 'home-row', href })
+  row.append(botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
+  const text = el('div', { class: 'home-copy' })
+  text.append(el('strong', { text: entry.title }))
+  const preview = el('span', { class: 'home-preview', text: entry.room ? '…' : '点开看看' })
+  text.append(preview)
+  row.append(text)
+  const time = el('time', { class: 'home-time', text: '' })
+  row.append(time)
+  if (entry.room) {
+    void loadRoomPreview(entry.room.id).then((item) => {
+      if (!preview.isConnected) return
+      preview.textContent = item.text
+      time.textContent = item.at
+    }).catch(() => {
+      if (preview.isConnected) preview.textContent = '点开看看'
+    })
+  }
+  return row
+}
+
+function paintRoomPill(room) {
+  const slot = $('#room-pill-avatar')
+  if (!slot) return
+  const hostId = room && (room.hostBotId || (room.members && room.members[0] && room.members[0].botId))
+  if (!hostId) {
+    slot.replaceChildren()
+    return
+  }
+  const stored = STORE.bots.find((bot) => bot.id === hostId)
+  const bot = stored || { id: hostId, name: room.name || 'Bot' }
+  slot.replaceChildren(botAvatar(bot, 28, { round: true, primary: room.hostBotId === hostId }))
+}
+
+function setupRoomMenu() {
+  const button = $('#room-more')
+  const menu = $('#room-menu')
+  if (!button || !menu) return
+  button.addEventListener('click', () => {
+    const open = menu.hidden
+    menu.hidden = !open
+    button.setAttribute('aria-expanded', open ? 'true' : 'false')
+  })
+  document.addEventListener('click', (event) => {
+    if (menu.hidden) return
+    if (button.contains(event.target) || menu.contains(event.target)) return
+    menu.hidden = true
+    button.setAttribute('aria-expanded', 'false')
+  })
+}
+
 async function openHome(seq) {
   resetRoomChrome()
   stopStream()
@@ -1914,22 +2020,13 @@ async function openHome(seq) {
   }
   if (seq !== routeSeq) return
   list.replaceChildren()
-  const bots = STORE.bots.length > 0 ? STORE.bots : []
-  if (bots.length === 0) {
+  const entries = conversationEntries()
+  if (entries.length === 0) {
     list.append(el('p', { class: 'muted', text: '还没有 Bot。' }))
+    renderSidebarRooms()
     return
   }
-  for (const bot of bots) {
-    const room = STORE.rooms.find((item) => item.hostBotId === bot.id || (item.members || []).some((member) => member.botId === bot.id))
-    const href = room ? `#/rooms/${encodeURIComponent(room.id)}` : `#/bots/${encodeURIComponent(bot.id)}`
-    const row = el('a', { class: 'home-row', href })
-    row.append(botAvatar({ id: bot.id, name: bot.name, role: bot.role }, 48))
-    const text = el('div')
-    text.append(el('strong', { text: bot.name || 'Bot' }))
-    text.append(el('span', { text: bot.role || (room && room.name) || '点开看看' }))
-    row.append(text)
-    list.append(row)
-  }
+  for (const entry of entries) list.append(renderChatRow(entry))
   renderSidebarRooms()
 }
 
@@ -1976,6 +2073,22 @@ async function openRoomRoute(id, seq) {
     events.sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0))
     ROOM.events = events
 
+    if (!STORE.roomsLoaded) {
+      try {
+        STORE.rooms = await ensureRoom()
+        STORE.roomsLoaded = true
+      } catch {
+        // 侧栏没有房间列表时，对话本身仍然打开。
+      }
+    }
+    if (!STORE.botsLoaded) {
+      try {
+        await loadBots()
+      } catch {
+        // 名字解析失败时侧栏用房间名。
+      }
+    }
+    if (seq !== routeSeq) return
     applyLiveRoomChrome(room)
     renderMessages()
     setComposerEnabled(true)
@@ -2991,6 +3104,7 @@ function boot() {
   setupSkipLinks()
   setupComposer()
   setupImageViewer()
+  setupRoomMenu()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
     void renderRoute().then(() => {
