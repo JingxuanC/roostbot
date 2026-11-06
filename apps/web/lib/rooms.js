@@ -11,6 +11,7 @@ const STATUS_LABELS = {
   working: '处理中',
   left: '已离开',
   'waiting-approval': '等审批',
+  needs_input: '在等你',
 }
 
 const STATUS_KINDS = {
@@ -23,6 +24,7 @@ const STATUS_KINDS = {
   missed: 'danger',
   left: 'info',
   'waiting-approval': 'warn',
+  needs_input: 'warn',
 }
 
 const ROUND_STATE_LABELS = {

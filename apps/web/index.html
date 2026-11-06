@@ -14,6 +14,7 @@
     />
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./styles-blue.css" />
+    <link rel="stylesheet" href="./styles-grok.css" />
   </head>
   <body>
     <div id="boot-warning" class="boot-warning" role="alert" hidden>
@@ -202,20 +203,24 @@
 
         <div id="messages" class="messages" role="log" aria-label="消息"></div>
 
-        <form id="composer-form" class="composer">
+        <form id="composer-form" class="composer grok-composer">
           <div id="mention-menu" class="mention-menu" role="listbox" aria-label="成员" hidden></div>
+          <div id="composer-files" class="composer-files" hidden></div>
           <label class="sr-only" for="composer">消息</label>
+          <button id="composer-plus" class="composer-icon" type="button" aria-label="添加图片">+</button>
+          <input id="composer-file" type="file" accept="image/*" hidden />
           <textarea
             id="composer"
             name="message"
             rows="1"
-            placeholder="说点什么…"
+            placeholder="向选股师提问"
             autocomplete="off"
             aria-expanded="false"
             aria-controls="mention-menu"
             aria-autocomplete="list"
             aria-haspopup="listbox"
-          ></textarea>
+            ></textarea>
+          <button id="composer-mic" class="composer-icon" type="button" aria-label="语音">🎤</button>
           <p id="composer-error" class="composer-error" role="alert" hidden></p>
           <div class="composer-foot">
             <p class="who-row">
@@ -253,6 +258,21 @@
         </div>
         <div class="needs-body" id="needs-body"></div>
       </aside>
+    </div>
+
+    <div id="image-viewer" class="image-viewer" hidden>
+      <header class="image-viewer-bar">
+        <button id="image-viewer-close" type="button" aria-label="关闭">×</button>
+        <h2 id="image-viewer-title">图片</h2>
+        <span></span>
+      </header>
+      <img id="image-viewer-img" alt="" />
+      <footer class="image-viewer-actions">
+        <button id="image-share" type="button">转发</button>
+        <button id="image-save" type="button">保存</button>
+        <button id="image-detail" type="button">详情</button>
+      </footer>
+      <p id="image-detail-text" class="image-detail" hidden></p>
     </div>
 
     <!-- ------------------------------------------------------------ 页面三至六：Bot 与房间设置 -->

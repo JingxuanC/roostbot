@@ -454,36 +454,188 @@ function attachmentContext() {
   return { live: LIVE.active, api, requirePair }
 }
 
-/** 用户气泡：主色、右对齐，绝不和 Bot 消息混淆（messaging.md §14）。 */
+/** 用户气泡：灰色胶囊，右对齐。 */
 function renderUserMessage(event) {
   const payload = event.payload
   const row = el('div', { class: 'msg msg-user' })
   const body = el('div', { class: 'msg-user-body' })
   body.append(el('span', { class: 'sr-only', text: '你：' }))
-  const bubble = el('div', { class: 'bubble bubble-user' })
-  bubble.append(markdownFragment(payload.text))
-  body.append(bubble)
-  const attachments = renderAttachmentList(payload.attachments, attachmentContext())
-  if (attachments) body.append(attachments)
+  if (typeof payload.text === 'string' && payload.text.trim() !== '') {
+    const bubble = el('div', { class: 'bubble bubble-user' })
+    bubble.append(markdownFragment(payload.text))
+    body.append(bubble)
+  }
+  appendRichParts(body, event, true)
+  if (!hasImagePart(payload)) {
+    const attachments = renderAttachmentList(payload.attachments, attachmentContext())
+    if (attachments) body.append(attachments)
+  }
   row.append(body)
   return row
 }
 
-/** 房间里的 Bot 消息：中性底，气泡上方「头像 名字 · 角色」，没有标签行。 */
+/** 房间里的 Bot 消息：圆头像 + 名字，正文不套气泡。 */
 function renderRoomMessage(event) {
   const bot = botIdentity(event.actor.id)
-  const article = el('article', { class: 'msg msg-bot' })
+  const primary = LIVE.room && LIVE.room.hostBotId === event.actor.id
+  const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 24))
-  head.append(el('span', { class: 'msg-name', text: bot.name }))
-  if (bot.role) head.append(el('span', { class: 'msg-role', text: bot.role }))
+  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 36))
+  const name = el('span', { class: 'msg-name', text: bot.name })
+  if (primary) name.append(document.createTextNode(' ★'))
+  head.append(name)
   article.append(head)
   const bubble = el('div', { class: 'bubble bubble-bot' })
-  bubble.append(markdownFragment(event.payload.text))
+  if (typeof event.payload.text === 'string' && event.payload.text.trim() !== '') {
+    bubble.append(markdownFragment(event.payload.text))
+  }
   article.append(bubble)
-  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
-  if (attachments) article.append(attachments)
+  appendRichParts(article, event, false)
+  if (!hasImagePart(event.payload)) {
+    const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+    if (attachments) article.append(attachments)
+  }
   return article
+}
+
+const CHOICE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+function hasImagePart(payload) {
+  return Array.isArray(payload?.parts) && payload.parts.some((part) => part && part.type === 'image')
+}
+
+function appendRichParts(parent, event, fromUser) {
+  const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    if (part.type === 'image' && !fromUser) parent.append(renderImagePart(part, event))
+    if (part.type === 'image' && fromUser) parent.append(renderImagePart(part, event))
+    if (part.type === 'choice' && !fromUser) parent.append(renderChoicePart(part))
+    if (part.type === 'approval' && !fromUser) parent.append(renderApprovalPart(part))
+    if (part.type === 'tool') {
+      parent.append(el('p', { class: 'muted', text: `工具 ${part.name || ''}${part.summary ? ' · ' + part.summary : ''}` }))
+    }
+  }
+  if (fromUser) {
+    const images = (event.payload.attachments || []).filter((item) => item && String(item.mime || item.kind || '').includes('image') || item.kind === 'image')
+    for (const item of images) parent.append(renderImagePart({ artifactId: item.artifactId, name: item.name }, event))
+  }
+}
+
+function attachmentUrl(event, artifactId) {
+  const list = Array.isArray(event.payload.attachments) ? event.payload.attachments : []
+  const found = list.find((item) => item && item.artifactId === artifactId)
+  if (found && typeof found.url === 'string' && found.url !== '') return found.url
+  if (event.seq) return `/api/messages/${encodeURIComponent(String(event.seq))}/files/${encodeURIComponent(artifactId)}`
+  return ''
+}
+
+function renderImagePart(part, event) {
+  const src = attachmentUrl(event, part.artifactId)
+  const card = el('button', { class: 'image-card', type: 'button' })
+  const img = el('img', { alt: part.name || '图片' })
+  card.append(img)
+  const title = part.name || '图片'
+  const open = () => openImageViewer({ src: img.src || src, title, detail: part.artifactId || '' })
+  card.addEventListener('click', open)
+  if (src && LIVE.token && src.startsWith('/api/')) {
+    fetch(src, { headers: { authorization: `Bearer ${LIVE.token}` } })
+      .then((response) => (response.ok ? response.blob() : Promise.reject(new Error('image'))))
+      .then((blob) => {
+        img.src = URL.createObjectURL(blob)
+      })
+      .catch(() => {
+        img.alt = '图片加载失败'
+      })
+  } else if (src) {
+    img.src = src
+  }
+  return card
+}
+
+function renderChoicePart(part) {
+  const card = el('div', { class: 'choice-card' })
+  card.append(el('p', { text: part.prompt || '' }))
+  const options = Array.isArray(part.options) ? part.options : []
+  options.forEach((option, index) => {
+    const selected = part.selectedOptionId && part.selectedOptionId === option.id
+    const button = el('button', {
+      type: 'button',
+      class: 'choice-option',
+      text: `${CHOICE_LETTERS[index] || String(index + 1)}. ${option.label || option.id}`,
+    })
+    if (selected || part.selectedOptionId) button.disabled = true
+    button.addEventListener('click', () => {
+      void answerChoice(part.cardId, option.id, button)
+    })
+    card.append(button)
+  })
+  return card
+}
+
+function renderApprovalPart(part) {
+  const resolved = part.status === 'approved' || part.status === 'rejected'
+  const card = el('div', { class: resolved ? 'approval-card is-resolved' : 'approval-card' })
+  card.append(el('p', { text: part.title || part.action || '需要你确认' }))
+  if (part.consequence) card.append(el('p', { class: 'muted', text: part.consequence }))
+  if (part.target) card.append(el('p', { class: 'muted', text: part.target }))
+  if (resolved) {
+    card.append(el('p', { text: part.status === 'approved' ? '已允许' : '已拒绝' }))
+    return card
+  }
+  const actions = el('div', { class: 'approval-actions' })
+  const deny = el('button', { type: 'button', text: '拒绝' })
+  const allow = el('button', { type: 'button', class: 'allow', text: '允许这一次' })
+  deny.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'rejected') })
+  allow.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'approved') })
+  actions.append(deny, allow)
+  card.append(actions)
+  return card
+}
+
+async function answerChoice(cardId, optionId, button) {
+  if (!LIVE.active || !LIVE.roomId || !cardId) return
+  button.disabled = true
+  try {
+    await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/cards/${encodeURIComponent(cardId)}/answer`, { optionId })
+    await refreshMessages()
+  } catch (error) {
+    button.disabled = false
+    showComposerError(error instanceof Error ? error.message : '没能提交选项')
+  }
+}
+
+async function decideApprovalCard(approvalId, decision) {
+  if (!approvalId) return
+  try {
+    await api.post(`/api/approvals/${encodeURIComponent(approvalId)}`, { decision })
+    await refreshMessages()
+  } catch (error) {
+    showComposerError(error instanceof Error ? error.message : '没能提交决定')
+  }
+}
+
+function openImageViewer(info) {
+  const viewer = $('#image-viewer')
+  const img = $('#image-viewer-img')
+  const title = $('#image-viewer-title')
+  const detail = $('#image-detail-text')
+  if (!viewer || !img) return
+  img.src = info.src
+  img.alt = info.title || '图片'
+  if (title) title.textContent = info.title || '图片'
+  if (detail) {
+    detail.hidden = true
+    detail.textContent = info.detail || ''
+  }
+  viewer.hidden = false
+  viewer.dataset.src = info.src
+  viewer.dataset.title = info.title || '图片'
+}
+
+function closeImageViewer() {
+  const viewer = $('#image-viewer')
+  if (viewer) viewer.hidden = true
 }
 
 /**
@@ -1433,6 +1585,8 @@ async function renderRoute() {
   const route = routeMatch(location.hash)
   // 离开房间页就断开 SSE 并清掉重连定时器，别在后台一直收消息/重连。
   if (route.name !== 'room') stopStream()
+  const roomView = $('#room-view')
+  if (roomView) roomView.classList.toggle('is-home', route.name === 'home')
 
   if (isAuthRouteName(route.name)) {
     await ensureAuthProbe()
@@ -1489,6 +1643,12 @@ async function renderRoute() {
     route.name === 'workspaceApprovals'
   ) {
     await openWorkspaceDeepLink(route, seq)
+    return
+  }
+  if (route.name === 'home') {
+    showView('room')
+    setTitle('Roost')
+    await openHome(seq)
     return
   }
   if (route.name === 'room') {
@@ -1595,6 +1755,7 @@ function toEvent(message, roomId) {
       framing: isUser ? 'user' : 'room',
       // 无附件时后端也会给 []；历史/翻页/补拉都走这里，形状保持一致。
       attachments: Array.isArray(message.attachments) ? message.attachments : [],
+      ...(Array.isArray(message.parts) ? { parts: message.parts } : {}),
     },
   }
 }
@@ -1727,6 +1888,49 @@ function enterPreviewRoom() {
   setComposerEnabled(true)
   const composer = $('#composer')
   if (composer) composer.focus()
+}
+
+async function openHome(seq) {
+  resetRoomChrome()
+  stopStream()
+  const list = $('#messages')
+  if (!list) return
+  list.replaceChildren(el('p', { class: 'muted', text: '正在载入…' }))
+  try {
+    if (!STORE.botsLoaded) {
+      const data = await api.get('/api/bots')
+      STORE.bots = Array.isArray(data?.bots) ? data.bots : []
+      STORE.botsLoaded = true
+    }
+    if (!STORE.roomsLoaded) {
+      STORE.rooms = await ensureRoom()
+      STORE.roomsLoaded = true
+    }
+  } catch (error) {
+    if (isAuthError(error)) {
+      requirePair()
+      return
+    }
+  }
+  if (seq !== routeSeq) return
+  list.replaceChildren()
+  const bots = STORE.bots.length > 0 ? STORE.bots : []
+  if (bots.length === 0) {
+    list.append(el('p', { class: 'muted', text: '还没有 Bot。' }))
+    return
+  }
+  for (const bot of bots) {
+    const room = STORE.rooms.find((item) => item.hostBotId === bot.id || (item.members || []).some((member) => member.botId === bot.id))
+    const href = room ? `#/rooms/${encodeURIComponent(room.id)}` : `#/bots/${encodeURIComponent(bot.id)}`
+    const row = el('a', { class: 'home-row', href })
+    row.append(botAvatar({ id: bot.id, name: bot.name, role: bot.role }, 48))
+    const text = el('div')
+    text.append(el('strong', { text: bot.name || 'Bot' }))
+    text.append(el('span', { text: bot.role || (room && room.name) || '点开看看' }))
+    row.append(text)
+    list.append(row)
+  }
+  renderSidebarRooms()
 }
 
 async function openRoomRoute(id, seq) {
@@ -2158,9 +2362,13 @@ function openStream() {
     }
   })
   stream.addEventListener('round', handleRoundEvent)
+  stream.addEventListener('round.started', handleRoundEvent)
+  stream.addEventListener('round.ended', handleRoundEvent)
   stream.addEventListener('status', handleRoundEvent)
   stream.addEventListener('speaking', handleSpeakingEvent)
   stream.addEventListener('message.delta', handleDeltaEvent)
+  stream.addEventListener('card.answered', () => { void refreshMessages() })
+  stream.addEventListener('approval.decided', () => { void refreshMessages() })
   stream.addEventListener('error', () => {
     if (stream !== LIVE.stream) return
     // 关掉浏览器自动重连：它会带着旧的 after 重放，可能漏掉断线期间的消息。
@@ -2303,7 +2511,7 @@ function setComposerEnabled(enabled, placeholder) {
   const send = $('#send')
   if (!input || !send) return
   input.disabled = !enabled
-  input.placeholder = placeholder || '说点什么…'
+  input.placeholder = placeholder || '发一条消息'
   if (!enabled) {
     send.disabled = true
     send.title = '房间还没载入'
@@ -2581,6 +2789,51 @@ function setupSkipLinks() {
   }
 }
 
+function setupImageViewer() {
+  const close = $('#image-viewer-close')
+  const share = $('#image-share')
+  const save = $('#image-save')
+  const detail = $('#image-detail')
+  if (close) close.addEventListener('click', closeImageViewer)
+  if (share) {
+    share.addEventListener('click', async () => {
+      const viewer = $('#image-viewer')
+      const url = viewer?.dataset.src || location.href
+      const title = viewer?.dataset.title || '图片'
+      if (navigator.share) {
+        try {
+          await navigator.share({ title, url })
+          return
+        } catch {
+          // 用户取消或浏览器拒绝时退回复制链接。
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(url)
+        share.textContent = '已复制'
+      } catch {
+        share.textContent = '无法分享'
+      }
+    })
+  }
+  if (save) {
+    save.addEventListener('click', () => {
+      const url = $('#image-viewer')?.dataset.src
+      if (!url) return
+      const link = document.createElement('a')
+      link.href = url
+      link.download = $('#image-viewer')?.dataset.title || 'image'
+      link.click()
+    })
+  }
+  if (detail) {
+    detail.addEventListener('click', () => {
+      const node = $('#image-detail-text')
+      if (node) node.hidden = !node.hidden
+    })
+  }
+}
+
 function setupComposer() {
   const form = $('#composer-form')
   const input = $('#composer')
@@ -2599,10 +2852,60 @@ function setupComposer() {
     }
   })
 
+  const plus = $('#composer-plus')
+  const file = $('#composer-file')
+  const mic = $('#composer-mic')
+  const pendingFiles = []
+  if (plus && file) {
+    plus.addEventListener('click', () => file.click())
+    file.addEventListener('change', async () => {
+      const chosen = file.files && file.files[0]
+      file.value = ''
+      if (!chosen || !LIVE.active || !LIVE.roomId) return
+      try {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/artifacts`, {
+          method: 'POST',
+          headers: {
+            authorization: LIVE.token ? `Bearer ${LIVE.token}` : '',
+            'content-type': chosen.type || 'application/octet-stream',
+            'x-artifact-name': chosen.name || 'image',
+          },
+          body: chosen,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload?.error?.message || '上传失败')
+        pendingFiles.push(payload.artifactId)
+        const chips = $('#composer-files')
+        if (chips) {
+          chips.hidden = false
+          chips.append(el('span', { text: chosen.name || '图片' }))
+        }
+      } catch (error) {
+        showComposerError(error instanceof Error ? error.message : '上传失败')
+      }
+    })
+  }
+  if (mic) {
+    mic.addEventListener('click', () => {
+      const Speech = window.SpeechRecognition || window.webkitSpeechRecognition
+      if (!Speech) {
+        showComposerError('这台浏览器没有语音输入')
+        return
+      }
+      const recognition = new Speech()
+      recognition.lang = 'zh-CN'
+      recognition.onresult = (event) => {
+        const said = event.results?.[0]?.[0]?.transcript
+        if (typeof said === 'string' && said !== '') input.value = `${input.value} ${said}`.trim()
+      }
+      recognition.start()
+    })
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     const text = input.value.trim()
-    if (!text || input.disabled) return
+    if ((!text && pendingFiles.length === 0) || input.disabled) return
     clearComposerError()
 
     if (LIVE.active && LIVE.roomId) {
@@ -2613,8 +2916,14 @@ function setupComposer() {
       try {
         const posted = await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
           text,
+          ...(pendingFiles.length > 0 ? { artifactIds: pendingFiles.splice(0, pendingFiles.length) } : {}),
           idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         })
+        const chips = $('#composer-files')
+        if (chips) {
+          chips.replaceChildren()
+          chips.hidden = true
+        }
         if (posted && posted.message) appendLiveEvent(posted.message)
         else await refreshMessages()
         LIVE.pendingReply = true
@@ -2681,6 +2990,7 @@ function boot() {
   setupSidebarDrawer()
   setupSkipLinks()
   setupComposer()
+  setupImageViewer()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
     void renderRoute().then(() => {
