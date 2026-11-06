@@ -2658,6 +2658,22 @@ function handleVisibilityChange() {
   void refreshMessages()
 }
 
+let runtimeStart = null
+/** 进入 workspace 时确保远端沙箱启动；失败不阻塞进入房间。 */
+async function ensureRuntimeStarted() {
+  if (runtimeStart !== null) return runtimeStart
+  runtimeStart = (async () => {
+    try {
+      const workspaceId = await ensureWorkspaceId()
+      await api.post(`/api/workspaces/${encodeURIComponent(workspaceId)}/start`, {})
+      return true
+    } catch {
+      return false
+    }
+  })()
+  return runtimeStart
+}
+
 /** 配对成功后进入：有房间去房间，没房间先去建 Bot。 */
 async function enterLiveRoom(token) {
   if (typeof token === 'string' && token !== '') {
