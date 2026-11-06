@@ -134,6 +134,15 @@ import {
   handleRunScheduleNow,
   handleStopRun,
 } from './schedules-routes.ts'
+import {
+  handleCreateRoutine,
+  handleDeleteRoutine,
+  handleInternalRoutineResult,
+  handleListRoutineRuns,
+  handleListRoutines,
+  handlePatchRoutine,
+  handleRunRoutineNow,
+} from './routines-routes.ts'
 import { startSchedulerLoop } from './scheduler-loop.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
@@ -257,6 +266,8 @@ export interface ServerOptions {
    * 写路径会立刻唤醒，这只是漏报兜底。默认 15s；测试里调小。
    */
   streamPollMs?: number
+  /** 房间 routine 的隔离执行器。不传时到点只入队，等沙箱交卷。 */
+  routineRunner?: import('./routine-worker.ts').RoutineRunner
   /**
    * 内部接口的 runtime token（`ROOST_RUNTIME_TOKEN`）。不给 = 内部接口关闭（404）。
    * 只有同机的 runtime worker 持有它，不走用户会话。
@@ -359,6 +370,7 @@ interface HandlerContext extends AuthContext {
   metrics: MetricsRegistry
   /** 每个 server 实例独立的内存令牌桶。 */
   rateLimiter: RateLimiter
+  routineRunner?: import('./routine-worker.ts').RoutineRunner
   /** 调度循环是否实际启用（memory port 下不启动）。 */
   schedulerEnabled: boolean
   /** 结构化请求日志出口。 */
@@ -1262,6 +1274,7 @@ function messageJson(
     actor: { kind: message.actorKind, id: message.actorId },
     text: message.text,
     ...(message.parts === undefined ? {} : { parts: message.parts }),
+    ...(message.routine === undefined ? {} : { routine: message.routine }),
     // 无附件时也返回 []，前端形状稳定。
     attachments: attachments.map((item) => ({
       artifactId: item.artifactId,
@@ -1776,7 +1789,17 @@ function messageRecordFromEvent(event: Event): RoomMessageRecord {
   const actorKind =
     kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
   const text = typeof event.payload.text === 'string' ? event.payload.text : ''
-  return { seq: event.seq, at: event.at, actorKind, actorId: event.actor?.id ?? 'unknown', text }
+  const routine = event.payload.routine
+  return {
+    seq: event.seq,
+    at: event.at,
+    actorKind,
+    actorId: event.actor?.id ?? 'unknown',
+    text,
+    ...(routine !== undefined && routine !== null && typeof routine === 'object'
+      ? { routine: routine as RoomMessageRecord['routine'] }
+      : {}),
+  }
 }
 
 /**
@@ -2900,6 +2923,77 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  const routinesCollection = /^\/api\/workspaces\/([^/]+)\/routines$/.exec(path)
+  if (routinesCollection !== null) {
+    const workspaceId = decodeSegment(routinesCollection[1]!)
+    if (workspaceId === null) {
+      sendError(res, 404, 'not_found', 'malformed workspace path')
+      return
+    }
+    if (method === 'GET') {
+      await handleListRoutines(ctx, req, res, workspaceId)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateRoutine(ctx, req, res, workspaceId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  const routineRunsPath = /^\/api\/routines\/([^/]+)\/runs$/.exec(path)
+  if (routineRunsPath !== null) {
+    const routineId = decodeSegment(routineRunsPath[1]!)
+    if (routineId === null) return sendError(res, 404, 'not_found', 'malformed routine path')
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListRoutineRuns(ctx, req, res, routineId)
+    return
+  }
+
+  const routineRunNow = /^\/api\/routines\/([^/]+)\/run$/.exec(path)
+  if (routineRunNow !== null) {
+    const routineId = decodeSegment(routineRunNow[1]!)
+    if (routineId === null) return sendError(res, 404, 'not_found', 'malformed routine path')
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleRunRoutineNow(ctx, req, res, routineId)
+    return
+  }
+
+  const routinePath = /^\/api\/routines\/([^/]+)$/.exec(path)
+  if (routinePath !== null) {
+    const routineId = decodeSegment(routinePath[1]!)
+    if (routineId === null) return sendError(res, 404, 'not_found', 'malformed routine path')
+    if (method === 'PATCH') {
+      await handlePatchRoutine(ctx, req, res, routineId)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteRoutine(ctx, req, res, routineId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  const routineResult = /^\/api\/internal\/routine-runs\/([^/]+)\/result$/.exec(path)
+  if (routineResult !== null) {
+    const runId = decodeSegment(routineResult[1]!)
+    if (runId === null) return sendError(res, 404, 'not_found', 'malformed routine run path')
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalRoutineResult(ctx, req, res, runId)
+    return
+  }
+
   // 控制面调度：schedule CRUD、立即触发、run 查询/停止与内部 tick（scheduling.md §4–§10）。
   const schedulesCollection = /^\/api\/workspaces\/([^/]+)\/schedules$/.exec(path)
   if (schedulesCollection !== null) {
@@ -3479,6 +3573,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     serverState: state,
     metrics: createMetrics(),
     rateLimiter: new TokenBucketLimiter(),
+    ...(options.routineRunner === undefined ? {} : { routineRunner: options.routineRunner }),
     schedulerEnabled,
     logSink: options.logSink ?? writeHttpLog,
     connectorBackend: options.connectorBackend ?? createGatewayBackend(process.env),
@@ -3717,6 +3812,7 @@ export async function startServer(
       ? startSchedulerLoop({
           rawStore: options.rawStore,
           ...(options.now === undefined ? {} : { now: options.now }),
+          ...(options.routineRunner === undefined ? {} : { routineRunner: options.routineRunner }),
         })
       : null
 

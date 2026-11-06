@@ -112,10 +112,19 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
       text,
       role: actor.kind === 'user' ? 'user' : 'bot',
       ...(parts.length === 0 ? {} : { parts }),
+      ...(req.routine === undefined ? {} : { routine: req.routine }),
     },
   })
 
-  return { seq: event.seq, at: event.at, actor, roomId, text, ...(parts.length === 0 ? {} : { parts }) }
+  return {
+    seq: event.seq,
+    at: event.at,
+    actor,
+    roomId,
+    text,
+    ...(parts.length === 0 ? {} : { parts }),
+    ...(req.routine === undefined ? {} : { routine: req.routine }),
+  }
 }
 
 /** 读房间消息，按 seq 升序；afterSeq 用于增量补拉（SSE 断线重连）。 */
@@ -244,6 +253,7 @@ function messageFromPayload(
   payload: Record<string, unknown>,
 ): RoomMessage {
   const parts = Array.isArray(payload.parts) ? (payload.parts as MessagePart[]) : undefined
+  const routine = payload.routine
   return {
     seq,
     at,
@@ -251,6 +261,7 @@ function messageFromPayload(
     roomId,
     text: typeof payload.text === 'string' ? payload.text : '',
     ...(parts === undefined || parts.length === 0 ? {} : { parts }),
+    ...(routine !== undefined && routine !== null && typeof routine === 'object' ? { routine: routine as RoomMessage['routine'] } : {}),
   }
 }
 

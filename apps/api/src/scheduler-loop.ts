@@ -5,7 +5,10 @@
 
 import { TICK_ROUTINE_MS } from '../../../packages/scheduler/src/index.ts'
 import { tick } from '../../../packages/store/src/schedules.ts'
+import { claimDueRoutines } from '../../../packages/store/src/routines.ts'
 import { repairPass } from './scheduler-activation.ts'
+import { executeRoutineRun } from './routine-worker.ts'
+import type { RoutineRunner } from './routine-worker.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 
 export interface SchedulerLoopOptions {
@@ -16,6 +19,8 @@ export interface SchedulerLoopOptions {
   intervalMs?: number
   /** tick 失败时的回调；默认写 console.error。 */
   onError?: (err: unknown) => void
+  /** 房间 routine 的隔离执行器。省略时只入队，不发言。 */
+  routineRunner?: RoutineRunner
 }
 
 /** 启动循环，返回 stop()；重复调用 stop 是幂等的。 */
@@ -35,6 +40,12 @@ export function startSchedulerLoop(options: SchedulerLoopOptions): () => void {
       // repair 先于 clock：中断的 routine 先补一次，再让 tick 建新的 clock 激活。
       repairPass(options.rawStore, now())
       tick(options.rawStore, { now: now() })
+      const claimed = claimDueRoutines(options.rawStore, now())
+      if (options.routineRunner !== undefined) {
+        for (const run of claimed) {
+          void executeRoutineRun(options.rawStore, run, options.routineRunner, now()).catch(onError)
+        }
+      }
     } catch (err) {
       onError(err)
     }

@@ -14,6 +14,7 @@
 // 通知是 session.event 与 session.status。
 
 import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
+import { decideRoutineAttempt, isolatedRoutinePrompt, ROUTINE_MAX_ATTEMPTS } from './routine-turn.mjs'
 import { spawn } from 'node:child_process'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 
@@ -871,6 +872,61 @@ export async function startRoomAgent(options) {
    * workspace 级长轮询。返回 null 表示这条路由不可用，调用方退回 pollRoom。
    * immediateEmpty：请求几乎立刻返回且没有事件（假控制面或空库），外层仍按 pollMs 睡。
    */
+  const routineDone = new Set()
+
+  async function postRoutineResult(runId, decision) {
+    const response = await request(`/api/internal/routine-runs/${encodeURIComponent(runId)}/result`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text: typeof decision.text === 'string' ? decision.text : '',
+        ...(decision.error === true ? { error: true } : {})
+      })
+    })
+    const body = await response.text().catch(() => '')
+    if (response.status === 404 || response.status === 405 || response.status === 501) return
+    if (!response.ok) {
+      throw new ControlPlaneError(
+        `/api/internal/routine-runs/${runId}/result ${response.status}${body === '' ? '' : `: ${body.slice(0, 200)}`}`,
+        { status: response.status, body }
+      )
+    }
+  }
+
+  /** 隔离跑：新 session，prompt 里没有房间历史。失败按次数重试，只交卷一次。 */
+  async function runRoutine(event) {
+    const payload = event?.payload ?? {}
+    const runId = typeof payload.runId === 'string' ? payload.runId : ''
+    const target = typeof payload.botId === 'string' ? payload.botId : ''
+    if (runId === '' || target !== botId || routineDone.has(runId)) return
+    const prompt = isolatedRoutinePrompt(payload.prompt)
+    let decision = { action: 'silent', text: '', error: false }
+    if (prompt === '') {
+      decision = { action: 'silent', text: '', error: false }
+    } else {
+      for (let attempt = 1; attempt <= ROUTINE_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          const turn = await runTurn(`routine-${runId}-${attempt}`, prompt)
+          decision = decideRoutineAttempt({
+            attempt,
+            maxAttempts: ROUTINE_MAX_ATTEMPTS,
+            answer: turn?.answer,
+            timedOut: turn?.timedOut === true
+          })
+        } catch (error) {
+          decision = decideRoutineAttempt({
+            attempt,
+            maxAttempts: ROUTINE_MAX_ATTEMPTS,
+            error: errorMessage(error)
+          })
+        }
+        if (decision.action !== 'retry') break
+      }
+    }
+    if (decision.action === 'retry') return
+    await postRoutineResult(runId, decision.action === 'post' ? decision : { text: '', error: false })
+    routineDone.add(runId)
+  }
+
   async function pollViaEvents(rooms) {
     if (!eventsApi) return null
     const after = eventsCursor()
@@ -908,6 +964,9 @@ export async function startRoomAgent(options) {
     for (const event of events) {
       const room = roomById.get(event?.roomId)
       const message = event?.message
+      if (event?.kind === 'schedule.routine.fired') {
+        await runRoutine(event)
+      }
       if (event?.kind === 'chat.message' && room && message?.actor?.kind === 'user' && Number.isSafeInteger(message.seq)) {
         const seen = cursors[room.id] ?? 0
         if (message.seq > seen) {

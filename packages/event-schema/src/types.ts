@@ -48,6 +48,7 @@ export const EVENT_KINDS_BY_DOMAIN = {
     'schedule.run.started',
     'schedule.run.settled',
     'schedule.run.missed',
+    'schedule.routine.fired',
   ],
   sandbox: ['sandbox.ready', 'sandbox.denied', 'sandbox.frozen', 'sandbox.stopped'],
   memory: ['memory.written', 'memory.superseded', 'memory.deleted'],
