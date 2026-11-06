@@ -194,12 +194,13 @@ export async function handleInternalRoutineResult(ctx: RoutineRouteContext, req:
   const parsed = await readJsonBody(req)
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   const text = isPlainObject(parsed.value) && typeof parsed.value.text === 'string' ? parsed.value.text : ''
+  const error = isPlainObject(parsed.value) && parsed.value.error === true
   const existing = getRoutineRun(store, runId)
   if (existing === null) return sendError(res, 404, 'not_found', `unknown routine run ${runId}`)
   const routine = getRoutine(store, existing.routineId)
   if (routine !== null && auth.workspaceId !== null && auth.workspaceId !== routine.workspaceId) {
     return sendError(res, 403, 'forbidden', 'routine is in another workspace')
   }
-  const run = finishRoutineRun(store, runId, text, ctx.now())
+  const run = finishRoutineRun(store, runId, text, ctx.now(), { error })
   sendJson(res, 200, { run: runJson(run) })
 }

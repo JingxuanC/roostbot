@@ -1274,6 +1274,7 @@ function messageJson(
     actor: { kind: message.actorKind, id: message.actorId },
     text: message.text,
     ...(message.parts === undefined ? {} : { parts: message.parts }),
+    ...(message.routine === undefined ? {} : { routine: message.routine }),
     // 无附件时也返回 []，前端形状稳定。
     attachments: attachments.map((item) => ({
       artifactId: item.artifactId,
@@ -1788,7 +1789,17 @@ function messageRecordFromEvent(event: Event): RoomMessageRecord {
   const actorKind =
     kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
   const text = typeof event.payload.text === 'string' ? event.payload.text : ''
-  return { seq: event.seq, at: event.at, actorKind, actorId: event.actor?.id ?? 'unknown', text }
+  const routine = event.payload.routine
+  return {
+    seq: event.seq,
+    at: event.at,
+    actorKind,
+    actorId: event.actor?.id ?? 'unknown',
+    text,
+    ...(routine !== undefined && routine !== null && typeof routine === 'object'
+      ? { routine: routine as RoomMessageRecord['routine'] }
+      : {}),
+  }
 }
 
 /**

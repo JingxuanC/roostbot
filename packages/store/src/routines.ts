@@ -321,7 +321,13 @@ export function enqueueRoutineNow(store: Store, routineId: string, now = Date.no
  * 隔离执行的收尾：只根据 runner 给出的文本决定发不发。
  * 空文本 = silent，房间里不出现新气泡。重复调用对终态幂等。
  */
-export function finishRoutineRun(store: Store, runId: string, text: string | null, now = Date.now()): RoutineRun {
+export function finishRoutineRun(
+  store: Store,
+  runId: string,
+  text: string | null,
+  now = Date.now(),
+  options: { error?: boolean } = {},
+): RoutineRun {
   assertOpen(store)
   const run = getRoutineRun(store, runId)
   if (run === null) throw new StoreError('INVALID_INPUT', `unknown routine run ${runId}`)
@@ -335,18 +341,26 @@ export function finishRoutineRun(store: Store, runId: string, text: string | nul
       .run(now, run.id)
     return getRoutineRun(store, run.id)!
   }
+  const failed = options.error === true
   try {
     const message = sendMessage(store, {
       roomId: routine.roomId,
       text: trimmed.slice(0, 8000),
       actor: { kind: 'bot', id: routine.botId },
       idem: `routine-run:${run.id}`,
+      routine: {
+        routineId: routine.id,
+        runId: run.id,
+        scheduledFor: new Date(run.scheduledFor).toISOString(),
+        timezone: routine.timezone || 'Asia/Shanghai',
+        ...(failed ? { error: true } : {}),
+      },
     })
     store.db
       .prepare(
-        `UPDATE routine_runs SET status = 'posted', result_text = ?, message_seq = ?, finished_at = ? WHERE id = ? AND status = 'queued'`,
+        `UPDATE routine_runs SET status = ?, result_text = ?, message_seq = ?, finished_at = ? WHERE id = ? AND status = 'queued'`,
       )
-      .run(trimmed.slice(0, 8000), message.seq, now, run.id)
+      .run(failed ? 'failed' : 'posted', trimmed.slice(0, 8000), message.seq, now, run.id)
   } catch (error) {
     store.db
       .prepare(`UPDATE routine_runs SET status = 'failed', result_text = ?, finished_at = ? WHERE id = ? AND status = 'queued'`)

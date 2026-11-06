@@ -209,6 +209,14 @@ export interface RoomMessage {
   text: string
   /** 缺省表示纯文本，和旧消息一样。 */
   parts?: MessagePart[]
+  /** routine 写回房间时带上，普通消息没有。 */
+  routine?: {
+    routineId: string
+    runId: string
+    scheduledFor: string
+    timezone: string
+    error?: boolean
+  }
 }
 
 export interface SendMessageInput {
@@ -218,4 +226,5 @@ export interface SendMessageInput {
   idem?: string
   at?: number
   parts?: MessagePart[]
+  routine?: RoomMessage['routine']
 }

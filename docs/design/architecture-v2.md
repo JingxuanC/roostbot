@@ -322,7 +322,7 @@ sequenceDiagram
   Note over Room: 用户回复这条结果<br/>就是普通房间消息，开普通轮次
 ```
 
-隔离的意思：worker 的输入结构里没有 `messages[]`。测试可以换一个 runner；没有模型密钥时 run 停在 `queued`，等沙箱 `POST /api/internal/routine-runs/:id/result` 交卷。交白卷（空文本）是 silent，不是失败。
+隔离的意思：worker 的输入结构里没有 `messages[]`。沙箱里的 room-agent 用一个新的 DSH 会话跑这条 prompt（工具策略与平时相同，房间历史不带上），再 `POST /api/internal/routine-runs/:id/result`。交白卷（空文本）是 silent。缺密钥、模型错误、超时会在房间里留下一条看得见的失败，最多试 3 次，幂等键是 run id。配置见 [routines.md](routines.md)。
 
 ## 9. 迁移与阶段
 

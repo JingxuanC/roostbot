@@ -150,6 +150,13 @@ export interface RoomMessageRecord {
   text: string
   /** 纯文本消息没有这个字段。 */
   parts?: Array<{ type: string; [key: string]: unknown }>
+  routine?: {
+    routineId: string
+    runId: string
+    scheduledFor: string
+    timezone: string
+    error?: boolean
+  }
 }
 
 export interface ListRoomsInput {

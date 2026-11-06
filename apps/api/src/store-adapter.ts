@@ -549,6 +549,7 @@ function toMessageRecord(message: {
   roomId: string
   text: string
   parts?: RoomMessageRecord['parts']
+  routine?: RoomMessageRecord['routine']
 }): RoomMessageRecord {
   return {
     seq: message.seq,
@@ -557,6 +558,7 @@ function toMessageRecord(message: {
     actorId: message.actor.id,
     text: message.text,
     ...(message.parts === undefined || message.parts.length === 0 ? {} : { parts: message.parts }),
+    ...(message.routine === undefined ? {} : { routine: message.routine }),
   }
 }
 
