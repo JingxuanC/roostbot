@@ -64,6 +64,7 @@ test('用量页有独立路由，且不带参数', () => {
 })
 
 test('定时任务页有独立路由，且不带参数', () => {
+  assert.equal(routeMatch('#/home').name, 'home')
   assert.equal(routeMatch('#/routines').name, 'routines')
   assert.equal(routeMatch('#/schedules').name, 'schedules')
   assert.deepEqual(routeMatch('#/schedules').params, {})

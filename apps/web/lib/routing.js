@@ -51,6 +51,7 @@ const ROUTES = new Set([
   'usage',
   'schedules',
   'routines',
+  'home',
   'connectors',
   'workspaceRoom',
   'workspaceBot',
@@ -114,6 +115,7 @@ export function routeMatch(hash) {
   // 定时任务：固定一层，不带参数。
   if (path === '/schedules') return route('schedules')
   if (path === '/routines') return route('routines')
+  if (path === '/home') return route('home')
   // 连接器：固定一层，不带参数。
   if (path === '/connectors') return route('connectors')
   // 插件面板（ADR 0004）：固定一层，不带参数；面板路径由页面内清单决定。

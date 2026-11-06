@@ -14,6 +14,7 @@
     />
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./styles-blue.css" />
+    <link rel="stylesheet" href="./styles-grok.css" />
   </head>
   <body>
     <div id="boot-warning" class="boot-warning" role="alert" hidden>
@@ -115,7 +116,14 @@
         <div class="brand">
           <span class="brand-name">Roost</span>
           <span class="brand-tag">M4</span>
+          <a class="head-icon" href="#/rooms/new" aria-label="新建">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </a>
         </div>
+        <label class="side-search">
+          <span class="sr-only">搜索</span>
+          <input id="side-search" type="search" placeholder="搜索机器人 / 房间" autocomplete="off" />
+        </label>
 
         <button
           id="needs-btn"
@@ -155,6 +163,9 @@
 
       <main id="room-main" class="main" tabindex="-1">
         <header class="room-head">
+          <a id="room-back" class="head-icon room-back" href="#/home" aria-label="返回">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M11 4L6 9l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
           <button
             id="sidebar-toggle"
             class="btn btn-ghost sidebar-toggle"
@@ -167,9 +178,11 @@
             <span class="sr-only">打开菜单</span>
           </button>
           <div class="room-head-main">
+            <span id="room-pill-avatar" class="room-pill-avatar"></span>
             <div class="room-head-title">
               <span id="room-flock" class="room-flock" aria-hidden="true"></span>
               <h1 class="room-name" id="room-name">Roost</h1>
+              <span id="room-subtitle" class="room-subtitle"></span>
             </div>
             <span id="room-origin" class="room-origin" hidden></span>
             <a id="room-settings-link" class="room-settings-link" href="#" hidden>设置</a>
@@ -192,30 +205,63 @@
               需要你
             </button>
           </div>
+          <button id="room-more" class="head-icon" type="button" aria-label="更多" aria-expanded="false" aria-controls="room-menu">
+            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="4" cy="9" r="1.5" fill="currentColor"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><circle cx="14" cy="9" r="1.5" fill="currentColor"/></svg>
+          </button>
         </header>
+        <div id="room-menu" class="room-menu" hidden>
+          <a href="#/bots">Bot 与身份</a>
+          <a href="#/plugins">插件与面板</a>
+          <a href="#/usage">用量与预算</a>
+          <a href="#/schedules">定时任务</a>
+          <a href="#/routines">房间定时</a>
+          <a href="#/connectors">连接器</a>
+          <a href="#/approvals">审批</a>
+          <a href="#/settings">设置</a>
+        </div>
 
         <p class="demo-strip" role="note" id="demo-strip-text" hidden>
           假数据预览：房间内容为固定样例，发送不会请求服务端。
         </p>
 
+        <div class="home-head">
+          <span class="avatar-user" aria-hidden="true"></span>
+          <a class="head-icon" href="#/rooms/new" aria-label="新建">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M9 3v12M3 9h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </a>
+        </div>
+
         <div id="round-status" class="round-status" role="status" aria-label="本轮状态" hidden></div>
 
         <div id="messages" class="messages" role="log" aria-label="消息"></div>
 
-        <form id="composer-form" class="composer">
+        <form id="composer-form" class="composer grok-composer">
           <div id="mention-menu" class="mention-menu" role="listbox" aria-label="成员" hidden></div>
+          <div id="composer-files" class="composer-files" hidden></div>
+          <button id="composer-plus" class="composer-plus" type="button" aria-label="添加图片">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+          <input id="composer-file" type="file" accept="image/*" hidden />
+          <div class="composer-pill">
           <label class="sr-only" for="composer">消息</label>
           <textarea
             id="composer"
             name="message"
             rows="1"
-            placeholder="说点什么…"
+            placeholder="向选股师提问"
             autocomplete="off"
             aria-expanded="false"
             aria-controls="mention-menu"
             aria-autocomplete="list"
             aria-haspopup="listbox"
-          ></textarea>
+            ></textarea>
+          <button id="composer-mic" class="mic-btn" type="button" aria-label="语音">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="6" y="2" width="4" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          </div>
+          <button id="send" class="voice-btn" type="submit" title="发送" aria-label="发送" aria-keyshortcuts="Meta+Enter Control+Enter" disabled>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M8 3L4 7M8 3l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
           <p id="composer-error" class="composer-error" role="alert" hidden></p>
           <div class="composer-foot">
             <p class="who-row">
@@ -224,18 +270,18 @@
             </p>
             <div class="composer-row">
               <span class="composer-hint muted">Enter 换行</span>
-              <button
-                id="send"
-                class="btn btn-primary"
-                type="submit"
-                title="⌘↵ / Ctrl+↵ 发送"
-                aria-keyshortcuts="Meta+Enter Control+Enter"
-              >
-                <kbd aria-hidden="true">⌘↵</kbd> 发送
-              </button>
             </div>
           </div>
         </form>
+        <div class="home-dock">
+          <button id="home-grid" class="dock-grid" type="button" aria-label="工作区" aria-controls="room-menu">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="1" y="11" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="11" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+          <label class="search-pill">
+            <span class="sr-only">搜索</span>
+            <input id="home-search" type="search" placeholder="搜索" autocomplete="off" />
+          </label>
+        </div>
       </main>
 
       <aside
@@ -253,6 +299,21 @@
         </div>
         <div class="needs-body" id="needs-body"></div>
       </aside>
+    </div>
+
+    <div id="image-viewer" class="image-viewer" hidden>
+      <header class="image-viewer-bar">
+        <button id="image-viewer-close" type="button" aria-label="关闭">×</button>
+        <h2 id="image-viewer-title">图片</h2>
+        <span></span>
+      </header>
+      <img id="image-viewer-img" alt="" />
+      <footer class="image-viewer-actions">
+        <button id="image-share" type="button"><span aria-hidden="true">↗</span>转发</button>
+        <button id="image-save" type="button"><span aria-hidden="true">↓</span>保存</button>
+        <button id="image-detail" type="button"><span aria-hidden="true">i</span>详情</button>
+      </footer>
+      <p id="image-detail-text" class="image-detail" hidden></p>
     </div>
 
     <!-- ------------------------------------------------------------ 页面三至六：Bot 与房间设置 -->

@@ -406,7 +406,7 @@ function renderSidebarRooms() {
   const list = $('#room-list')
   if (!list) return
   list.replaceChildren()
-  if (!LIVE.active) {
+  if (!LIVE.active && !STORE.roomsLoaded) {
     const row = el('li', { class: 'room-row room-row-empty' })
     row.append(el('span', { class: 'muted', text: '登录后显示房间' }))
     list.append(row)
@@ -418,19 +418,10 @@ function renderSidebarRooms() {
     list.append(row)
     return
   }
-  for (const room of STORE.rooms) {
-    const current = room.id === LIVE.roomId
+  for (const entry of conversationEntries()) {
+    const current = entry.room !== null && entry.room.id === LIVE.roomId
     const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
-    const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
-    link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
-    const flock = roomFlock(room, 26)
-    if (flock) link.append(flock)
-    link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
-    const origin = roomOriginLabel(room)
-    if (origin !== '') {
-      link.append(el('span', { class: 'room-origin', text: origin, title: roomOriginTitle(room) }))
-    }
-    row.append(link)
+    row.append(renderChatRow(entry))
     list.append(row)
   }
 }
@@ -454,36 +445,234 @@ function attachmentContext() {
   return { live: LIVE.active, api, requirePair }
 }
 
-/** 用户气泡：主色、右对齐，绝不和 Bot 消息混淆（messaging.md §14）。 */
+/** 用户气泡：灰色胶囊，右对齐。 */
 function renderUserMessage(event) {
   const payload = event.payload
   const row = el('div', { class: 'msg msg-user' })
   const body = el('div', { class: 'msg-user-body' })
   body.append(el('span', { class: 'sr-only', text: '你：' }))
-  const bubble = el('div', { class: 'bubble bubble-user' })
-  bubble.append(markdownFragment(payload.text))
-  body.append(bubble)
-  const attachments = renderAttachmentList(payload.attachments, attachmentContext())
-  if (attachments) body.append(attachments)
+  if (typeof payload.text === 'string' && payload.text.trim() !== '') {
+    const bubble = el('div', { class: 'bubble bubble-user' })
+    bubble.append(markdownFragment(payload.text))
+    body.append(bubble)
+  }
+  appendRichParts(body, event, true)
+  if (!hasImagePart(payload)) {
+    const attachments = renderAttachmentList(payload.attachments, attachmentContext())
+    if (attachments) body.append(attachments)
+  }
   row.append(body)
   return row
 }
 
-/** 房间里的 Bot 消息：中性底，气泡上方「头像 名字 · 角色」，没有标签行。 */
+/** 房间里的 Bot 消息：圆头像 + 名字，正文不套气泡。 */
 function renderRoomMessage(event) {
   const bot = botIdentity(event.actor.id)
-  const article = el('article', { class: 'msg msg-bot' })
+  const primary = LIVE.room && LIVE.room.hostBotId === event.actor.id
+  const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 24))
+  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 28, { round: true, primary }))
   head.append(el('span', { class: 'msg-name', text: bot.name }))
-  if (bot.role) head.append(el('span', { class: 'msg-role', text: bot.role }))
   article.append(head)
   const bubble = el('div', { class: 'bubble bubble-bot' })
-  bubble.append(markdownFragment(event.payload.text))
-  article.append(bubble)
-  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
-  if (attachments) article.append(attachments)
+  const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : ''
+  const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
+  const titles = cardTitles(parts)
+  if (text !== '' && !titles.includes(text)) bubble.append(markdownFragment(event.payload.text))
+  if (bubble.childNodes.length > 0) article.append(bubble)
+  appendRichParts(article, event, false)
+  if (!hasImagePart(event.payload)) {
+    const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+    if (attachments) article.append(attachments)
+  }
   return article
+}
+
+const CHOICE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+/** 卡片标题已经画在卡片上。正文如果只是同一句话，就不再画一条气泡。 */
+function cardTitles(parts) {
+  const titles = []
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    if (typeof part.title === 'string' && part.title.trim() !== '') titles.push(part.title.trim())
+    if (typeof part.prompt === 'string' && part.prompt.trim() !== '') titles.push(part.prompt.trim())
+  }
+  return titles
+}
+
+function hasImagePart(payload) {
+  return Array.isArray(payload?.parts) && payload.parts.some((part) => part && part.type === 'image')
+}
+
+function appendRichParts(parent, event, fromUser) {
+  const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    if (part.type === 'image' && !fromUser) parent.append(renderImagePart(part, event))
+    if (part.type === 'image' && fromUser) parent.append(renderImagePart(part, event))
+    if (part.type === 'choice' && !fromUser) parent.append(renderChoicePart(part))
+    if (part.type === 'approval' && !fromUser) parent.append(renderApprovalPart(part))
+    if (part.type === 'tool') {
+      parent.append(el('p', { class: 'muted', text: `工具 ${part.name || ''}${part.summary ? ' · ' + part.summary : ''}` }))
+    }
+  }
+  if (fromUser) {
+    const shown = new Set(parts.filter((part) => part && part.type === 'image').map((part) => part.artifactId))
+    const images = (event.payload.attachments || []).filter((item) => item && (String(item.mime || item.kind || '').includes('image') || item.kind === 'image'))
+    for (const item of images) {
+      if (shown.has(item.artifactId)) continue
+      parent.append(renderImagePart({ artifactId: item.artifactId, name: item.name, url: item.url }, event))
+    }
+  }
+}
+
+function attachmentUrl(event, artifactId, part) {
+  if (part && typeof part.url === 'string' && part.url !== '') return part.url
+  const list = Array.isArray(event.payload.attachments) ? event.payload.attachments : []
+  const found = list.find((item) => item && item.artifactId === artifactId)
+  if (found && typeof found.url === 'string' && found.url !== '') return found.url
+  if (event.seq) return `/api/messages/${encodeURIComponent(String(event.seq))}/files/${encodeURIComponent(artifactId)}`
+  return ''
+}
+
+function renderImagePart(part, event) {
+  const src = attachmentUrl(event, part.artifactId, part)
+  const card = el('button', { class: 'img-card', type: 'button' })
+  const img = el('img', { alt: part.name || '图片' })
+  card.append(img)
+  const caption = typeof part.caption === 'string' ? part.caption.trim() : ''
+  if (caption !== '') card.append(el('span', { class: 'cap', text: caption }))
+  const title = part.name || '图片'
+  const open = () => openImageViewer({ src: img.src || src, title, detail: part.artifactId || '' })
+  card.addEventListener('click', open)
+  const signed = typeof src === 'string' && src.includes('token=')
+  if (src && LIVE.token && src.startsWith('/api/') && !signed) {
+    fetch(src, { headers: { authorization: `Bearer ${LIVE.token}` } })
+      .then((response) => (response.ok ? response.blob() : Promise.reject(new Error('image'))))
+      .then((blob) => {
+        img.src = URL.createObjectURL(blob)
+      })
+      .catch(() => {
+        img.alt = '图片加载失败'
+      })
+  } else if (src) {
+    img.src = src
+  }
+  return card
+}
+
+function renderChoicePart(part) {
+  const card = el('div', { class: 'card choice-card' })
+  const head = el('div', { class: 'card-head' })
+  head.append(el('div', { class: 'card-title', text: part.prompt || '' }))
+  const close = el('button', { type: 'button', class: 'card-x', 'aria-label': '关闭', text: '✕' })
+  close.addEventListener('click', () => { card.hidden = true })
+  head.append(close)
+  card.append(head)
+  const options = Array.isArray(part.options) ? part.options : []
+  const answered = Boolean(part.selectedOptionId)
+  options.forEach((option, index) => {
+    const selected = answered && part.selectedOptionId === option.id
+    const button = el('button', { type: 'button', class: selected ? 'opt selected' : 'opt' })
+    const letter = CHOICE_LETTERS[index] || String(index + 1)
+    button.append(el('span', { class: 'opt-letter', text: letter }))
+    button.append(el('span', { text: option.label || option.id }))
+    if (answered) button.disabled = true
+    button.addEventListener('click', () => {
+      void answerChoice(part.cardId, option.id, button)
+    })
+    card.append(button)
+  })
+  if (answered) {
+    const index = options.findIndex((option) => option.id === part.selectedOptionId)
+    const chosen = options[index]
+    const letter = CHOICE_LETTERS[index] || ''
+    card.append(el('p', { class: 'choice-status', text: `已选 ${letter}${chosen ? ' · ' + (chosen.label || chosen.id) : ''}` }))
+  }
+  return card
+}
+
+function renderApprovalPart(part) {
+  const resolved = part.status === 'approved' || part.status === 'rejected'
+  const card = el('div', { class: resolved ? 'card approval-card is-resolved' : 'card approval-card' })
+  const head = el('div', { class: 'card-head' })
+  head.append(el('div', { class: 'card-title', text: part.title || part.action || '需要你确认' }))
+  const close = el('button', { type: 'button', class: 'card-x', 'aria-label': '关闭', text: '✕' })
+  if (resolved) close.disabled = true
+  else close.addEventListener('click', () => { card.hidden = true })
+  head.append(close)
+  card.append(head)
+  if (part.consequence) card.append(el('p', { class: 'approval-meta', text: part.consequence }))
+  if (part.target) {
+    const fields = el('div', { class: 'approval-fields' })
+    const row = el('div', { class: 'row' })
+    row.append(el('span', { class: 'k', text: '对象' }))
+    row.append(el('span', { class: 'v', text: part.target }))
+    fields.append(row)
+    card.append(fields)
+  }
+  if (resolved) {
+    const line = el('p', {
+      class: part.status === 'approved' ? 'resolved' : 'resolved denied',
+      text: part.status === 'approved' ? '✓ 已允许' : '✕ 已拒绝',
+    })
+    card.append(line)
+    return card
+  }
+  const actions = el('div', { class: 'approval-actions' })
+  const deny = el('button', { type: 'button', class: 'btn-deny', text: '拒绝' })
+  const allow = el('button', { type: 'button', class: 'btn-approve', text: '允许这一次' })
+  deny.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'rejected') })
+  allow.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'approved') })
+  actions.append(deny, allow)
+  card.append(actions)
+  return card
+}
+
+async function answerChoice(cardId, optionId, button) {
+  if (!LIVE.active || !LIVE.roomId || !cardId) return
+  button.disabled = true
+  try {
+    await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/cards/${encodeURIComponent(cardId)}/answer`, { optionId })
+    await refreshMessages()
+  } catch (error) {
+    button.disabled = false
+    showComposerError(error instanceof Error ? error.message : '没能提交选项')
+  }
+}
+
+async function decideApprovalCard(approvalId, decision) {
+  if (!approvalId) return
+  try {
+    await api.post(`/api/approvals/${encodeURIComponent(approvalId)}`, { decision })
+    await refreshMessages()
+  } catch (error) {
+    showComposerError(error instanceof Error ? error.message : '没能提交决定')
+  }
+}
+
+function openImageViewer(info) {
+  const viewer = $('#image-viewer')
+  const img = $('#image-viewer-img')
+  const title = $('#image-viewer-title')
+  const detail = $('#image-detail-text')
+  if (!viewer || !img) return
+  img.src = info.src
+  img.alt = info.title || '图片'
+  if (title) title.textContent = info.title || '图片'
+  if (detail) {
+    detail.hidden = true
+    detail.textContent = info.detail || ''
+  }
+  viewer.hidden = false
+  viewer.dataset.src = info.src
+  viewer.dataset.title = info.title || '图片'
+}
+
+function closeImageViewer() {
+  const viewer = $('#image-viewer')
+  if (viewer) viewer.hidden = true
 }
 
 /**
@@ -1433,6 +1622,8 @@ async function renderRoute() {
   const route = routeMatch(location.hash)
   // 离开房间页就断开 SSE 并清掉重连定时器，别在后台一直收消息/重连。
   if (route.name !== 'room') stopStream()
+  const roomView = $('#room-view')
+  if (roomView) roomView.classList.toggle('is-home', route.name === 'home')
 
   if (isAuthRouteName(route.name)) {
     await ensureAuthProbe()
@@ -1489,6 +1680,12 @@ async function renderRoute() {
     route.name === 'workspaceApprovals'
   ) {
     await openWorkspaceDeepLink(route, seq)
+    return
+  }
+  if (route.name === 'home') {
+    showView('room')
+    setTitle('Roost')
+    await openHome(seq)
     return
   }
   if (route.name === 'room') {
@@ -1595,6 +1792,7 @@ function toEvent(message, roomId) {
       framing: isUser ? 'user' : 'room',
       // 无附件时后端也会给 []；历史/翻页/补拉都走这里，形状保持一致。
       attachments: Array.isArray(message.attachments) ? message.attachments : [],
+      ...(Array.isArray(message.parts) ? { parts: message.parts } : {}),
     },
   }
 }
@@ -1663,7 +1861,9 @@ function applyLiveRoomChrome(room) {
   const name = room.name || '房间'
   ROOM.name = name
   const heading = $('#room-name')
-  if (heading) heading.textContent = name
+  const host = room.hostBotId ? (STORE.bots.find((bot) => bot.id === room.hostBotId) || null) : null
+  if (heading) heading.textContent = host && host.name ? host.name : name
+  paintRoomPill(room)
   const flockHolder = $('#room-flock')
   if (flockHolder) {
     const flock = roomFlock(room, 40)
@@ -1729,6 +1929,217 @@ function enterPreviewRoom() {
   if (composer) composer.focus()
 }
 
+const roomPreviews = new Map()
+
+function conversationEntries() {
+  const used = new Set()
+  const entries = []
+  for (const bot of STORE.bots) {
+    const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id)
+    const joined = STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
+    const room = (hosted.length > 0 ? hosted : joined)[0] || null
+    if (room) used.add(room.id)
+    const members = room && Array.isArray(room.members) ? room.members : []
+    entries.push({
+      bot,
+      room,
+      title: bot.name || 'Bot',
+      primary: room !== null && room.hostBotId === bot.id && members.length >= 2,
+    })
+  }
+  for (const room of STORE.rooms) {
+    if (used.has(room.id)) continue
+    const memberIds = (room.members || []).map((member) => member.botId).filter(Boolean)
+    if (memberIds.length > 0 && memberIds.every((id) => entries.some((entry) => entry.bot && entry.bot.id === id))) continue
+    const hostId = room.hostBotId || (room.members && room.members[0] && room.members[0].botId) || room.id
+    entries.push({ bot: { id: hostId, name: room.name || '房间' }, room, title: room.name || '房间', primary: true })
+  }
+  return entries
+}
+
+function messagePreviewText(message) {
+  if (!message) return '还没有消息'
+  const text = typeof message.text === 'string' ? message.text.trim() : ''
+  if (text !== '') return text
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  if (parts.some((part) => part && part.type === 'image')) return '图片'
+  if (parts.some((part) => part && part.type === 'choice')) return '请选择'
+  if (parts.some((part) => part && part.type === 'approval')) return '需要你确认'
+  return '还没有消息'
+}
+
+function formatShanghai(iso) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const delta = Date.now() - date.getTime()
+  if (delta >= 0 && delta < 60_000) return '刚刚'
+  if (delta >= 0 && delta < 60 * 60_000) return `${Math.max(1, Math.floor(delta / 60_000))} 分钟前`
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
+  const today = day.format(new Date())
+  const that = day.format(date)
+  if (that === today) return `今天 ${clock.format(date)}`
+  const yesterday = day.format(new Date(Date.now() - 24 * 60 * 60 * 1000))
+  if (that === yesterday) return '昨天'
+  return `${Number(that.slice(5, 7))}月${Number(that.slice(8, 10))}日`
+}
+
+function previewLine(message, entry) {
+  const body = messagePreviewText(message)
+  const actor = message && message.actor
+  if (!actor) return body
+  if (actor.kind === 'user') return `你：${body}`
+  if (actor.kind === 'bot' && entry && entry.bot && actor.id !== entry.bot.id) {
+    return `${botIdentity(actor.id).name}：${body}`
+  }
+  return body
+}
+
+async function loadRoomPreview(roomId) {
+  if (roomPreviews.has(roomId)) return roomPreviews.get(roomId)
+  const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages?limit=1`)
+  const messages = Array.isArray(data?.messages) ? data.messages : []
+  const last = messages[messages.length - 1]
+  const preview = { message: last || null, at: last && last.at ? formatShanghai(last.at) : '' }
+  roomPreviews.set(roomId, preview)
+  return preview
+}
+
+function roomsForBot(bot) {
+  if (!bot) return []
+  const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id)
+  if (hosted.length > 0) return hosted
+  return STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
+}
+
+function renderChatRow(entry) {
+  const href = entry.room ? `#/rooms/${encodeURIComponent(entry.room.id)}` : `#/bots/${encodeURIComponent(entry.bot.id)}`
+  const row = el('a', { class: 'home-row', href })
+  row.append(botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
+  const text = el('div', { class: 'home-copy' })
+  text.append(el('strong', { text: entry.title }))
+  const preview = el('span', { class: 'home-preview', text: '…' })
+  text.append(preview)
+  row.append(text)
+  const time = el('time', { class: 'home-time', text: '' })
+  row.append(time)
+  const candidates = roomsForBot(entry.bot)
+  if (candidates.length === 0) {
+    preview.textContent = '点开看看'
+    return row
+  }
+  void (async () => {
+    let best = null
+    for (const room of candidates) {
+      const item = await loadRoomPreview(room.id)
+      const at = item.message && item.message.at ? Date.parse(item.message.at) : 0
+      if (!best || at >= best.at) best = { room, item, at }
+    }
+    if (!preview.isConnected || !best) return
+    row.href = `#/rooms/${encodeURIComponent(best.room.id)}`
+    preview.textContent = best.item.message ? previewLine(best.item.message, entry) : '还没有消息'
+    time.textContent = best.item.at
+  })().catch(() => {
+    if (preview.isConnected) preview.textContent = '点开看看'
+  })
+  return row
+}
+
+function paintRoomPill(room) {
+  const slot = $('#room-pill-avatar')
+  if (!slot) return
+  const hostId = room && (room.hostBotId || (room.members && room.members[0] && room.members[0].botId))
+  if (!hostId) {
+    slot.replaceChildren()
+    return
+  }
+  const stored = STORE.bots.find((bot) => bot.id === hostId)
+  const bot = stored || { id: hostId, name: room.name || 'Bot' }
+  slot.replaceChildren(botAvatar(bot, 28, { round: true, primary: room.hostBotId === hostId }))
+  const subtitle = $('#room-subtitle')
+  if (subtitle) subtitle.textContent = room.name ? `房间：${room.name}` : ''
+}
+
+function setupRoomMenu() {
+  const button = $('#room-more')
+  const menu = $('#room-menu')
+  if (!button || !menu) return
+  button.addEventListener('click', () => {
+    const open = menu.hidden
+    menu.hidden = !open
+    button.setAttribute('aria-expanded', open ? 'true' : 'false')
+  })
+  const grid = $('#home-grid')
+  if (grid) {
+    grid.addEventListener('click', () => {
+      const open = menu.hidden
+      menu.hidden = !open
+      grid.setAttribute('aria-expanded', open ? 'true' : 'false')
+      button.setAttribute('aria-expanded', open ? 'true' : 'false')
+    })
+  }
+  const filterRows = (query) => {
+    const needle = query.trim().toLowerCase()
+    document.querySelectorAll('#room-view .home-row').forEach((row) => {
+      const text = (row.textContent || '').toLowerCase()
+      row.hidden = needle !== '' && !text.includes(needle)
+    })
+  }
+  const homeSearch = $('#home-search')
+  const sideSearch = $('#side-search')
+  if (homeSearch) homeSearch.addEventListener('input', () => filterRows(homeSearch.value))
+  if (sideSearch) sideSearch.addEventListener('input', () => filterRows(sideSearch.value))
+  document.addEventListener('click', (event) => {
+    if (menu.hidden) return
+    const target = event.target
+    if (button.contains(target) || menu.contains(target) || (grid && grid.contains(target))) return
+    menu.hidden = true
+    button.setAttribute('aria-expanded', 'false')
+    if (grid) grid.setAttribute('aria-expanded', 'false')
+  })
+}
+
+async function openHome(seq) {
+  resetRoomChrome()
+  stopStream()
+  const list = $('#messages')
+  if (!list) return
+  list.replaceChildren(el('p', { class: 'muted', text: '正在载入…' }))
+  try {
+    if (!STORE.botsLoaded) {
+      const data = await api.get('/api/bots')
+      STORE.bots = Array.isArray(data?.bots) ? data.bots : []
+      STORE.botsLoaded = true
+    }
+    if (!STORE.roomsLoaded) {
+      STORE.rooms = await ensureRoom()
+      STORE.roomsLoaded = true
+    }
+  } catch (error) {
+    if (isAuthError(error)) {
+      requirePair()
+      return
+    }
+  }
+  if (seq !== routeSeq) return
+  list.replaceChildren()
+  const heroHost = STORE.bots.find((bot) => STORE.rooms.some((room) => room.hostBotId === bot.id && (room.members || []).length >= 2)) || STORE.bots[0]
+  if (heroHost) {
+    const hero = el('div', { class: 'home-hero' })
+    hero.append(botAvatar(heroHost, 96, { round: true, primary: true }))
+    hero.append(el('div', { class: 'hero-name', text: `${heroHost.name || 'Roost'} · 主 Bot` }))
+    list.append(hero)
+  }
+  const entries = conversationEntries()
+  if (entries.length === 0) {
+    list.append(el('p', { class: 'muted', text: '还没有 Bot。' }))
+    renderSidebarRooms()
+    return
+  }
+  for (const entry of entries) list.append(renderChatRow(entry))
+  renderSidebarRooms()
+}
+
 async function openRoomRoute(id, seq) {
   resetRoomChrome()
   if (!id) {
@@ -1772,9 +2183,26 @@ async function openRoomRoute(id, seq) {
     events.sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0))
     ROOM.events = events
 
+    if (!STORE.roomsLoaded) {
+      try {
+        STORE.rooms = await ensureRoom()
+        STORE.roomsLoaded = true
+      } catch {
+        // 侧栏没有房间列表时，对话本身仍然打开。
+      }
+    }
+    if (!STORE.botsLoaded) {
+      try {
+        await loadBots()
+      } catch {
+        // 名字解析失败时侧栏用房间名。
+      }
+    }
+    if (seq !== routeSeq) return
     applyLiveRoomChrome(room)
     renderMessages()
-    setComposerEnabled(true)
+    const hostName = room.hostBotId ? (STORE.bots.find((bot) => bot.id === room.hostBotId)?.name || '') : ''
+    setComposerEnabled(true, hostName ? `向${hostName}提问` : '发一条消息')
     openStream()
     const composer = $('#composer')
     if (composer) composer.focus()
@@ -2158,9 +2586,13 @@ function openStream() {
     }
   })
   stream.addEventListener('round', handleRoundEvent)
+  stream.addEventListener('round.started', handleRoundEvent)
+  stream.addEventListener('round.ended', handleRoundEvent)
   stream.addEventListener('status', handleRoundEvent)
   stream.addEventListener('speaking', handleSpeakingEvent)
   stream.addEventListener('message.delta', handleDeltaEvent)
+  stream.addEventListener('card.answered', () => { void refreshMessages() })
+  stream.addEventListener('approval.decided', () => { void refreshMessages() })
   stream.addEventListener('error', () => {
     if (stream !== LIVE.stream) return
     // 关掉浏览器自动重连：它会带着旧的 after 重放，可能漏掉断线期间的消息。
@@ -2284,8 +2716,10 @@ async function enterLiveRoom(token) {
 function syncSend() {
   const input = $('#composer')
   const send = $('#send')
+  const files = $('#composer-files')
   if (!input || !send) return
-  send.disabled = input.disabled || input.value.trim() === ''
+  const hasFile = Boolean(files && !files.hidden && files.childElementCount > 0)
+  send.disabled = input.disabled || (input.value.trim() === '' && !hasFile)
 }
 
 function growComposer() {
@@ -2303,7 +2737,7 @@ function setComposerEnabled(enabled, placeholder) {
   const send = $('#send')
   if (!input || !send) return
   input.disabled = !enabled
-  input.placeholder = placeholder || '说点什么…'
+  input.placeholder = placeholder || '发一条消息'
   if (!enabled) {
     send.disabled = true
     send.title = '房间还没载入'
@@ -2581,6 +3015,51 @@ function setupSkipLinks() {
   }
 }
 
+function setupImageViewer() {
+  const close = $('#image-viewer-close')
+  const share = $('#image-share')
+  const save = $('#image-save')
+  const detail = $('#image-detail')
+  if (close) close.addEventListener('click', closeImageViewer)
+  if (share) {
+    share.addEventListener('click', async () => {
+      const viewer = $('#image-viewer')
+      const url = viewer?.dataset.src || location.href
+      const title = viewer?.dataset.title || '图片'
+      if (navigator.share) {
+        try {
+          await navigator.share({ title, url })
+          return
+        } catch {
+          // 用户取消或浏览器拒绝时退回复制链接。
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(url)
+        share.textContent = '已复制'
+      } catch {
+        share.textContent = '无法分享'
+      }
+    })
+  }
+  if (save) {
+    save.addEventListener('click', () => {
+      const url = $('#image-viewer')?.dataset.src
+      if (!url) return
+      const link = document.createElement('a')
+      link.href = url
+      link.download = $('#image-viewer')?.dataset.title || 'image'
+      link.click()
+    })
+  }
+  if (detail) {
+    detail.addEventListener('click', () => {
+      const node = $('#image-detail-text')
+      if (node) node.hidden = !node.hidden
+    })
+  }
+}
+
 function setupComposer() {
   const form = $('#composer-form')
   const input = $('#composer')
@@ -2599,10 +3078,61 @@ function setupComposer() {
     }
   })
 
+  const plus = $('#composer-plus')
+  const file = $('#composer-file')
+  const mic = $('#composer-mic')
+  const pendingFiles = []
+  if (plus && file) {
+    plus.addEventListener('click', () => file.click())
+    file.addEventListener('change', async () => {
+      const chosen = file.files && file.files[0]
+      file.value = ''
+      if (!chosen || !LIVE.active || !LIVE.roomId) return
+      try {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/artifacts`, {
+          method: 'POST',
+          headers: {
+            authorization: LIVE.token ? `Bearer ${LIVE.token}` : '',
+            'content-type': chosen.type || 'application/octet-stream',
+            'x-artifact-name': chosen.name || 'image',
+          },
+          body: chosen,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload?.error?.message || '上传失败')
+        pendingFiles.push(payload.artifactId)
+        const chips = $('#composer-files')
+        if (chips) {
+          chips.hidden = false
+          chips.append(el('span', { text: chosen.name || '图片' }))
+        }
+        syncSend()
+      } catch (error) {
+        showComposerError(error instanceof Error ? error.message : '上传失败')
+      }
+    })
+  }
+  if (mic) {
+    mic.addEventListener('click', () => {
+      const Speech = window.SpeechRecognition || window.webkitSpeechRecognition
+      if (!Speech) {
+        showComposerError('这台浏览器没有语音输入')
+        return
+      }
+      const recognition = new Speech()
+      recognition.lang = 'zh-CN'
+      recognition.onresult = (event) => {
+        const said = event.results?.[0]?.[0]?.transcript
+        if (typeof said === 'string' && said !== '') input.value = `${input.value} ${said}`.trim()
+      }
+      recognition.start()
+    })
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     const text = input.value.trim()
-    if (!text || input.disabled) return
+    if ((!text && pendingFiles.length === 0) || input.disabled) return
     clearComposerError()
 
     if (LIVE.active && LIVE.roomId) {
@@ -2613,8 +3143,14 @@ function setupComposer() {
       try {
         const posted = await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
           text,
+          ...(pendingFiles.length > 0 ? { artifactIds: pendingFiles.splice(0, pendingFiles.length) } : {}),
           idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         })
+        const chips = $('#composer-files')
+        if (chips) {
+          chips.replaceChildren()
+          chips.hidden = true
+        }
         if (posted && posted.message) appendLiveEvent(posted.message)
         else await refreshMessages()
         LIVE.pendingReply = true
@@ -2681,6 +3217,8 @@ function boot() {
   setupSidebarDrawer()
   setupSkipLinks()
   setupComposer()
+  setupImageViewer()
+  setupRoomMenu()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
     void renderRoute().then(() => {

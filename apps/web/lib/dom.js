@@ -3,7 +3,7 @@
 // （svgNode 是唯一 innerHTML，输入是 lib/glyph.js 以固定算法生成的常量标记。）
 
 import { glyphSvg } from './glyph.js'
-import { birdSvg } from './bird.js'
+import { birdSvg, roundBirdSvg } from './bird.js'
 import { isAvatarDataUrl } from './avatar.js'
 
 export const $ = (selector, root = document) => root.querySelector(selector)
@@ -52,6 +52,17 @@ export function avatar(botId, size) {
  */
 export function botAvatar(bot, size = 24, options = {}) {
   const id = typeof bot === 'string' ? bot : bot && typeof bot.id === 'string' ? bot.id : ''
+  if (options.round === true) {
+    const label = bot && typeof bot === 'object' && typeof bot.name === 'string' ? bot.name : 'Bot 头像'
+    const wrap = el('span', {
+      class: `avatar avatar-${size} avatar-round${options.primary === true ? ' is-primary' : ''}`,
+      'data-bot-id': id,
+      'aria-label': label,
+    })
+    wrap.append(svgNode(roundBirdSvg(id, { size, primary: options.primary === true })))
+    if (options.primary === true) wrap.append(el('span', { class: 'avatar-star', 'aria-hidden': 'true', text: '★' }))
+    return wrap
+  }
   const avatarValue = bot && typeof bot === 'object' && bot.avatar && typeof bot.avatar === 'object' ? bot.avatar : null
   const image = avatarValue && typeof avatarValue.image === 'string' ? avatarValue.image : ''
   if (!isAvatarDataUrl(image)) {
