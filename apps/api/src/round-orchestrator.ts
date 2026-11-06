@@ -217,6 +217,10 @@ export function applyAdvance(input: AdvanceInput): { round: RoomRound; next: num
   const detail = detailOrThrow(input.store, current.roomId)
   const engine = engineRoom(detail)
   const speaker = current.slots[input.slotIndex]
+  // 卡片把 slot 停在 needs_input。之后的 posted 不能把它收掉，等人答完再继续。
+  if (speaker?.status === 'needs_input') {
+    return { round: current, next: nextSlot(current) }
+  }
   let next = advanceSlot(current, input.slotIndex, input.result)
   if (speaker !== undefined) {
     if (input.result.kind === 'posted' && input.result.text.trim() !== '') {

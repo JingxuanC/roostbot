@@ -11,7 +11,7 @@ import { StoreError } from './errors.ts'
 import { asInteger, asNonEmptyString, asOptionalString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
 import { newRoostId } from './ids.ts'
 import { appendEvent, readEvents } from './events.ts'
-import type { Actor, SendMessageInput, Store, Room, RoomMessage } from './types.ts'
+import type { Actor, MessagePart, SendMessageInput, Store, Room, RoomMessage } from './types.ts'
 
 export const REPLY_MODES = ['admin', 'everyone', 'mentions'] as const
 
@@ -82,7 +82,15 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
   assertOpen(store)
   const req = asRecord(input, 'message', 'INVALID_MESSAGE')
   const roomId = asNonEmptyString(req.roomId, 'message.roomId', 'INVALID_MESSAGE')
-  const text = asNonEmptyString(req.text, 'message.text', 'INVALID_MESSAGE')
+  if (req.text !== undefined && req.text !== null && typeof req.text !== 'string') {
+    throw new StoreError('INVALID_MESSAGE', 'message.text must be a string')
+  }
+  const text = typeof req.text === 'string' ? req.text : ''
+  const parts = normalizeParts(req.parts)
+  if (text.trim() === '' && parts.length === 0) {
+    throw new StoreError('INVALID_MESSAGE', 'message text is empty')
+  }
+  if (text.length > 8000) throw new StoreError('INVALID_MESSAGE', 'message.text is too long')
   const actor = asActor(req.actor)
   const at =
     req.at === undefined || req.at === null ? Date.now() : asInteger(req.at, 'message.at', 0, 'INVALID_MESSAGE')
@@ -99,10 +107,15 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
     idem: asOptionalString(req.idem, 'message.idem', 'INVALID_MESSAGE'),
     // events.at 是 ISO 字符串（events.md §3）；调用方传毫秒。
     at: new Date(at).toISOString(),
-    payload: { roomId, text, role: actor.kind === 'user' ? 'user' : 'bot' },
+    payload: {
+      roomId,
+      text,
+      role: actor.kind === 'user' ? 'user' : 'bot',
+      ...(parts.length === 0 ? {} : { parts }),
+    },
   })
 
-  return { seq: event.seq, at: event.at, actor, roomId, text }
+  return { seq: event.seq, at: event.at, actor, roomId, text, ...(parts.length === 0 ? {} : { parts }) }
 }
 
 /** 读房间消息，按 seq 升序；afterSeq 用于增量补拉（SSE 断线重连）。 */
@@ -127,16 +140,7 @@ export function readMessages(
     audience: `room:${roomId}`,
     limit,
   })
-  return events.map((event) => {
-    const payload = event.payload as { text?: unknown }
-    return {
-      seq: event.seq,
-      at: event.at,
-      actor: event.actor,
-      roomId,
-      text: typeof payload.text === 'string' ? payload.text : '',
-    }
-  })
+  return events.map((event) => messageFromPayload(event.seq, event.at, event.actor, roomId, event.payload))
 }
 
 export interface RoomLogPage {
@@ -201,19 +205,53 @@ export function readRoomLogPage(
 
   const messages = rows.reverse().map((row) => {
     const actor = parseLogActor(row.actor_json, toNumber(row.seq))
-    let text = ''
+    let payload: Record<string, unknown> = {}
     try {
-      const payload = JSON.parse(row.payload_json) as { text?: unknown }
-      text = typeof payload.text === 'string' ? payload.text : ''
+      payload = JSON.parse(row.payload_json) as Record<string, unknown>
     } catch (err) {
       throw new StoreError('EVENT_CORRUPT', `event seq=${row.seq}: payload_json is not valid JSON`, {
         cause: err,
       })
     }
-    return { seq: toNumber(row.seq), at: row.at, actor, roomId, text }
+    return messageFromPayload(toNumber(row.seq), row.at, actor, roomId, payload)
   })
   const oldestSeq = messages.length === 0 ? null : messages[0]!.seq
   return { messages, hasMore: oldestSeq !== null && oldestSeq > floorSeq, oldestSeq, floorSeq }
+}
+
+function normalizeParts(value: unknown): MessagePart[] {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw new StoreError('INVALID_MESSAGE', 'message.parts must be an array')
+  if (value.length > 12) throw new StoreError('INVALID_MESSAGE', 'message.parts is too long')
+  return value.map((part, index) => {
+    if (part === null || typeof part !== 'object' || Array.isArray(part)) {
+      throw new StoreError('INVALID_MESSAGE', `message.parts[${index}] must be an object`)
+    }
+    const record = part as Record<string, unknown>
+    const type = record.type
+    if (type !== 'text' && type !== 'image' && type !== 'choice' && type !== 'approval' && type !== 'tool') {
+      throw new StoreError('INVALID_MESSAGE', `message.parts[${index}].type is invalid`)
+    }
+    return record as MessagePart
+  })
+}
+
+function messageFromPayload(
+  seq: number,
+  at: string,
+  actor: Actor | null,
+  roomId: string,
+  payload: Record<string, unknown>,
+): RoomMessage {
+  const parts = Array.isArray(payload.parts) ? (payload.parts as MessagePart[]) : undefined
+  return {
+    seq,
+    at,
+    actor: actor ?? { kind: 'system', id: 'unknown' },
+    roomId,
+    text: typeof payload.text === 'string' ? payload.text : '',
+    ...(parts === undefined || parts.length === 0 ? {} : { parts }),
+  }
 }
 
 function parseLogActor(raw: string | null, seq: number): Actor {

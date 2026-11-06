@@ -177,10 +177,12 @@ import {
   handleInternalAttachmentGc,
   handleServeMessageFile,
   handleServeSignedAttachment,
+  handlePostRoomArtifact,
   handleUploadAttachment,
 } from './attachments-routes.ts'
 import type { AttachmentsRuntime } from './attachments-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
+import { answerChoiceCard, decorateParts, parseCard, postCard, projectApprovalDecision } from './cards.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
@@ -201,7 +203,7 @@ import { TokenBucketLimiter } from './rate-limit.ts'
 import type { RateLimiter, RateLimitKind } from './rate-limit.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { hasActiveSessionsForAccount, touchSession } from '../../../packages/store/src/sessions.ts'
-import { listMessageAttachments } from '../../../packages/store/src/attachments.ts'
+import { getArtifact, linkArtifact, listMessageAttachments } from '../../../packages/store/src/attachments.ts'
 import type { MessageAttachment } from '../../../packages/store/src/attachments.ts'
 
 export const DEFAULT_HOST = '127.0.0.1'
@@ -1259,6 +1261,7 @@ function messageJson(
     at: message.at,
     actor: { kind: message.actorKind, id: message.actorId },
     text: message.text,
+    ...(message.parts === undefined ? {} : { parts: message.parts }),
     // 无附件时也返回 []，前端形状稳定。
     attachments: attachments.map((item) => ({
       artifactId: item.artifactId,
@@ -1271,11 +1274,15 @@ function messageJson(
   }
 }
 
+/** `<img>` 不能带 Bearer。消息里的图片换成这么久的签名地址。 */
+const MESSAGE_IMAGE_TTL_SECONDS = 120
+
 /** 批量给消息挂上附件；只有 SQLite store 可用时才查（memory harness 不查）。 */
-function messagesJson(
+async function messagesJson(
   ctx: HandlerContext,
-  messages: RoomMessageRecord[]
-): Record<string, unknown>[] {
+  messages: RoomMessageRecord[],
+  roomId?: string,
+): Promise<Record<string, unknown>[]> {
   if (ctx.rawStore === undefined || messages.length === 0) {
     return messages.map((message) => messageJson(message))
   }
@@ -1292,7 +1299,62 @@ function messagesJson(
     console.error('roost api: failed to load message attachments', error)
     grouped = new Map()
   }
-  return messages.map((message) => messageJson(message, grouped.get(message.seq) ?? []))
+  const jsons = messages.map((message) => {
+    const json = messageJson(message, grouped.get(message.seq) ?? [])
+    if (roomId === undefined || ctx.rawStore === undefined || !Array.isArray(json.parts)) return json
+    return { ...json, parts: decorateParts(ctx.rawStore, roomId, json.parts as never) }
+  })
+  await signMessageImages(ctx, jsons)
+  return jsons
+}
+
+/**
+ * 成员校验通过之后才签名。陌生人拿不到这条响应，也就拿不到 token。
+ * 签名失败时保留原来的成员路径，不把整条消息打成 500。
+ */
+async function signMessageImages(ctx: HandlerContext, jsons: Record<string, unknown>[]): Promise<void> {
+  const content = ctx.attachments?.content
+  if (content === undefined) return
+  const signed = new Map<string, string>()
+  const urlFor = async (artifactId: string): Promise<string | null> => {
+    const cached = signed.get(artifactId)
+    if (cached !== undefined) return cached
+    try {
+      const url = await content.signRead(artifactId, MESSAGE_IMAGE_TTL_SECONDS)
+      signed.set(artifactId, url)
+      return url
+    } catch (error) {
+      console.error('roost api: failed to sign message image', error)
+      return null
+    }
+  }
+  for (const json of jsons) {
+    if (Array.isArray(json.attachments)) {
+      for (const item of json.attachments) {
+        if (item === null || typeof item !== 'object') continue
+        const artifactId = (item as { artifactId?: unknown }).artifactId
+        if (typeof artifactId !== 'string' || artifactId === '') continue
+        const url = await urlFor(artifactId)
+        if (url !== null) (item as { url: string }).url = url
+      }
+    }
+    if (!Array.isArray(json.parts)) continue
+    const next = []
+    for (const part of json.parts) {
+      if (part === null || typeof part !== 'object') {
+        next.push(part)
+        continue
+      }
+      const image = part as { type?: unknown; artifactId?: unknown }
+      if (image.type === 'image' && typeof image.artifactId === 'string' && image.artifactId !== '') {
+        const url = await urlFor(image.artifactId)
+        next.push(url === null ? part : { ...image, url })
+      } else {
+        next.push(part)
+      }
+    }
+    json.parts = next
+  }
 }
 
 
@@ -1350,14 +1412,14 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
         ctx.store.readMessagesInternal({ roomId, afterSeq }),
       )
       if (res.writableEnded || req.destroyed) return
-      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages) })
       return
     }
     // 首看/向前翻页走裁剪投影（rooms.md §3：保留 60、首看 12）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLogInternal({ roomId, ...query })
-    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1380,15 +1442,56 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
   if (botId === '' || botId.length > 64) {
     return sendError(res, 400, 'invalid_body', 'body.botId must be 1..64 characters')
   }
-  if (text === '' || text.length > 8000) {
+  if (text.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be at most 8000 characters')
+  }
+  if (body.card !== undefined) {
+    if (ctx.rawStore === undefined) {
+      return sendError(res, 503, 'runtime.not_configured', 'cards need the SQLite store')
+    }
+    let card
+    try {
+      card = parseCard(body.card)
+    } catch (error) {
+      return sendError(res, 400, 'invalid_body', error instanceof Error ? error.message : 'invalid card')
+    }
+    try {
+      const posted = postCard({ store: ctx.rawStore, roomId, botId, text, card })
+      const [postedJson] = await messagesJson(ctx, [messageRecordFromRoom(posted.message)], roomId)
+      sendJson(res, 201, {
+        message: postedJson,
+        cardId: posted.cardId,
+        ...(posted.approvalId === undefined ? {} : { approvalId: posted.approvalId }),
+        round: posted.round,
+      })
+    } catch (err) {
+      sendStoreFailure(res, err)
+    }
+    return
+  }
+  if (text === '') {
     return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
   }
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   try {
     const message = await ctx.store.postBotMessage({ roomId, botId, text, ...(idem === undefined ? {} : { idem }) })
-    sendJson(res, 201, { message: messagesJson(ctx, [message])[0] })
+    const [postedJson] = await messagesJson(ctx, [message], roomId)
+    sendJson(res, 201, { message: postedJson })
   } catch (err) {
     sendStoreFailure(res, err)
+  }
+}
+
+function messageRecordFromRoom(message: { seq: number; at: string; actor: { kind: string; id: string } | null; text: string; parts?: RoomMessageRecord['parts'] }): RoomMessageRecord {
+  const kind = message.actor?.kind
+  const actorKind = kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
+  return {
+    seq: message.seq,
+    at: message.at,
+    actorKind,
+    actorId: message.actor?.id ?? 'unknown',
+    text: message.text,
+    ...(message.parts === undefined ? {} : { parts: message.parts }),
   }
 }
 
@@ -1396,6 +1499,14 @@ function sendStoreFailure(res: ServerResponse, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
   if (/unknown room/i.test(message)) {
     sendError(res, 404, 'room_not_found', message)
+    return
+  }
+  if (/unknown card/i.test(message)) {
+    sendError(res, 404, 'card.not_found', message)
+    return
+  }
+  if (/unknown option|card\.|choice card|approval card/i.test(message)) {
+    sendError(res, 400, 'invalid_body', message)
     return
   }
   if (/unknown workspace/i.test(message)) {
@@ -1439,14 +1550,14 @@ async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, r
     if (afterSeq !== undefined) {
       // 增量路径（SSE 断线补拉）不受裁剪影响：after 之后照单全收。
       const messages = await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, afterSeq })
-      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages, roomId) })
       return
     }
     // 首看给最近 12 条；before 游标向前翻，最多翻到最近 60 条（rooms.md §3）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLog({ accountId: auth.session.accountId, roomId, ...query })
-    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages, roomId), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1477,6 +1588,51 @@ function logPageJson(page: { hasMore: boolean; oldestSeq: number | null; floorSe
   return { hasMore: page.hasMore, before: page.oldestSeq, floor: page.floorSeq }
 }
 
+async function handleAnswerCard(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'cards need the SQLite store')
+  }
+  const match = /^\/api\/rooms\/([^/]+)\/cards\/([^/]+)\/answer$/.exec(url.pathname)
+  const roomId = match === null ? null : safeDecode(match[1]!)
+  const cardId = match === null ? null : safeDecode(match[2]!)
+  if (roomId === null || roomId === '' || cardId === null || cardId === '') {
+    return sendError(res, 404, 'not_found', 'malformed card path')
+  }
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const optionId = typeof body.optionId === 'string' ? body.optionId.trim() : ''
+  if (optionId === '') return sendError(res, 400, 'invalid_body', 'body.optionId is required')
+  const workspaceId = workspaceIdForRoom(ctx, roomId)
+  if (workspaceId !== null) {
+    const gate = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin', 'member'])
+    if (!gate.ok) return sendError(res, gate.status, gate.code, gate.message)
+  }
+  try {
+    await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, limit: 1 })
+    const result = answerChoiceCard({
+      store: ctx.rawStore,
+      roomId,
+      cardId,
+      optionId,
+      accountId: auth.session.accountId,
+      at: ctx.now(),
+    })
+    const [answeredJson] = await messagesJson(ctx, [messageRecordFromRoom(result.message)], roomId)
+    sendJson(res, 200, {
+      optionId: result.optionId,
+      label: result.label,
+      alreadyAnswered: result.alreadyAnswered,
+      message: answeredJson,
+      round: result.round,
+    })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
 async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const auth = await authenticate(ctx, req)
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
@@ -1485,8 +1641,15 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   const body = parsed.value as Record<string, unknown>
   const text = typeof body.text === 'string' ? body.text.trim() : ''
-  if (text === '' || text.length > 8000) {
-    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
+  const artifactIds = parseArtifactIds(body.artifactIds)
+  if (artifactIds === null) {
+    return sendError(res, 400, 'invalid_body', 'body.artifactIds must be an array of artifact ids')
+  }
+  if ((text === '' && artifactIds.length === 0) || text.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters, or attach an image')
+  }
+  if (artifactIds.length > 0 && ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'image messages need the SQLite store')
   }
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   const roomId = roomIdFromPath(url.pathname)
@@ -1511,13 +1674,34 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
     }
   }
 
+  if (artifactIds.length > 0 && ctx.rawStore !== undefined) {
+    for (const artifactId of artifactIds) {
+      const artifact = getArtifact(ctx.rawStore, artifactId)
+      if (artifact === null || (workspaceId !== null && artifact.workspaceId !== workspaceId)) {
+        return sendError(res, 400, 'invalid_body', `unknown artifact ${artifactId}`)
+      }
+    }
+  }
+
+  const parts =
+    artifactIds.length === 0
+      ? undefined
+      : [
+          ...(text === '' ? [] : [{ type: 'text', text }]),
+          ...artifactIds.map((artifactId) => ({ type: 'image', artifactId })),
+        ]
+
   try {
     const message = await ctx.store.postMessage({
       accountId: auth.session.accountId,
       roomId,
       text,
+      ...(parts === undefined ? {} : { parts }),
       ...(idem === undefined ? {} : { idem })
     })
+    if (ctx.rawStore !== undefined && artifactIds.length > 0) {
+      artifactIds.forEach((artifactId, position) => linkArtifact(ctx.rawStore!, message.seq, artifactId, position))
+    }
     // 一条用户消息开启一轮；失败不影响消息本身（消息已经落库）。
     if (ctx.rawStore !== undefined) {
       try {
@@ -1529,10 +1713,22 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
         console.error('roost api: failed to open round', error)
       }
     }
-    sendJson(res, 201, { message: messagesJson(ctx, [message])[0] })
+    const [postedJson] = await messagesJson(ctx, [message], roomId)
+    sendJson(res, 201, { message: postedJson })
   } catch (err) {
     sendStoreFailure(res, err)
   }
+}
+
+function parseArtifactIds(value: unknown): string[] | null {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > 8) return null
+  const ids: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !/^[0-9a-f]{32}$/.test(item)) return null
+    ids.push(item)
+  }
+  return ids
 }
 
 /** `waitMs` 查询参数。省略 = 0（不等）。非法时已经写了 400，返回 null。 */
@@ -1599,7 +1795,7 @@ async function writeRoomStream(
       afterSeq: input.afterSeq,
       limit: 200,
     })
-    const batchJson = messagesJson(ctx, batch)
+    const batchJson = await messagesJson(ctx, batch, input.roomId)
     let lastSeq = input.afterSeq
     for (let index = 0; index < batch.length; index += 1) {
       const message = batch[index]!
@@ -1620,7 +1816,7 @@ async function writeRoomStream(
   const events = readRoomEvents(ctx.rawStore, { roomId: input.roomId, afterSeq: input.afterSeq, limit: 200 })
   if (events.length === 0) return { count: 0, lastSeq: input.afterSeq }
   const chatRecords = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
-  const chatJson = messagesJson(ctx, chatRecords)
+  const chatJson = await messagesJson(ctx, chatRecords, input.roomId)
   let chatIndex = 0
   let lastSeq = input.afterSeq
   for (const event of events) {
@@ -1753,7 +1949,7 @@ async function handleInternalEvents(ctx: RoomRouteContext, req: IncomingMessage,
     )
     if (res.writableEnded || req.destroyed) return
     const chat = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
-    const chatJson = messagesJson(ctx, chat)
+    const chatJson = await messagesJson(ctx, chat)
     let chatIndex = 0
     sendJson(res, 200, {
       events: events.map((event) =>
@@ -2236,6 +2432,30 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleRemoveRoomMember(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/artifacts$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/rooms\/([^/]+)\/artifacts$/.exec(path)
+    const roomId = match === null ? null : safeDecode(match[1]!)
+    if (roomId === null || roomId === '') {
+      sendError(res, 404, 'not_found', 'malformed room path')
+      return
+    }
+    await handlePostRoomArtifact(ctx, req, res, roomId)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/cards\/[^/]+\/answer$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleAnswerCard(ctx as RoomRouteContext, req, res, url)
     return
   }
 

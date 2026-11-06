@@ -58,7 +58,7 @@ test('domain/kind 运行时表与 events.md §4 一致', () => {
     'chat', 'turn', 'tool', 'approval', 'assignment', 'schedule',
     'sandbox', 'memory', 'workspace', 'auth', 'billing',
   ])
-  assert.equal(EVENT_KINDS.length, 45)
+  assert.equal(EVENT_KINDS.length, 46)
   for (const domain of EVENT_DOMAINS) {
     for (const kind of eventKindsFor(domain)) {
       assert.ok(kind.startsWith(`${domain}.`), `${kind} 应以 ${domain}. 开头`)

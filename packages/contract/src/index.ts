@@ -93,7 +93,17 @@ export interface CreateRoomInput {
   purpose?: string
 }
 
-export type SlotStatus = 'waiting' | 'speaking' | 'posted' | 'passed' | 'failed' | 'missed' | 'working' | 'left' | 'waiting-approval'
+export type SlotStatus =
+  | 'waiting'
+  | 'speaking'
+  | 'posted'
+  | 'passed'
+  | 'failed'
+  | 'missed'
+  | 'working'
+  | 'left'
+  | 'waiting-approval'
+  | 'needs_input'
 
 export interface RoundSlot {
   botId: string
@@ -102,6 +112,8 @@ export interface RoundSlot {
   note?: string
   /** 被哪个成员 @ 调用进来的 */
   by?: string
+  /** 这张卡没人答之前，轮次停在这里。答案事件把它放回 waiting。 */
+  awaiting?: { kind: 'choice' | 'approval'; id: string }
 }
 
 export interface RoomRound {
