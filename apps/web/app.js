@@ -471,7 +471,7 @@ function renderRoomMessage(event) {
   const primary = LIVE.room && LIVE.room.hostBotId === event.actor.id
   const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 36, { round: true, primary }))
+  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 28, { round: true, primary }))
   head.append(el('span', { class: 'msg-name', text: bot.name }))
   article.append(head)
   const bubble = el('div', { class: 'bubble bubble-bot' })
@@ -506,8 +506,12 @@ function appendRichParts(parent, event, fromUser) {
     }
   }
   if (fromUser) {
-    const images = (event.payload.attachments || []).filter((item) => item && String(item.mime || item.kind || '').includes('image') || item.kind === 'image')
-    for (const item of images) parent.append(renderImagePart({ artifactId: item.artifactId, name: item.name }, event))
+    const shown = new Set(parts.filter((part) => part && part.type === 'image').map((part) => part.artifactId))
+    const images = (event.payload.attachments || []).filter((item) => item && (String(item.mime || item.kind || '').includes('image') || item.kind === 'image'))
+    for (const item of images) {
+      if (shown.has(item.artifactId)) continue
+      parent.append(renderImagePart({ artifactId: item.artifactId, name: item.name, url: item.url }, event))
+    }
   }
 }
 
@@ -522,9 +526,10 @@ function attachmentUrl(event, artifactId, part) {
 
 function renderImagePart(part, event) {
   const src = attachmentUrl(event, part.artifactId, part)
-  const card = el('button', { class: 'image-card', type: 'button' })
+  const card = el('button', { class: 'img-card', type: 'button' })
   const img = el('img', { alt: part.name || '图片' })
   card.append(img)
+  card.append(el('span', { class: 'cap', text: '点按可全屏查看 / 转发' }))
   const title = part.name || '图片'
   const open = () => openImageViewer({ src: img.src || src, title, detail: part.artifactId || '' })
   card.addEventListener('click', open)
@@ -545,38 +550,66 @@ function renderImagePart(part, event) {
 }
 
 function renderChoicePart(part) {
-  const card = el('div', { class: 'choice-card' })
-  card.append(el('p', { text: part.prompt || '' }))
+  const card = el('div', { class: 'card choice-card' })
+  const head = el('div', { class: 'card-head' })
+  head.append(el('div', { class: 'card-title', text: part.prompt || '' }))
+  const close = el('button', { type: 'button', class: 'card-x', 'aria-label': '关闭', text: '✕' })
+  close.addEventListener('click', () => { card.hidden = true })
+  head.append(close)
+  card.append(head)
   const options = Array.isArray(part.options) ? part.options : []
+  const answered = Boolean(part.selectedOptionId)
   options.forEach((option, index) => {
-    const selected = part.selectedOptionId && part.selectedOptionId === option.id
-    const button = el('button', {
-      type: 'button',
-      class: 'choice-option',
-      text: `${CHOICE_LETTERS[index] || String(index + 1)}. ${option.label || option.id}`,
-    })
-    if (selected || part.selectedOptionId) button.disabled = true
+    const selected = answered && part.selectedOptionId === option.id
+    const button = el('button', { type: 'button', class: selected ? 'opt selected' : 'opt' })
+    const letter = CHOICE_LETTERS[index] || String(index + 1)
+    button.append(el('span', { class: 'opt-letter', text: letter }))
+    button.append(el('span', { text: option.label || option.id }))
+    if (answered) button.disabled = true
     button.addEventListener('click', () => {
       void answerChoice(part.cardId, option.id, button)
     })
     card.append(button)
   })
+  if (answered) {
+    const index = options.findIndex((option) => option.id === part.selectedOptionId)
+    const chosen = options[index]
+    const letter = CHOICE_LETTERS[index] || ''
+    card.append(el('p', { class: 'choice-status', text: `已选 ${letter}${chosen ? ' · ' + (chosen.label || chosen.id) : ''}` }))
+  }
   return card
 }
 
 function renderApprovalPart(part) {
   const resolved = part.status === 'approved' || part.status === 'rejected'
-  const card = el('div', { class: resolved ? 'approval-card is-resolved' : 'approval-card' })
-  card.append(el('p', { text: part.title || part.action || '需要你确认' }))
-  if (part.consequence) card.append(el('p', { class: 'muted', text: part.consequence }))
-  if (part.target) card.append(el('p', { class: 'muted', text: part.target }))
+  const card = el('div', { class: resolved ? 'card approval-card is-resolved' : 'card approval-card' })
+  const head = el('div', { class: 'card-head' })
+  head.append(el('div', { class: 'card-title', text: part.title || part.action || '需要你确认' }))
+  const close = el('button', { type: 'button', class: 'card-x', 'aria-label': '关闭', text: '✕' })
+  if (resolved) close.disabled = true
+  else close.addEventListener('click', () => { card.hidden = true })
+  head.append(close)
+  card.append(head)
+  if (part.consequence) card.append(el('p', { class: 'approval-meta', text: part.consequence }))
+  if (part.target) {
+    const fields = el('div', { class: 'approval-fields' })
+    const row = el('div', { class: 'row' })
+    row.append(el('span', { class: 'k', text: '对象' }))
+    row.append(el('span', { class: 'v', text: part.target }))
+    fields.append(row)
+    card.append(fields)
+  }
   if (resolved) {
-    card.append(el('p', { text: part.status === 'approved' ? '已允许' : '已拒绝' }))
+    const line = el('p', {
+      class: part.status === 'approved' ? 'resolved' : 'resolved denied',
+      text: part.status === 'approved' ? '✓ 已允许' : '✕ 已拒绝',
+    })
+    card.append(line)
     return card
   }
   const actions = el('div', { class: 'approval-actions' })
-  const deny = el('button', { type: 'button', text: '拒绝' })
-  const allow = el('button', { type: 'button', class: 'allow', text: '允许这一次' })
+  const deny = el('button', { type: 'button', class: 'btn-deny', text: '拒绝' })
+  const allow = el('button', { type: 'button', class: 'btn-approve', text: '允许这一次' })
   deny.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'rejected') })
   allow.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'approved') })
   actions.append(deny, allow)
@@ -1815,7 +1848,8 @@ function applyLiveRoomChrome(room) {
   const name = room.name || '房间'
   ROOM.name = name
   const heading = $('#room-name')
-  if (heading) heading.textContent = name
+  const host = room.hostBotId ? (STORE.bots.find((bot) => bot.id === room.hostBotId) || null) : null
+  if (heading) heading.textContent = host && host.name ? host.name : name
   paintRoomPill(room)
   const flockHolder = $('#room-flock')
   if (flockHolder) {
@@ -1924,13 +1958,14 @@ function formatShanghai(iso) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
-  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
   const today = day.format(new Date())
   const that = day.format(date)
-  if (that === today) return clock.format(date)
+  if (that === today) return '今天'
   const yesterday = day.format(new Date(Date.now() - 24 * 60 * 60 * 1000))
   if (that === yesterday) return '昨天'
-  return that.slice(5)
+  const month = Number(that.slice(5, 7))
+  const dateOfMonth = Number(that.slice(8, 10))
+  return `${month}月${dateOfMonth}日`
 }
 
 async function loadRoomPreview(roomId) {
@@ -1977,6 +2012,8 @@ function paintRoomPill(room) {
   const stored = STORE.bots.find((bot) => bot.id === hostId)
   const bot = stored || { id: hostId, name: room.name || 'Bot' }
   slot.replaceChildren(botAvatar(bot, 28, { round: true, primary: room.hostBotId === hostId }))
+  const subtitle = $('#room-subtitle')
+  if (subtitle) subtitle.textContent = room.name ? `房间：${room.name}` : ''
 }
 
 function setupRoomMenu() {
@@ -1988,11 +2025,33 @@ function setupRoomMenu() {
     menu.hidden = !open
     button.setAttribute('aria-expanded', open ? 'true' : 'false')
   })
+  const grid = $('#home-grid')
+  if (grid) {
+    grid.addEventListener('click', () => {
+      const open = menu.hidden
+      menu.hidden = !open
+      grid.setAttribute('aria-expanded', open ? 'true' : 'false')
+      button.setAttribute('aria-expanded', open ? 'true' : 'false')
+    })
+  }
+  const filterRows = (query) => {
+    const needle = query.trim().toLowerCase()
+    document.querySelectorAll('#room-view .home-row').forEach((row) => {
+      const text = (row.textContent || '').toLowerCase()
+      row.hidden = needle !== '' && !text.includes(needle)
+    })
+  }
+  const homeSearch = $('#home-search')
+  const sideSearch = $('#side-search')
+  if (homeSearch) homeSearch.addEventListener('input', () => filterRows(homeSearch.value))
+  if (sideSearch) sideSearch.addEventListener('input', () => filterRows(sideSearch.value))
   document.addEventListener('click', (event) => {
     if (menu.hidden) return
-    if (button.contains(event.target) || menu.contains(event.target)) return
+    const target = event.target
+    if (button.contains(target) || menu.contains(target) || (grid && grid.contains(target))) return
     menu.hidden = true
     button.setAttribute('aria-expanded', 'false')
+    if (grid) grid.setAttribute('aria-expanded', 'false')
   })
 }
 
@@ -2020,6 +2079,13 @@ async function openHome(seq) {
   }
   if (seq !== routeSeq) return
   list.replaceChildren()
+  const heroHost = STORE.bots.find((bot) => STORE.rooms.some((room) => room.hostBotId === bot.id && (room.members || []).length >= 2)) || STORE.bots[0]
+  if (heroHost) {
+    const hero = el('div', { class: 'home-hero' })
+    hero.append(botAvatar(heroHost, 96, { round: true, primary: true }))
+    hero.append(el('div', { class: 'hero-name', text: `${heroHost.name || 'Roost'} · 主 Bot` }))
+    list.append(hero)
+  }
   const entries = conversationEntries()
   if (entries.length === 0) {
     list.append(el('p', { class: 'muted', text: '还没有 Bot。' }))
@@ -2091,7 +2157,8 @@ async function openRoomRoute(id, seq) {
     if (seq !== routeSeq) return
     applyLiveRoomChrome(room)
     renderMessages()
-    setComposerEnabled(true)
+    const hostName = room.hostBotId ? (STORE.bots.find((bot) => bot.id === room.hostBotId)?.name || '') : ''
+    setComposerEnabled(true, hostName ? `向${hostName}提问` : '发一条消息')
     openStream()
     const composer = $('#composer')
     if (composer) composer.focus()
