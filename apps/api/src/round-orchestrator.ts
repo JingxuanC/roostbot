@@ -8,6 +8,7 @@ import type { RoomRound, RoundAssignment, SlotResult } from '../../../contract/s
 import { activeRound, botSession, getRound, listRounds, markSeen, saveRound, seenSeq, setBotSession } from '../../../packages/store/src/rounds.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { kickoffPromptFor } from './kickoff.ts'
+import { noteRoundAdvanced, noteRoundOpened } from './round-signals.ts'
 import { readMessages, sendMessage } from '../../../packages/store/src/rooms.ts'
 import {
   advanceSlot,
@@ -91,6 +92,7 @@ export function openRoundForMessage(input: OpenRoundInput): RoomRound | null {
       }
       const updated = { ...existing, slots }
       saveRound(input.store, updated)
+      noteRoundAdvanced(input.store, existing, updated)
       return updated
     }
     return existing
@@ -110,6 +112,7 @@ export function openRoundForMessage(input: OpenRoundInput): RoomRound | null {
     ...(input.at === undefined ? {} : { at: input.at })
   })
   saveRound(input.store, round)
+  noteRoundOpened(input.store, round)
   return round
 }
 
@@ -238,5 +241,6 @@ export function applyAdvance(input: AdvanceInput): { round: RoomRound; next: num
   const currentIndex = nextSlot(next)
   const finished = currentIndex === null ? finishRound(next, input.now === undefined ? {} : { at: input.now }) : next
   saveRound(input.store, finished)
+  noteRoundAdvanced(input.store, current, finished)
   return { round: finished, next: currentIndex }
 }

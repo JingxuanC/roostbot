@@ -7,6 +7,7 @@
 import { randomBytes } from 'node:crypto'
 import { ROUND_LIMITS } from '../../../packages/contract/src/index.ts'
 import { PairingCodeCollisionError } from './port.ts'
+import { publishRoomWake } from './room-bus.ts'
 import type {
   ClaimPairingCodeInput,
   ClaimPairingCodeResult,
@@ -80,6 +81,7 @@ export function createMemoryStore(): StorePort {
     nextSeq += 1
     messages.get(room.id)?.push(message)
     if (input.idem !== undefined) idemSeen.set(`${room.id}:${input.idem}`, message)
+    publishRoomWake({ roomId: room.id, seq: message.seq, kind: 'chat.message' })
     return { ...message }
   }
 

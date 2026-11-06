@@ -271,6 +271,10 @@ export async function startRoomAgent(options) {
   const log = options.log ?? ((line) => console.log(`[room-agent] ${line}`))
   const botId = options.botId
   const pollMs = options.pollMs ?? 500
+  // 控制面支持 GET /api/internal/events 时用长轮询，不再按 pollMs 空转。
+  // 404/405/501 说明对面还是旧控制面，退回按房间拉 messages。
+  let eventsApi = options.eventsApi !== false
+  const eventWaitMs = Number.isFinite(options.eventWaitMs) ? options.eventWaitMs : 15_000
   const apiBase = String(options.apiBase ?? '').replace(/\/+$/, '')
   const token = options.runtimeToken
   const headers = { 'content-type': 'application/json', 'x-runtime-token': token }
@@ -810,28 +814,102 @@ export async function startRoomAgent(options) {
     }
   }
 
+  function eventsCursor() {
+    if (Number.isSafeInteger(cursors.__events)) return cursors.__events
+    let max = 0
+    for (const [key, value] of Object.entries(cursors)) {
+      if (key.startsWith('__')) continue
+      if (Number.isSafeInteger(value)) max = Math.max(max, value)
+    }
+    return max
+  }
+
+  /**
+   * workspace 级长轮询。返回 null 表示这条路由不可用，调用方退回 pollRoom。
+   * immediateEmpty：请求几乎立刻返回且没有事件（假控制面或空库），外层仍按 pollMs 睡。
+   */
+  async function pollViaEvents(rooms) {
+    if (!eventsApi) return null
+    const after = eventsCursor()
+    const params = new URLSearchParams({
+      after: String(after),
+      waitMs: String(Math.max(0, Math.min(25_000, eventWaitMs)))
+    })
+    const workspaceId = (process.env.ROOST_WORKSPACE_ID ?? options.workspaceId ?? '').trim()
+    if (workspaceId !== '') params.set('workspaceId', workspaceId)
+    const started = Date.now()
+    const response = await request(`/api/internal/events?${params}`)
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      eventsApi = false
+      await response.body?.cancel?.().catch(() => undefined)
+      return null
+    }
+    const text = await response.text().catch(() => '')
+    if (!response.ok) {
+      throw new ControlPlaneError(
+        `/api/internal/events ${response.status}${text === '' ? '' : `: ${text.slice(0, 200)}`}`,
+        { status: response.status, body: text }
+      )
+    }
+    let data
+    try {
+      data = text.trim() === '' ? {} : JSON.parse(text)
+    } catch {
+      throw new ControlPlaneError('/api/internal/events returned invalid JSON', { status: response.status, body: text })
+    }
+    const events = Array.isArray(data?.events) ? data.events : []
+    const roomById = new Map()
+    for (const room of rooms) {
+      if (typeof room?.id === 'string' && room.id !== '') roomById.set(room.id, room)
+    }
+    for (const event of events) {
+      const room = roomById.get(event?.roomId)
+      const message = event?.message
+      if (event?.kind === 'chat.message' && room && message?.actor?.kind === 'user' && Number.isSafeInteger(message.seq)) {
+        const seen = cursors[room.id] ?? 0
+        if (message.seq > seen) {
+          await handleUserMessage(room, roomMembers(room), message)
+        }
+      }
+      if (Number.isSafeInteger(event?.seq)) {
+        cursors.__events = Math.max(cursors.__events ?? 0, event.seq)
+        if (typeof event?.roomId === 'string' && event.roomId !== '' && Number.isSafeInteger(message?.seq)) {
+          cursors[event.roomId] = Math.max(cursors[event.roomId] ?? 0, message.seq)
+        } else if (typeof event?.roomId === 'string' && event.roomId !== '') {
+          cursors[event.roomId] = Math.max(cursors[event.roomId] ?? 0, event.seq)
+        }
+        saveCursors(options.stateFile, cursors)
+      }
+    }
+    return { immediateEmpty: events.length === 0 && Date.now() - started < 50 }
+  }
+
   async function poll() {
     const rooms = await syncRooms()
+    const viaEvents = await pollViaEvents(rooms)
+    if (viaEvents !== null) return viaEvents
     for (const room of rooms) {
       if (typeof room?.id !== 'string' || room.id === '') continue
       await pollRoom(room)
     }
+    return { immediateEmpty: true }
   }
 
   async function loop() {
     let delay = backoffBaseMs
     while (!stopped) {
       try {
-        await poll()
+        const result = await poll()
         delay = backoffBaseMs
+        // 长轮询已经等过，或者刚拿到事件：马上再看一眼。
+        // 旧控制面（或空响应立刻返回）仍按 pollMs 睡，和原来的紧轮询一样。
+        if (result?.immediateEmpty) await sleep(pollMs)
       } catch (error) {
         // 控制面不可达：一行日志 + 指数退避，恢复后重置（不退出进程）。
         log(`poll failed: ${errorMessage(error)}`)
         await sleep(delay)
         delay = nextBackoff(delay, { baseMs: backoffBaseMs, maxMs: backoffMaxMs })
-        continue
       }
-      await sleep(pollMs)
     }
   }
 
