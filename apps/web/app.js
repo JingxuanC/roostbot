@@ -18,7 +18,7 @@ import { $, avatar, botAvatar, el } from './lib/dom.js'
 import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
-import { isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
+import { csrfHeaders, csrfTokenFromCookie, isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
 import {
   clearSessionToken,
   readLastRoom,
@@ -3111,6 +3111,8 @@ function setupComposer() {
             authorization: LIVE.token ? `Bearer ${LIVE.token}` : '',
             'content-type': chosen.type || 'application/octet-stream',
             'x-artifact-name': chosen.name || 'image',
+            // 账号 cookie 会话的上传也是写请求，必须带 CSRF 头；否则服务端 403。
+            ...csrfHeaders('POST', csrfTokenFromCookie(document.cookie)),
           },
           body: chosen,
         })
