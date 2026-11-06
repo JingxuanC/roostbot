@@ -6,7 +6,7 @@
 //
 // 用法：
 //   node --experimental-strip-types scripts/browser-e2e.mjs \
-//     --base http://47.90.253.85:8792 --headful false
+//     --base http://127.0.0.1:8787 --headful false
 //
 // 可选：
 //   --code 123456            直接用一个有效配对码（5 分钟内、未使用）
@@ -40,7 +40,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 
 function parseArgs(argv) {
   const out = {
-    base: 'http://47.90.253.85:8792',
+    base: 'http://127.0.0.1:8787',
     headful: false,
     code: '',
     sessionToken: '',

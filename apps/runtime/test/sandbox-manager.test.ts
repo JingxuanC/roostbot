@@ -22,7 +22,7 @@ test('沙箱名固定为 user-<8hex>，且不超过 19 字符', () => {
 
 test('策略放行控制面：host:port + tcp（无方法）', () => {
   const yaml = userSandboxPolicy({ host: 'host.openshell.internal', port: 8792 })
-  assert.match(yaml, /host: host\.openshell\.internal/)
+  assert.match(yaml, /host: "host\.openshell\.internal"/)
   assert.match(yaml, /port: 8792/)
   assert.match(yaml, /protocol: tcp/)
   // 除了控制面，不应该有任何其他端点

@@ -81,11 +81,15 @@ export function appendEvent(store: Store, event: NewEvent): Event {
   const v = input.v === undefined || input.v === null ? 1 : asInteger(input.v, 'event.v', 1, 'INVALID_EVENT')
   const traceJson = encodeObject(input.trace, 'event.trace')
   const payloadJson = encodeObject(input.payload, 'event.payload') ?? '{}'
+  // 库里的 idem 带上 audience + actor，避免跨房间/跨租户占用同一个客户端 idem。
+  // 读出来仍是调用方给的原文（见 rowToEvent）。
+  const idemStored = idem === null ? null : scopeIdem(audience, actor, idem)
 
-  // 幂等：先读一次；写冲突时（并发同 idem）再读一次并返回已有事件。
-  if (idem !== null) {
-    const existing = eventByIdem(store, idem)
-    if (existing !== null) return existing
+  if (idem !== null && idemStored !== null) {
+    const existing = eventByStoredIdem(store, idemStored)
+    if (existing !== null) return reuseIdempotent(existing, domain, kind)
+    const legacy = eventByStoredIdem(store, idem)
+    if (legacy !== null && sameIdemScope(legacy, audience, actor)) return reuseIdempotent(legacy, domain, kind)
   }
 
   if (parent !== null && !eventExists(store, parent)) {
@@ -107,16 +111,16 @@ export function appendEvent(store: Store, event: NewEvent): Event {
         subject === null ? null : JSON.stringify(subject),
         audience,
         parent,
-        idem,
+        idemStored,
         traceJson,
         payloadJson,
         v,
       )
   } catch (err) {
     const message = errorMessage(err)
-    if (idem !== null && message.includes('events.idem')) {
-      const existing = eventByIdem(store, idem)
-      if (existing !== null) return existing
+    if (idem !== null && idemStored !== null && message.includes('events.idem')) {
+      const existing = eventByStoredIdem(store, idemStored)
+      if (existing !== null) return reuseIdempotent(existing, domain, kind)
     }
     if (message.includes('events.id')) {
       throw new StoreError('EVENT_ID_CONFLICT', `event id already exists: ${id}`, { cause: err })
@@ -194,7 +198,48 @@ export function latestSeq(store: Store): number {
   return toNumber(row.seq)
 }
 
-function eventByIdem(store: Store, idem: string): Event | null {
+const IDEM_SEP = '\u001f'
+
+/** 作用域化的存储键。客户端 idem 本身不能含控制字符，避免和分隔符混淆。 */
+function scopeIdem(
+  audience: string | null,
+  actor: { kind: string; id: string } | null,
+  idem: string,
+): string {
+  if (idem.length > 200 || /[\u0000-\u001f\u007f]/.test(idem)) {
+    throw new StoreError('INVALID_EVENT', 'event.idem must be 1..200 characters without control characters')
+  }
+  const actorKey = actor === null ? '' : JSON.stringify({ kind: actor.kind, id: actor.id })
+  return `${audience ?? ''}${IDEM_SEP}${actorKey}${IDEM_SEP}${idem}`
+}
+
+function clientIdem(stored: string | null): string | null {
+  if (stored === null) return null
+  const parts = stored.split(IDEM_SEP)
+  return parts.length === 3 ? parts[2]! : stored
+}
+
+function sameIdemScope(
+  event: Event,
+  audience: string | null,
+  actor: { kind: string; id: string } | null,
+): boolean {
+  if ((event.audience ?? null) !== (audience ?? null)) return false
+  if (event.actor === null || actor === null) return event.actor === null && actor === null
+  return event.actor.kind === actor.kind && event.actor.id === actor.id
+}
+
+function reuseIdempotent(existing: Event, domain: string, kind: string): Event {
+  if (existing.domain !== domain || existing.kind !== kind) {
+    throw new StoreError(
+      'IDEM_CONFLICT',
+      `idem is already used by ${existing.domain}/${existing.kind} in this scope`,
+    )
+  }
+  return existing
+}
+
+function eventByStoredIdem(store: Store, idem: string): Event | null {
   const row = store.db.prepare(`SELECT ${COLUMNS} FROM events WHERE idem = ?`).get(idem)
   if (row === undefined || row === null) return null
   return rowToEvent(row)
@@ -263,7 +308,7 @@ function rowToEvent(row: unknown): Event {
     subject: subject as unknown as Subject | null,
     audience: r.audience,
     parent: r.parent === null || r.parent === undefined ? null : toNumber(r.parent),
-    idem: r.idem,
+    idem: clientIdem(r.idem),
     trace: decodeObject(r.trace_json, 'trace_json', seq),
     v: toNumber(r.v),
     payload: decodeObject(r.payload_json, 'payload_json', seq) ?? {},

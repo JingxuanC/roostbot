@@ -102,7 +102,8 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
     payload: { roomId, text, role: actor.kind === 'user' ? 'user' : 'bot' },
   })
 
-  return { seq: event.seq, at: event.at, actor, roomId, text }
+  const storedText = typeof event.payload['text'] === 'string' ? event.payload['text'] : text
+  return { seq: event.seq, at: event.at, actor: event.actor ?? actor, roomId, text: storedText }
 }
 
 /** 读房间消息，按 seq 升序；afterSeq 用于增量补拉（SSE 断线重连）。 */

@@ -66,7 +66,10 @@ test('超时的 probe 记 down，detail 说明超时', async () => {
     timeoutMs: 10,
     probes: {
       api: () => ({ ok: true }),
-      sandbox: () => new Promise(() => {})
+      // 比 timeoutMs 更晚才落定，用来证明探针被掐掉；不能永远挂着，否则测试进程退不掉。
+      sandbox: () => new Promise((resolve) => {
+        setTimeout(() => resolve({ ok: true }), 40)
+      })
     }
   })
   assert.equal(report.status, 'down')

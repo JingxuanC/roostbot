@@ -441,7 +441,8 @@ export async function handleInternalConnectorCall(
     botId,
     slug,
     access: grant.access,
-    ...(grant.actions === null ? {} : { actions: grant.actions }),
+    // 旧数据用 NULL 表示「该 access 下全部动作」。函数层空列表是拒绝，所以这里写成显式 *。
+    actions: grant.actions === null ? ['*'] : grant.actions,
   }
   if (!isActionGranted(backendGrant, action)) return deny('action_not_granted')
 
