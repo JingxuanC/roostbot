@@ -1274,12 +1274,15 @@ function messageJson(
   }
 }
 
+/** `<img>` 不能带 Bearer。消息里的图片换成这么久的签名地址。 */
+const MESSAGE_IMAGE_TTL_SECONDS = 120
+
 /** 批量给消息挂上附件；只有 SQLite store 可用时才查（memory harness 不查）。 */
-function messagesJson(
+async function messagesJson(
   ctx: HandlerContext,
   messages: RoomMessageRecord[],
   roomId?: string,
-): Record<string, unknown>[] {
+): Promise<Record<string, unknown>[]> {
   if (ctx.rawStore === undefined || messages.length === 0) {
     return messages.map((message) => messageJson(message))
   }
@@ -1296,11 +1299,62 @@ function messagesJson(
     console.error('roost api: failed to load message attachments', error)
     grouped = new Map()
   }
-  return messages.map((message) => {
+  const jsons = messages.map((message) => {
     const json = messageJson(message, grouped.get(message.seq) ?? [])
     if (roomId === undefined || ctx.rawStore === undefined || !Array.isArray(json.parts)) return json
     return { ...json, parts: decorateParts(ctx.rawStore, roomId, json.parts as never) }
   })
+  await signMessageImages(ctx, jsons)
+  return jsons
+}
+
+/**
+ * 成员校验通过之后才签名。陌生人拿不到这条响应，也就拿不到 token。
+ * 签名失败时保留原来的成员路径，不把整条消息打成 500。
+ */
+async function signMessageImages(ctx: HandlerContext, jsons: Record<string, unknown>[]): Promise<void> {
+  const content = ctx.attachments?.content
+  if (content === undefined) return
+  const signed = new Map<string, string>()
+  const urlFor = async (artifactId: string): Promise<string | null> => {
+    const cached = signed.get(artifactId)
+    if (cached !== undefined) return cached
+    try {
+      const url = await content.signRead(artifactId, MESSAGE_IMAGE_TTL_SECONDS)
+      signed.set(artifactId, url)
+      return url
+    } catch (error) {
+      console.error('roost api: failed to sign message image', error)
+      return null
+    }
+  }
+  for (const json of jsons) {
+    if (Array.isArray(json.attachments)) {
+      for (const item of json.attachments) {
+        if (item === null || typeof item !== 'object') continue
+        const artifactId = (item as { artifactId?: unknown }).artifactId
+        if (typeof artifactId !== 'string' || artifactId === '') continue
+        const url = await urlFor(artifactId)
+        if (url !== null) (item as { url: string }).url = url
+      }
+    }
+    if (!Array.isArray(json.parts)) continue
+    const next = []
+    for (const part of json.parts) {
+      if (part === null || typeof part !== 'object') {
+        next.push(part)
+        continue
+      }
+      const image = part as { type?: unknown; artifactId?: unknown }
+      if (image.type === 'image' && typeof image.artifactId === 'string' && image.artifactId !== '') {
+        const url = await urlFor(image.artifactId)
+        next.push(url === null ? part : { ...image, url })
+      } else {
+        next.push(part)
+      }
+    }
+    json.parts = next
+  }
 }
 
 
@@ -1358,14 +1412,14 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
         ctx.store.readMessagesInternal({ roomId, afterSeq }),
       )
       if (res.writableEnded || req.destroyed) return
-      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages) })
       return
     }
     // 首看/向前翻页走裁剪投影（rooms.md §3：保留 60、首看 12）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLogInternal({ roomId, ...query })
-    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1403,8 +1457,9 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
     }
     try {
       const posted = postCard({ store: ctx.rawStore, roomId, botId, text, card })
+      const [postedJson] = await messagesJson(ctx, [messageRecordFromRoom(posted.message)], roomId)
       sendJson(res, 201, {
-        message: messagesJson(ctx, [messageRecordFromRoom(posted.message)], roomId)[0],
+        message: postedJson,
         cardId: posted.cardId,
         ...(posted.approvalId === undefined ? {} : { approvalId: posted.approvalId }),
         round: posted.round,
@@ -1420,7 +1475,8 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   try {
     const message = await ctx.store.postBotMessage({ roomId, botId, text, ...(idem === undefined ? {} : { idem }) })
-    sendJson(res, 201, { message: messagesJson(ctx, [message], roomId)[0] })
+    const [postedJson] = await messagesJson(ctx, [message], roomId)
+    sendJson(res, 201, { message: postedJson })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1494,14 +1550,14 @@ async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, r
     if (afterSeq !== undefined) {
       // 增量路径（SSE 断线补拉）不受裁剪影响：after 之后照单全收。
       const messages = await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, afterSeq })
-      sendJson(res, 200, { messages: messagesJson(ctx, messages, roomId) })
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages, roomId) })
       return
     }
     // 首看给最近 12 条；before 游标向前翻，最多翻到最近 60 条（rooms.md §3）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLog({ accountId: auth.session.accountId, roomId, ...query })
-    sendJson(res, 200, { messages: messagesJson(ctx, page.messages, roomId), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages, roomId), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1564,11 +1620,12 @@ async function handleAnswerCard(ctx: RoomRouteContext, req: IncomingMessage, res
       accountId: auth.session.accountId,
       at: ctx.now(),
     })
+    const [answeredJson] = await messagesJson(ctx, [messageRecordFromRoom(result.message)], roomId)
     sendJson(res, 200, {
       optionId: result.optionId,
       label: result.label,
       alreadyAnswered: result.alreadyAnswered,
-      message: messagesJson(ctx, [messageRecordFromRoom(result.message)], roomId)[0],
+      message: answeredJson,
       round: result.round,
     })
   } catch (err) {
@@ -1656,7 +1713,8 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
         console.error('roost api: failed to open round', error)
       }
     }
-    sendJson(res, 201, { message: messagesJson(ctx, [message], roomId)[0] })
+    const [postedJson] = await messagesJson(ctx, [message], roomId)
+    sendJson(res, 201, { message: postedJson })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1737,7 +1795,7 @@ async function writeRoomStream(
       afterSeq: input.afterSeq,
       limit: 200,
     })
-    const batchJson = messagesJson(ctx, batch, input.roomId)
+    const batchJson = await messagesJson(ctx, batch, input.roomId)
     let lastSeq = input.afterSeq
     for (let index = 0; index < batch.length; index += 1) {
       const message = batch[index]!
@@ -1758,7 +1816,7 @@ async function writeRoomStream(
   const events = readRoomEvents(ctx.rawStore, { roomId: input.roomId, afterSeq: input.afterSeq, limit: 200 })
   if (events.length === 0) return { count: 0, lastSeq: input.afterSeq }
   const chatRecords = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
-  const chatJson = messagesJson(ctx, chatRecords, input.roomId)
+  const chatJson = await messagesJson(ctx, chatRecords, input.roomId)
   let chatIndex = 0
   let lastSeq = input.afterSeq
   for (const event of events) {
@@ -1891,7 +1949,7 @@ async function handleInternalEvents(ctx: RoomRouteContext, req: IncomingMessage,
     )
     if (res.writableEnded || req.destroyed) return
     const chat = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
-    const chatJson = messagesJson(ctx, chat)
+    const chatJson = await messagesJson(ctx, chat)
     let chatIndex = 0
     sendJson(res, 200, {
       events: events.map((event) =>

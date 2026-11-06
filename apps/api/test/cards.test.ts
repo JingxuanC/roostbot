@@ -241,10 +241,18 @@ test('HTTP：发图、答题、别的租户不能代答', async () => {
     })
     assert.equal(imageMessage.status, 201, await imageMessage.clone().text())
     const imageBody = (await imageMessage.json()) as {
-      message: { parts?: Array<{ type: string; artifactId?: string }>; attachments: Array<{ artifactId: string }> }
+      message: {
+        parts?: Array<{ type: string; artifactId?: string; url?: string }>
+        attachments: Array<{ artifactId: string; url?: string }>
+      }
     }
     assert.equal(imageBody.message.attachments[0]?.artifactId, artifactId)
-    assert.ok(imageBody.message.parts?.some((part) => part.type === 'image' && part.artifactId === artifactId))
+    const imagePart = imageBody.message.parts?.find((part) => part.type === 'image' && part.artifactId === artifactId)
+    assert.ok(imagePart)
+    assert.match(imagePart?.url ?? '', /^\/api\/attachments\/[0-9a-f]{32}\?token=/)
+    const img = await fetch(`${started.url}${imagePart?.url}`)
+    assert.equal(img.status, 200)
+    assert.equal(imageBody.message.attachments[0]?.url, imagePart?.url)
 
     const said = await fetch(`${started.url}/api/rooms/${roomId}/say`, {
       method: 'POST',

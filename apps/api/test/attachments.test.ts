@@ -188,9 +188,14 @@ test('产物登记 → 消息附件 → 消息级授权 + Range + raw 下载', a
     }
     const message = body.messages.find((item) => item.seq === seq)!
     assert.deepEqual(message.attachments.map((item) => [item.artifactId, item.kind]), [[artifact.id, 'image']])
-    assert.equal(message.attachments[0]!.url, `/api/messages/${seq}/files/${artifact.id}`)
+    assert.match(message.attachments[0]!.url, new RegExp(`^/api/attachments/${artifact.id}\\?token=`))
 
-    const url = `${base}${message.attachments[0]!.url}`
+    // `<img>` 不带 Authorization。签名地址本身就能读。
+    const bare = await fetch(`${base}${message.attachments[0]!.url}`)
+    assert.equal(bare.status, 200)
+    assert.deepEqual([...new Uint8Array(await bare.arrayBuffer())], [...bytes])
+
+    const url = `${base}/api/messages/${seq}/files/${artifact.id}`
     const file = await fetch(url, { headers: { authorization: `Bearer ${owner.token}` } })
     assert.equal(file.status, 200)
     assert.equal(file.headers.get('content-type'), 'image/png')
@@ -222,6 +227,63 @@ test('产物登记 → 消息附件 → 消息级授权 + Range + raw 下载', a
       headers: { authorization: `Bearer ${owner.token}` },
     })
     assert.equal(unlinked.status, 404)
+  })
+})
+
+test('消息图片签名 URL：不带 Bearer 可读，别的 workspace 拿不到 token', async () => {
+  await withApi(async ({ base, clock }) => {
+    const owner = await pair(base, 'acc_img_a', true)
+    const stranger = await pair(base, 'acc_img_b', true)
+    const { roomId, seq } = await seedRoom(base, owner.token, owner.workspaceId)
+    const bytes = png(24, 24)
+    const uploaded = await uploadArtifact(base, {
+      workspaceId: owner.workspaceId,
+      body: bytes,
+      mime: 'image/png',
+      messageSeq: seq,
+    })
+    const artifactId = ((await uploaded.json()) as { artifact: { id: string } }).artifact.id
+    const otherUpload = await uploadArtifact(base, {
+      workspaceId: stranger.workspaceId,
+      body: png(8, 8),
+      mime: 'image/png',
+    })
+    const otherId = ((await otherUpload.json()) as { artifact: { id: string } }).artifact.id
+
+    const read = await fetch(`${base}/api/rooms/${roomId}/messages`, {
+      headers: { authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(read.status, 200)
+    const body = (await read.json()) as {
+      messages: Array<{ seq: number; attachments: Array<{ url: string }> }>
+    }
+    const url = body.messages.find((item) => item.seq === seq)?.attachments[0]?.url ?? ''
+    assert.match(url, new RegExp(`^/api/attachments/${artifactId}\\?token=`))
+    const open = await fetch(`${base}${url}`)
+    assert.equal(open.status, 200)
+    assert.deepEqual([...new Uint8Array(await open.arrayBuffer())], [...bytes])
+
+    const stolen = await fetch(`${base}/api/rooms/${roomId}/messages`, {
+      headers: { authorization: `Bearer ${stranger.token}` },
+    })
+    assert.notEqual(stolen.status, 200)
+    const stolenText = await stolen.text()
+    assert.equal(stolenText.includes(url.slice(url.indexOf('token='))), false)
+
+    const unsigned = await fetch(`${base}/api/messages/${seq}/files/${artifactId}`)
+    assert.equal(unsigned.status, 401)
+    const strangerFile = await fetch(`${base}/api/messages/${seq}/files/${artifactId}`, {
+      headers: { authorization: `Bearer ${stranger.token}` },
+    })
+    assert.equal(strangerFile.status, 404)
+
+    const swapped = url.replace(artifactId, otherId)
+    const crossed = await fetch(`${base}${swapped}`)
+    assert.equal(crossed.status, 403)
+
+    clock.advance(121_000)
+    const expired = await fetch(`${base}${url}`)
+    assert.equal(expired.status, 403)
   })
 })
 
