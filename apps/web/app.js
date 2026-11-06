@@ -477,9 +477,8 @@ function renderRoomMessage(event) {
   const bubble = el('div', { class: 'bubble bubble-bot' })
   const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : ''
   const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
-  const choice = parts.find((part) => part && part.type === 'choice')
-  const question = choice && typeof choice.prompt === 'string' ? choice.prompt.trim() : ''
-  if (text !== '' && text !== question) bubble.append(markdownFragment(event.payload.text))
+  const titles = cardTitles(parts)
+  if (text !== '' && !titles.includes(text)) bubble.append(markdownFragment(event.payload.text))
   if (bubble.childNodes.length > 0) article.append(bubble)
   appendRichParts(article, event, false)
   if (!hasImagePart(event.payload)) {
@@ -490,6 +489,17 @@ function renderRoomMessage(event) {
 }
 
 const CHOICE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+/** 卡片标题已经画在卡片上。正文如果只是同一句话，就不再画一条气泡。 */
+function cardTitles(parts) {
+  const titles = []
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    if (typeof part.title === 'string' && part.title.trim() !== '') titles.push(part.title.trim())
+    if (typeof part.prompt === 'string' && part.prompt.trim() !== '') titles.push(part.prompt.trim())
+  }
+  return titles
+}
 
 function hasImagePart(payload) {
   return Array.isArray(payload?.parts) && payload.parts.some((part) => part && part.type === 'image')
