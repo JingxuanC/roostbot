@@ -178,6 +178,25 @@ export type {
   TickResult,
   UpdateScheduleInput,
 } from './schedules.ts'
+export {
+  claimDueRoutines,
+  createRoutine,
+  deleteRoutine,
+  enqueueRoutineNow,
+  finishRoutineRun,
+  getRoutine,
+  getRoutineRun,
+  listRoutineRuns,
+  listRoutines,
+  updateRoutine,
+} from './routines.ts'
+export type {
+  CreateRoutineInput,
+  Routine,
+  RoutineRun,
+  RoutineRunStatus,
+  UpdateRoutineInput,
+} from './routines.ts'
 export type { RuntimePhase, WorkspaceRuntime } from './workspace-runtime.ts'
 
 export { createDmRoom, findDmRoom } from './dm.ts'

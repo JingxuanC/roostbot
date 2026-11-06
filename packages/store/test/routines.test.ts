@@ -1,0 +1,114 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+
+import { createBot } from '../src/bots.ts'
+import { readRoomEvents } from '../src/room-log.ts'
+import { readMessages } from '../src/rooms.ts'
+import { createRoomExt } from '../src/rooms-ext.ts'
+import {
+  claimDueRoutines,
+  createRoutine,
+  finishRoutineRun,
+  getRoutine,
+} from '../src/routines.ts'
+import { openStore } from '../src/store.ts'
+import { createWorkspace } from '../src/workspaces.ts'
+import { executeRoutineRun } from '../../../apps/api/src/routine-worker.ts'
+
+const AT = Date.parse('2026-11-06T00:00:00.000Z')
+
+function setup() {
+  const store = openStore(':memory:')
+  const workspace = createWorkspace(store, { tenantId: 'tenant_1', name: '研究', profileVersion: 'dev', createdAt: AT })
+  const bot = createBot(store, {
+    workspaceId: workspace.id,
+    name: '数据官',
+    role: '数据',
+    model: 'deepseek-chat',
+    createdBy: 'acc_1',
+  })
+  const peer = createBot(store, {
+    workspaceId: workspace.id,
+    name: '风控',
+    role: '风控',
+    model: 'deepseek-chat',
+    createdBy: 'acc_1',
+  })
+  const room = createRoomExt(store, {
+    workspaceId: workspace.id,
+    memberBotIds: [bot.id, peer.id],
+    hostBotId: bot.id,
+    createdBy: 'acc_1',
+  })
+  return { store, workspace, bot, room: room.room }
+}
+
+test('默认时区是 Asia/Shanghai，到点只发 routine.fired，runner 看不到聊天记录', async () => {
+  const { store, workspace, bot, room } = setup()
+  try {
+    const routine = createRoutine(store, {
+      workspaceId: workspace.id,
+      botId: bot.id,
+      name: '盘前',
+      cron: 'every 3600',
+      prompt: '只报告异动',
+      roomId: room.id,
+      at: AT,
+    })
+    assert.equal(routine.timezone, 'Asia/Shanghai')
+    assert.equal(routine.nextRunAt, AT + 3600_000)
+
+    const tooSoon = claimDueRoutines(store, AT + 1000)
+    assert.equal(tooSoon.length, 0)
+
+    const claimed = claimDueRoutines(store, AT + 3600_000)
+    assert.equal(claimed.length, 1)
+    const events = readRoomEvents(store, { roomId: room.id, afterSeq: 0 })
+    assert.ok(events.some((event) => event.kind === 'schedule.routine.fired' && event.payload.runId === claimed[0]!.id))
+    const before = readMessages(store, { roomId: room.id }).length
+
+    const seen: string[] = []
+    const posted = await executeRoutineRun(store, claimed[0]!, async (job) => {
+      seen.push(job.prompt)
+      assert.equal('messages' in job, false)
+      assert.deepEqual(Object.keys(job).sort(), ['botId', 'prompt', 'roomId', 'routineId', 'runId', 'scheduledFor'])
+      return { text: '无异动' }
+    })
+    assert.deepEqual(seen, ['只报告异动'])
+    assert.equal(posted.status, 'posted')
+    const messages = readMessages(store, { roomId: room.id })
+    assert.equal(messages.length, before + 1)
+    assert.equal(messages.at(-1)?.text, '无异动')
+    assert.equal(messages.at(-1)?.actor?.id, bot.id)
+
+    const again = claimDueRoutines(store, AT + 3600_000)
+    assert.equal(again.length, 0)
+    assert.equal(getRoutine(store, routine.id)?.nextRunAt, AT + 7200_000)
+  } finally {
+    store.close()
+  }
+})
+
+test('runner 没有可报告的内容时房间不出现新消息', async () => {
+  const { store, workspace, bot, room } = setup()
+  try {
+    const routine = createRoutine(store, {
+      workspaceId: workspace.id,
+      botId: bot.id,
+      name: '静默',
+      cron: 'every 60',
+      prompt: '没事就别说',
+      roomId: room.id,
+      at: AT,
+    })
+    const claimed = claimDueRoutines(store, routine.nextRunAt)
+    const before = readMessages(store, { roomId: room.id }).length
+    const finished = await executeRoutineRun(store, claimed[0]!, async () => ({ text: '   ' }))
+    assert.equal(finished.status, 'silent')
+    assert.equal(readMessages(store, { roomId: room.id }).length, before)
+    const replay = finishRoutineRun(store, finished.id, '不该再发')
+    assert.equal(replay.status, 'silent')
+  } finally {
+    store.close()
+  }
+})

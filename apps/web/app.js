@@ -53,6 +53,7 @@ import { mountMarketplacePage } from './views/marketplace.js'
 import { mountConnectorsPage } from './views/connectors.js'
 import { mountPluginsPage } from './views/plugins.js'
 import { mountSchedulesPage } from './views/schedules.js'
+import { mountRoutinesPage } from './views/routines.js'
 import { mountSettingsPage } from './views/settings.js'
 import { mountUsagePage } from './views/usage.js'
 import { mountInstallsPage } from './views/installs.js'
@@ -1549,6 +1550,10 @@ async function renderRoute() {
     case 'schedules':
       setTitle('定时任务')
       await mountSchedulesPage(main, ctx)
+      break
+    case 'routines':
+      setTitle('房间定时')
+      await mountRoutinesPage(main, ctx)
       break
     case 'connectors':
       setTitle('连接器')
