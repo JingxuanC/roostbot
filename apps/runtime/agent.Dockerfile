@@ -16,6 +16,7 @@ RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" && npm cache clean --force 
 COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
 # routine 隔离回合的纯函数；room-agent import 它，漏 COPY 会在沙箱里启动即崩。
 COPY apps/runtime/routine-turn.mjs /opt/roost/routine-turn.mjs
+COPY apps/runtime/turn-grace.mjs /opt/roost/turn-grace.mjs
 # room-agent 的 dsh web 子进程封装（插件面板容器，ADR 0004）；缺这个文件 room-agent 起不来。
 COPY apps/runtime/dsh-web.mjs /opt/roost/dsh-web.mjs
 # 审批桥：启动 dsh 前由 room-agent 装进 $DSH_HOME/profiles/<profile>（TODO 5.4.3）。
