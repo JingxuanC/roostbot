@@ -17,10 +17,22 @@ export const EVENT_DOMAINS = [
 
 export type EventDomain = (typeof EVENT_DOMAINS)[number]
 
-/** 每个 domain 允许的 kind。events.md §4 列出的就是全部，不额外扩展。 */
+/**
+ * 每个 domain 允许的 kind。events.md §4 是基线；
+ * architecture-v2.md 只追加 kind（message.delta、round、speaking），不改旧语义。
+ */
 export const EVENT_KINDS_BY_DOMAIN = {
-  chat: ['chat.message', 'chat.message.edited', 'chat.unread'],
-  turn: ['turn.started', 'turn.step', 'turn.completed', 'turn.failed', 'turn.interrupted'],
+  chat: ['chat.message', 'chat.message.edited', 'chat.unread', 'chat.message.delta'],
+  turn: [
+    'turn.started',
+    'turn.step',
+    'turn.completed',
+    'turn.failed',
+    'turn.interrupted',
+    'turn.round.started',
+    'turn.round.ended',
+    'turn.speaking',
+  ],
   tool: ['tool.call', 'tool.result', 'tool.denied'],
   approval: ['approval.requested', 'approval.decided'],
   assignment: [

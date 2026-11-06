@@ -102,6 +102,17 @@ export function replyIdem(roomId, seq, botId) {
   return `reply-${roomId}-${seq}-${botId}`
 }
 
+/**
+ * 本次助手文本相对已推送前缀的增量。
+ * 新文本是旧文本的延长就只返回多出来的那段；否则整段重发（模型改写了前缀）。
+ */
+export function deltaSlice(previous, next) {
+  if (typeof next !== 'string' || next === '') return ''
+  const prev = typeof previous === 'string' ? previous : ''
+  if (next.startsWith(prev)) return next.slice(prev.length)
+  return next
+}
+
 /** 从 session.event 里取助手文本（assistant/message 的 text blocks）。 */
 export function assistantText(event) {
   if (event === undefined || event.type !== 'assistant/message') return undefined
@@ -271,6 +282,10 @@ export async function startRoomAgent(options) {
   const log = options.log ?? ((line) => console.log(`[room-agent] ${line}`))
   const botId = options.botId
   const pollMs = options.pollMs ?? 500
+  // 控制面支持 GET /api/internal/events 时用长轮询，不再按 pollMs 空转。
+  // 404/405/501 说明对面还是旧控制面，退回按房间拉 messages。
+  let eventsApi = options.eventsApi !== false
+  const eventWaitMs = Number.isFinite(options.eventWaitMs) ? options.eventWaitMs : 15_000
   const apiBase = String(options.apiBase ?? '').replace(/\/+$/, '')
   const token = options.runtimeToken
   const headers = { 'content-type': 'application/json', 'x-runtime-token': token }
@@ -343,9 +358,34 @@ export async function startRoomAgent(options) {
       .catch(() => null) // startDshWeb 契约上不抛；兜底避免 unhandled rejection
   }
 
+  // sessionId → 正在生成的房间。文本变长就 POST message.delta，不等整段说完。
+  const streaming = new Map()
+  let deltasEnabled = true
+
+  async function postDelta(roomId, botId, delta) {
+    if (!deltasEnabled || typeof delta !== 'string' || delta === '') return
+    let response
+    try {
+      response = await request(`/api/internal/rooms/${encodeURIComponent(roomId)}/deltas`, {
+        method: 'POST',
+        body: JSON.stringify({ botId, delta })
+      })
+    } catch {
+      return
+    }
+    if (response.status === 404 || response.status === 405 || response.status === 501) deltasEnabled = false
+    await response.text().catch(() => '')
+  }
+
   rpc.on('session.event', (params) => {
     const text = assistantText(params?.event)
-    if (text !== undefined) assistant.set(params.sessionId, text)
+    if (text === undefined) return
+    assistant.set(params.sessionId, text)
+    const live = streaming.get(params.sessionId)
+    if (live === undefined) return
+    const delta = deltaSlice(live.sent, text)
+    live.sent = text
+    if (delta !== '') void postDelta(live.roomId, live.botId, delta)
   })
   rpc.on('session.status', (params) => {
     if (typeof params?.sessionId !== 'string') return
@@ -404,9 +444,12 @@ export async function startRoomAgent(options) {
   }
 
   /** 投一条 prompt，等 idle，返回助手文本（可能为空）；被 stop 时提前返回 stopped。 */
-  async function runTurn(sessionId, text, signal) {
+  async function runTurn(sessionId, text, signal, streamTo) {
     await prepareSession(sessionId)
     assistant.delete(sessionId)
+    if (streamTo && typeof streamTo.roomId === 'string' && typeof streamTo.botId === 'string') {
+      streaming.set(sessionId, { roomId: streamTo.roomId, botId: streamTo.botId, sent: '' })
+    }
     const idle = idleSignal(sessionId)
     const stop = stopSignalPromise(signal)
     const limits = graceLimitsFromEnv()
@@ -449,6 +492,7 @@ export async function startRoomAgent(options) {
         timedOut: outcome === 'deadline'
       }
     } finally {
+      streaming.delete(sessionId)
       stop.cancel()
       idle.cancel()
       deadline.cancel()
@@ -457,10 +501,10 @@ export async function startRoomAgent(options) {
   }
 
   /** 一个 slot 的执行结果；会话丢失记 failed(SESSION)，用户停止记 missed，其余按文本归类。 */
-  async function runSlot(sessionId, prompt, messageText, signal) {
+  async function runSlot(sessionId, prompt, messageText, signal, streamTo) {
     const text = typeof prompt === 'string' && prompt.trim() !== '' ? prompt : `房间里有人说：${messageText}`
     try {
-      const { answer, idle, stopped: wasStopped } = await runTurn(sessionId, text, signal)
+      const { answer, idle, stopped: wasStopped } = await runTurn(sessionId, text, signal, streamTo)
       // 用户停止当前成员：不重跑这个 slot，按 missed 收尾，轮次继续（docs/design/rooms.md §10）。
       if (wasStopped === true) return { kind: 'missed' }
       if (answer !== undefined) return classifySlotResult(answer)
@@ -720,7 +764,10 @@ export async function startRoomAgent(options) {
       const watch = watchSlotStop(assignment.roomId ?? roomId, assignment.index)
       let result
       try {
-        result = await runSlot(sessionId, assignment.prompt, message.text, watch?.signal)
+        result = await runSlot(sessionId, assignment.prompt, message.text, watch?.signal, {
+          roomId: assignment.roomId ?? roomId,
+          botId: assignment.botId ?? botId
+        })
       } finally {
         watch?.cancel()
       }
@@ -734,7 +781,7 @@ export async function startRoomAgent(options) {
     const sessionId = sessionIdFor(roomId, botId)
     let answer
     try {
-      const turn = await runTurn(sessionId, `房间里有人说：${message.text}`)
+      const turn = await runTurn(sessionId, `房间里有人说：${message.text}`, undefined, { roomId, botId })
       answer = turn.answer
     } catch (error) {
       log(`turn failed for ${sessionId} seq ${message.seq}: ${errorMessage(error)}`)
@@ -810,28 +857,102 @@ export async function startRoomAgent(options) {
     }
   }
 
+  function eventsCursor() {
+    if (Number.isSafeInteger(cursors.__events)) return cursors.__events
+    let max = 0
+    for (const [key, value] of Object.entries(cursors)) {
+      if (key.startsWith('__')) continue
+      if (Number.isSafeInteger(value)) max = Math.max(max, value)
+    }
+    return max
+  }
+
+  /**
+   * workspace 级长轮询。返回 null 表示这条路由不可用，调用方退回 pollRoom。
+   * immediateEmpty：请求几乎立刻返回且没有事件（假控制面或空库），外层仍按 pollMs 睡。
+   */
+  async function pollViaEvents(rooms) {
+    if (!eventsApi) return null
+    const after = eventsCursor()
+    const params = new URLSearchParams({
+      after: String(after),
+      waitMs: String(Math.max(0, Math.min(25_000, eventWaitMs)))
+    })
+    const workspaceId = (process.env.ROOST_WORKSPACE_ID ?? options.workspaceId ?? '').trim()
+    if (workspaceId !== '') params.set('workspaceId', workspaceId)
+    const started = Date.now()
+    const response = await request(`/api/internal/events?${params}`)
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      eventsApi = false
+      await response.body?.cancel?.().catch(() => undefined)
+      return null
+    }
+    const text = await response.text().catch(() => '')
+    if (!response.ok) {
+      throw new ControlPlaneError(
+        `/api/internal/events ${response.status}${text === '' ? '' : `: ${text.slice(0, 200)}`}`,
+        { status: response.status, body: text }
+      )
+    }
+    let data
+    try {
+      data = text.trim() === '' ? {} : JSON.parse(text)
+    } catch {
+      throw new ControlPlaneError('/api/internal/events returned invalid JSON', { status: response.status, body: text })
+    }
+    const events = Array.isArray(data?.events) ? data.events : []
+    const roomById = new Map()
+    for (const room of rooms) {
+      if (typeof room?.id === 'string' && room.id !== '') roomById.set(room.id, room)
+    }
+    for (const event of events) {
+      const room = roomById.get(event?.roomId)
+      const message = event?.message
+      if (event?.kind === 'chat.message' && room && message?.actor?.kind === 'user' && Number.isSafeInteger(message.seq)) {
+        const seen = cursors[room.id] ?? 0
+        if (message.seq > seen) {
+          await handleUserMessage(room, roomMembers(room), message)
+        }
+      }
+      if (Number.isSafeInteger(event?.seq)) {
+        cursors.__events = Math.max(cursors.__events ?? 0, event.seq)
+        if (typeof event?.roomId === 'string' && event.roomId !== '' && Number.isSafeInteger(message?.seq)) {
+          cursors[event.roomId] = Math.max(cursors[event.roomId] ?? 0, message.seq)
+        } else if (typeof event?.roomId === 'string' && event.roomId !== '') {
+          cursors[event.roomId] = Math.max(cursors[event.roomId] ?? 0, event.seq)
+        }
+        saveCursors(options.stateFile, cursors)
+      }
+    }
+    return { immediateEmpty: events.length === 0 && Date.now() - started < 50 }
+  }
+
   async function poll() {
     const rooms = await syncRooms()
+    const viaEvents = await pollViaEvents(rooms)
+    if (viaEvents !== null) return viaEvents
     for (const room of rooms) {
       if (typeof room?.id !== 'string' || room.id === '') continue
       await pollRoom(room)
     }
+    return { immediateEmpty: true }
   }
 
   async function loop() {
     let delay = backoffBaseMs
     while (!stopped) {
       try {
-        await poll()
+        const result = await poll()
         delay = backoffBaseMs
+        // 长轮询已经等过，或者刚拿到事件：马上再看一眼。
+        // 旧控制面（或空响应立刻返回）仍按 pollMs 睡，和原来的紧轮询一样。
+        if (result?.immediateEmpty) await sleep(pollMs)
       } catch (error) {
         // 控制面不可达：一行日志 + 指数退避，恢复后重置（不退出进程）。
         log(`poll failed: ${errorMessage(error)}`)
         await sleep(delay)
         delay = nextBackoff(delay, { baseMs: backoffBaseMs, maxMs: backoffMaxMs })
-        continue
       }
-      await sleep(pollMs)
     }
   }
 

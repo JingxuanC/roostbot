@@ -10,7 +10,7 @@ export { newEventId, newWorkspaceId } from './ids.ts'
 
 export { openStore } from './store.ts'
 
-export { appendEvent, readEvents, latestSeq } from './events.ts'
+export { appendEvent, readEvents, readWorkspaceRoomEvents, latestSeq } from './events.ts'
 
 export { claimPairingCode, createPairingCode, PAIRING_MAX_ATTEMPTS } from './pairing.ts'
 
@@ -70,6 +70,8 @@ export {
 export type { CreateSessionInput, Session } from './types.ts'
 
 export { createRoom, getRoom, listRooms, readMessages, sendMessage, REPLY_MODES } from './rooms.ts'
+export { appendRoomSignal, readRoomEvents, roomAudience } from './room-log.ts'
+export type { AppendRoomSignalInput } from './room-log.ts'
 export type { Room, RoomMessage, SendMessageInput } from './types.ts'
 export { deleteRoom, readRoomLogPage } from './rooms.ts'
 export type { RoomLogPage } from './rooms.ts'

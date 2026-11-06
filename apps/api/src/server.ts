@@ -95,7 +95,11 @@ import type { ModelProxyHandler } from '../../../packages/budget/src/index.ts'
 import { handleModelProxy, type ModelProxyRouteContext } from './model-proxy-routes.ts'
 import { recordUsage } from '../../../packages/store/src/budget.ts'
 import { metricsFromEvent } from '../../../packages/observability/src/index.ts'
-import { setEventSink } from '../../../packages/store/src/events.ts'
+import { readWorkspaceRoomEvents, setEventSink } from '../../../packages/store/src/events.ts'
+import { appendRoomSignal, readRoomEvents } from '../../../packages/store/src/room-log.ts'
+import type { Event } from '../../../packages/store/src/types.ts'
+import { armRoomWait, publishFromStoredEvent, publishRoomWake } from './room-bus.ts'
+import { encodeSseFrame, framesForRoomEvent, internalEventJson } from './room-stream.ts'
 import {
   handleCreateApprovalGrant,
   handleInternalCreateApproval,
@@ -246,7 +250,10 @@ export function defaultPanelForwardHooks(): PanelForwardHooks {
 }
 
 export interface ServerOptions {
-  /** SSE 轮询间隔（毫秒）；默认 700，测试里调小。 */
+  /**
+   * 没有总线唤醒时，SSE / 长轮询最多再等多久（毫秒）。
+   * 写路径会立刻唤醒，这只是漏报兜底。默认 15s；测试里调小。
+   */
   streamPollMs?: number
   /**
    * 内部接口的 runtime token（`ROOST_RUNTIME_TOKEN`）。不给 = 内部接口关闭（404）。
@@ -1336,7 +1343,13 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
   try {
     if (afterSeq !== undefined) {
       // 增量路径（room-agent 轮询）不受裁剪影响：after 之后照单全收。
-      const messages = await ctx.store.readMessagesInternal({ roomId, afterSeq })
+      // waitMs>0 且当前没有新消息时挂起，直到房间总线唤醒或超时（替代紧轮询）。
+      const waitMs = readWaitMs(res, url)
+      if (waitMs === null) return
+      const messages = await waitForRoomLoad(req, roomId, waitMs, async () =>
+        ctx.store.readMessagesInternal({ roomId, afterSeq }),
+      )
+      if (res.writableEnded || req.destroyed) return
       sendJson(res, 200, { messages: messagesJson(ctx, messages) })
       return
     }
@@ -1522,10 +1535,107 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
   }
 }
 
+/** `waitMs` 查询参数。省略 = 0（不等）。非法时已经写了 400，返回 null。 */
+function readWaitMs(res: ServerResponse, url: URL): number | null {
+  const raw = url.searchParams.get('waitMs')
+  if (raw === null || raw === '') return 0
+  const waitMs = Number.parseInt(raw, 10)
+  if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > 25_000) {
+    sendError(res, 400, 'invalid_body', 'waitMs must be an integer from 0 to 25000')
+    return null
+  }
+  return waitMs
+}
+
 /**
- * SSE：新消息推送。用轮询读 store（SQLite 是唯一真相，轮询不会漏；写侧不需要广播）。
+ * 先挂上监听再读，避免「读完到开始等」之间漏掉一次写入。
+ * 空结果且 waitMs>0 时挂起，醒来再读一次。
+ */
+async function waitForRoomLoad<T>(
+  req: IncomingMessage,
+  roomId: string | null,
+  waitMs: number,
+  load: () => Promise<T>,
+  isEmpty: (value: T) => boolean = (value) => Array.isArray(value) && value.length === 0,
+): Promise<T> {
+  const waiter = armRoomWait(roomId)
+  const abort = new AbortController()
+  const onClose = (): void => abort.abort()
+  req.on('close', onClose)
+  try {
+    let value = await load()
+    if (isEmpty(value) && waitMs > 0 && abort.signal.aborted !== true) {
+      await waiter.wait(waitMs, abort.signal)
+      if (abort.signal.aborted !== true && !req.destroyed) value = await load()
+    }
+    return value
+  } finally {
+    waiter.cancel()
+    req.off('close', onClose)
+  }
+}
+
+function messageRecordFromEvent(event: Event): RoomMessageRecord {
+  const kind = event.actor?.kind
+  const actorKind =
+    kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
+  const text = typeof event.payload.text === 'string' ? event.payload.text : ''
+  return { seq: event.seq, at: event.at, actorKind, actorId: event.actor?.id ?? 'unknown', text }
+}
+
+/**
+ * 把 afterSeq 之后的房间事件写成 SSE 帧。返回写出的事件条数（不是帧数）。
+ * 成员校验走 readMessages：没权限或房间没了会抛，调用方结束流。
+ */
+async function writeRoomStream(
+  ctx: RoomRouteContext,
+  res: ServerResponse,
+  input: { accountId: string; roomId: string; afterSeq: number },
+): Promise<{ count: number; lastSeq: number }> {
+  if (ctx.rawStore === undefined) {
+    const batch = await ctx.store.readMessages({
+      accountId: input.accountId,
+      roomId: input.roomId,
+      afterSeq: input.afterSeq,
+      limit: 200,
+    })
+    const batchJson = messagesJson(ctx, batch)
+    let lastSeq = input.afterSeq
+    for (let index = 0; index < batch.length; index += 1) {
+      const message = batch[index]!
+      lastSeq = message.seq
+      res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(batchJson[index])}\n\n`)
+    }
+    if (batch.length > 0) res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
+    return { count: batch.length, lastSeq }
+  }
+
+  // 先做一次成员校验（读 1 条即可）。真正的帧从房间日志拼，这样 round/speaking 和消息按 seq 交错。
+  await ctx.store.readMessages({
+    accountId: input.accountId,
+    roomId: input.roomId,
+    afterSeq: input.afterSeq,
+    limit: 1,
+  })
+  const events = readRoomEvents(ctx.rawStore, { roomId: input.roomId, afterSeq: input.afterSeq, limit: 200 })
+  if (events.length === 0) return { count: 0, lastSeq: input.afterSeq }
+  const chatRecords = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
+  const chatJson = messagesJson(ctx, chatRecords)
+  let chatIndex = 0
+  let lastSeq = input.afterSeq
+  for (const event of events) {
+    const message = event.kind === 'chat.message' ? (chatJson[chatIndex++] ?? null) : null
+    for (const frame of framesForRoomEvent(event, message)) res.write(encodeSseFrame(frame))
+    lastSeq = event.seq
+  }
+  res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
+  return { count: events.length, lastSeq }
+}
+
+/**
+ * SSE：写进房间日志就推。总线负责立刻唤醒；streamPollMs 只是漏报兜底。
  * 浏览器 EventSource 不能带 Authorization 头，所以这条路由额外接受 ?access_token=。
- * 仅本机回环 + no-store；上公网前要改成同源 cookie 或 fetch 流。
+ * `after` 与 Last-Event-ID 取较大者，断线从上次 seq 续。
  */
 async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const headerToken = /^Bearer[ ]+(\S+)$/.exec((req.headers.authorization ?? '').trim())
@@ -1547,6 +1657,11 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
   const afterRaw = url.searchParams.get('after')
   let lastSeq = afterRaw === null ? 0 : Number.parseInt(afterRaw, 10)
   if (!Number.isSafeInteger(lastSeq) || lastSeq < 0) lastSeq = 0
+  const lastEventHeader = req.headers['last-event-id']
+  if (typeof lastEventHeader === 'string' && /^[0-9]+$/.test(lastEventHeader)) {
+    const parsed = Number(lastEventHeader)
+    if (Number.isSafeInteger(parsed) && parsed > lastSeq) lastSeq = parsed
+  }
 
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -1561,41 +1676,166 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
     if (!closed) res.write(': ping\n\n')
   }, 15_000)
   heartbeat.unref?.()
+  const waiter = armRoomWait(roomId)
+  const abort = new AbortController()
 
   const pump = async (): Promise<void> => {
     while (!closed) {
-      let batch: RoomMessageRecord[]
+      let wrote = 0
       try {
-        batch = await ctx.store.readMessages({
+        const result = await writeRoomStream(ctx, res, {
           accountId: session.accountId,
           roomId,
           afterSeq: lastSeq,
-          limit: 200
         })
+        wrote = result.count
+        lastSeq = result.lastSeq
       } catch {
         // 房间被删或权限变化：结束流，让客户端重连并处理。
         res.write('event: error\ndata: {"code":"stream_unavailable"}\n\n')
         break
       }
-      const batchJson = messagesJson(ctx, batch)
-      for (let index = 0; index < batch.length; index += 1) {
-        const message = batch[index]!
-        lastSeq = message.seq
-        res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(batchJson[index])}\n\n`)
-      }
-      if (batch.length > 0) res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
-      await sleep(ctx.streamPollMs)
+      if (wrote > 0) continue
+      if (closed) break
+      await waiter.wait(ctx.streamPollMs, abort.signal)
     }
   }
 
   req.on('close', () => {
     closed = true
+    abort.abort()
+    waiter.cancel()
     clearInterval(heartbeat)
   })
 
-  await pump()
-  clearInterval(heartbeat)
-  if (!res.writableEnded) res.end()
+  try {
+    await pump()
+  } finally {
+    waiter.cancel()
+    clearInterval(heartbeat)
+    if (!res.writableEnded) res.end()
+  }
+}
+
+/** GET /api/internal/events?after=&waitMs=&workspaceId= —— 沙箱按 seq 长轮询房间日志。 */
+async function handleInternalEvents(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'room events need the SQLite store')
+  }
+  const afterRaw = url.searchParams.get('after')
+  const afterSeq = afterRaw === null || afterRaw === '' ? 0 : Number.parseInt(afterRaw, 10)
+  if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
+    return sendError(res, 400, 'invalid_body', 'after must be a non-negative integer seq')
+  }
+  const waitMs = readWaitMs(res, url)
+  if (waitMs === null) return
+  const requested = url.searchParams.get('workspaceId')
+  const workspaceId = auth.workspaceId ?? (requested === null || requested === '' ? null : requested)
+  if (auth.workspaceId !== null) {
+    if (!ensureRuntimeWorkspace(auth, requested ?? auth.workspaceId, res)) return
+  } else if (requested !== null && requested !== '') {
+    // 全局 token 显式点名 workspace 时，确认它存在；不存在就空列表，不 500。
+  }
+
+  try {
+    const events = await waitForRoomLoad(
+      req,
+      null,
+      waitMs,
+      async () =>
+        readWorkspaceRoomEvents(ctx.rawStore!, {
+          workspaceId,
+          afterSeq,
+          limit: 200,
+        }),
+    )
+    if (res.writableEnded || req.destroyed) return
+    const chat = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
+    const chatJson = messagesJson(ctx, chat)
+    let chatIndex = 0
+    sendJson(res, 200, {
+      events: events.map((event) =>
+        internalEventJson(event, event.kind === 'chat.message' ? (chatJson[chatIndex++] ?? null) : null),
+      ),
+    })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+/** POST /api/internal/rooms/:id/deltas —— 把一段流式增量追加成 chat.message.delta。 */
+async function handleInternalDelta(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'room events need the SQLite store')
+  }
+  const match = /^\/api\/internal\/rooms\/([^/]+)\/deltas$/.exec(url.pathname)
+  const roomId = match === null ? null : safeDecode(match[1]!)
+  if (roomId === null || roomId === '') return sendError(res, 404, 'not_found', 'malformed room path')
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const botId = typeof body.botId === 'string' ? body.botId.trim() : ''
+  const delta = typeof body.delta === 'string' ? body.delta : ''
+  if (botId === '' || botId.length > 64) {
+    return sendError(res, 400, 'invalid_body', 'body.botId must be 1..64 characters')
+  }
+  if (delta === '' || delta.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.delta must be 1..8000 characters')
+  }
+  const messageSeq =
+    body.messageSeq === undefined || body.messageSeq === null ? undefined : Number(body.messageSeq)
+  if (messageSeq !== undefined && (!Number.isSafeInteger(messageSeq) || messageSeq < 1)) {
+    return sendError(res, 400, 'invalid_body', 'body.messageSeq must be a positive integer')
+  }
+  try {
+    const event = appendRoomSignal(ctx.rawStore, {
+      roomId,
+      domain: 'chat',
+      kind: 'chat.message.delta',
+      actor: { kind: 'bot', id: botId },
+      payload: {
+        delta,
+        ...(messageSeq === undefined ? {} : { messageSeq }),
+      },
+    })
+    sendJson(res, 201, {
+      event: { seq: event.seq, at: event.at, kind: event.kind, delta },
+    })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+/**
+ * POST /api/internal/notify { roomId, seq? }
+ * 另一个进程写完 SQLite 后敲一下，本进程的 SSE / 长轮询立刻醒。
+ * 不写事件；醒来的连接自己再读库。
+ */
+async function handleInternalNotify(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const roomId = typeof body.roomId === 'string' ? body.roomId.trim() : ''
+  if (roomId === '' || roomId.length > 80) {
+    return sendError(res, 400, 'invalid_body', 'body.roomId is required')
+  }
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
+  const seq = typeof body.seq === 'number' && Number.isSafeInteger(body.seq) && body.seq >= 0 ? body.seq : 0
+  publishRoomWake({ roomId, seq, kind: 'notify' })
+  sendJson(res, 202, { ok: true, roomId, seq })
 }
 
 function sleep(ms: number): Promise<void> {
@@ -2728,12 +2968,39 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (path === '/api/internal/notify') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalNotify(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (path === '/api/internal/events') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalEvents(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
   if (/^\/api\/internal\/rooms\/[^/]+\/messages$/.test(path)) {
     if (method !== 'GET') {
       notFound(req, res, method, path)
       return
     }
     await handleInternalMessages(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  if (/^\/api\/internal\/rooms\/[^/]+\/deltas$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalDelta(ctx as RoomRouteContext, req, res, url)
     return
   }
 
@@ -2986,7 +3253,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     startedAt: now(),
     claimFailures: [],
     sessionAccounts: new Set<string>(),
-    streamPollMs: options.streamPollMs ?? 700,
+    streamPollMs: options.streamPollMs ?? 15_000,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
     dsh,
     serverState: state,
@@ -3014,8 +3281,13 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
   // 插件安装复用控制面的限流桶（10/小时/账号，rate-limit.test.ts 覆盖）。
   installRoutes.rateLimiter = ctx.rateLimiter
 
-  // 事件 → 指标（6.6.1）：store 的 appendEvent 是唯一写入口，注册一个只读 sink。
+  // 事件 → 指标，并唤醒房间 SSE / 长轮询。appendEvent 是 SQLite 的唯一写入口。
   setEventSink((event) => {
+    try {
+      publishFromStoredEvent(event)
+    } catch {
+      // 总线失败不影响事件写入。
+    }
     try {
       ctx.metrics.ingest(metricsFromEvent(event as never))
     } catch {
