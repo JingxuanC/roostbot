@@ -267,6 +267,31 @@ export function postCard(input: PostCardInput): PostCardResult {
   return { message, cardId, ...(approvalId === undefined ? {} : { approvalId }), round }
 }
 
+/** 把已经落库的审批（例如沙箱 tool.call）投影成房间里的审批卡，不重复建审批。 */
+export function postApprovalCardMessage(
+  store: Store,
+  input: { roomId: string; botId: string; approval: Approval; title: string; action?: string | null; target?: string | null; consequence?: string | null; at?: number },
+): RoomMessage {
+  const text = input.title.trim() === '' ? '需要你确认' : input.title.trim()
+  const part: MessagePart = {
+    type: 'approval',
+    approvalId: input.approval.id,
+    title: text,
+    ...(typeof input.action === 'string' && input.action !== '' ? { action: input.action } : {}),
+    ...(typeof input.target === 'string' && input.target !== '' ? { target: input.target } : {}),
+    ...(typeof input.consequence === 'string' && input.consequence !== '' ? { consequence: input.consequence } : {}),
+    status: 'pending',
+  }
+  return sendMessage(store, {
+    roomId: input.roomId,
+    text,
+    actor: { kind: 'bot', id: input.botId },
+    parts: [{ type: 'text', text }, part],
+    idem: `approval-card:${input.approval.id}`,
+    ...(input.at === undefined ? {} : { at: input.at }),
+  })
+}
+
 /** 用户点选。幂等：同一张卡再点一次返回第一次的选项。 */
 export function answerChoiceCard(input: AnswerCardInput): AnswerCardResult {
   const found = findChoice(input.store, input.roomId, input.cardId)
