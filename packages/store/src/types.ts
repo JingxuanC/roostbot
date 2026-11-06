@@ -181,6 +181,25 @@ export interface Room {
   createdAt: number
 }
 
+export interface MessagePart {
+  type: 'text' | 'image' | 'choice' | 'approval' | 'tool'
+  text?: string
+  artifactId?: string
+  cardId?: string
+  prompt?: string
+  options?: Array<{ id: string; label: string }>
+  approvalId?: string
+  title?: string
+  action?: string | null
+  target?: string | null
+  consequence?: string | null
+  status?: string
+  name?: string
+  summary?: string
+  callId?: string
+  [key: string]: unknown
+}
+
 export interface RoomMessage {
   seq: number
   /** ISO 8610（与 events.at 一致）。 */
@@ -188,6 +207,8 @@ export interface RoomMessage {
   actor: Actor
   roomId: string
   text: string
+  /** 缺省表示纯文本，和旧消息一样。 */
+  parts?: MessagePart[]
 }
 
 export interface SendMessageInput {
@@ -196,4 +217,5 @@ export interface SendMessageInput {
   actor: Actor
   idem?: string
   at?: number
+  parts?: MessagePart[]
 }

@@ -22,7 +22,7 @@ export type EventDomain = (typeof EVENT_DOMAINS)[number]
  * architecture-v2.md 只追加 kind（message.delta、round、speaking），不改旧语义。
  */
 export const EVENT_KINDS_BY_DOMAIN = {
-  chat: ['chat.message', 'chat.message.edited', 'chat.unread', 'chat.message.delta'],
+  chat: ['chat.message', 'chat.message.edited', 'chat.unread', 'chat.message.delta', 'chat.card.answered'],
   turn: [
     'turn.started',
     'turn.step',

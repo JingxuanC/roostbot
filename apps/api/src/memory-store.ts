@@ -61,12 +61,13 @@ export function createMemoryStore(): StorePort {
     roomId: string
     text: string
     idem?: string
+    parts?: RoomMessageRecord['parts']
     actor: { kind: string; id: string }
   }): RoomMessageRecord => {
     const room = rooms.get(input.roomId)
     if (room === undefined) throw new Error(`unknown room ${input.roomId}`)
     const text = input.text.trim()
-    if (text === '') throw new Error('message text is empty')
+    if (text === '' && (input.parts === undefined || input.parts.length === 0)) throw new Error('message text is empty')
     if (input.idem !== undefined) {
       const seen = idemSeen.get(`${room.id}:${input.idem}`)
       if (seen !== undefined) return { ...seen }
@@ -76,7 +77,8 @@ export function createMemoryStore(): StorePort {
       at: new Date().toISOString(),
       actorKind: input.actor.kind as RoomMessageRecord['actorKind'],
       actorId: input.actor.id,
-      text
+      text,
+      ...(input.parts === undefined || input.parts.length === 0 ? {} : { parts: input.parts }),
     }
     nextSeq += 1
     messages.get(room.id)?.push(message)
@@ -240,8 +242,20 @@ export function createMemoryStore(): StorePort {
       return rooms.get(roomId)?.workspaceId ?? null
     },
 
-    async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
-      return postMessageAs({ roomId: input.roomId, text: input.text, idem: input.idem, actor: { kind: 'bot', id: input.botId } })
+    async postBotMessage(input: {
+      roomId: string
+      botId: string
+      text: string
+      idem?: string
+      parts?: RoomMessageRecord['parts']
+    }): Promise<RoomMessageRecord> {
+      return postMessageAs({
+        roomId: input.roomId,
+        text: input.text,
+        idem: input.idem,
+        parts: input.parts,
+        actor: { kind: 'bot', id: input.botId },
+      })
     },
 
     async readMessagesInternal(input): Promise<RoomMessageRecord[]> {
@@ -257,6 +271,7 @@ export function createMemoryStore(): StorePort {
         roomId: input.roomId,
         text: input.text,
         idem: input.idem,
+        parts: input.parts,
         actor: { kind: 'user', id: input.accountId }
       })
     },

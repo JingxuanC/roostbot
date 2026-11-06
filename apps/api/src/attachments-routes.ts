@@ -23,6 +23,7 @@ import {
   appendEvent,
   deleteAttachmentRows,
   getArtifact,
+  getRoom,
   linkArtifact,
   listCollectableAttachments,
   putArtifact,
@@ -635,4 +636,85 @@ function serveBytes(
     'content-length': String(chunk.byteLength),
   })
   res.end(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+}
+
+/** POST /api/rooms/:id/artifacts —— 用户先上传，再在发消息时带上 artifactId。 */
+export async function handlePostRoomArtifact(
+  ctx: AttachmentsRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  roomId: string,
+): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  if (ctx.rawStore === undefined || ctx.attachments === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'content storage needs the SQLite store')
+  }
+  const room = getRoom(ctx.rawStore, roomId)
+  if (room === null) return sendError(res, 404, 'room_not_found', `unknown room ${roomId}`)
+  const member = ctx.rawStore.db
+    .prepare('SELECT 1 AS ok FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+    .get(room.workspaceId, auth.session.accountId)
+  if (member === undefined || member === null) {
+    return sendError(res, 403, 'forbidden', 'not a member of this workspace')
+  }
+  const name = readName(header(req, 'x-artifact-name')) ?? 'image'
+  const mime = cleanMime(header(req, 'x-file-mime') ?? req.headers['content-type'] ?? null)
+  const contentLength = header(req, 'content-length')
+  if (contentLength !== null && Number(contentLength) > MAX_OBJECT_BYTES) {
+    req.resume()
+    return sendError(res, 413, 'payload_too_large', `artifact exceeds ${MAX_OBJECT_BYTES} bytes`)
+  }
+  const body = await readRawBody(req, MAX_OBJECT_BYTES)
+  if (!body.ok) return sendError(res, body.status, body.code, body.message)
+  if (body.bytes.byteLength === 0) return sendError(res, 400, 'invalid_body', 'artifact body is empty')
+  try {
+    const upload = await prepareUpload({ bytes: body.bytes, mime })
+    const imageSize = detectImageSize(upload.bytes)
+    const stored = await ctx.attachments.content.put(upload.bytes, {
+      mime,
+      owner: auth.session.accountId,
+      audience: 'team',
+    })
+    putAttachment(ctx.rawStore, {
+      id: stored.id,
+      workspaceId: room.workspaceId,
+      sha256: stored.sha256,
+      size: stored.size,
+      mime,
+      owner: auth.session.accountId,
+      audience: 'team',
+      createdAt: ctx.now(),
+    })
+    let thumbnail: StoredThumbnail | null = null
+    if (upload.thumbnail !== undefined) {
+      thumbnail = await persistThumbnail({
+        store: ctx.rawStore,
+        content: ctx.attachments.content,
+        thumbnail: upload.thumbnail,
+        workspaceId: room.workspaceId,
+        owner: auth.session.accountId,
+        createdAt: ctx.now(),
+        audience: 'team',
+        ownerArtifactId: stored.id,
+      })
+    }
+    const artifact = putArtifact(ctx.rawStore, {
+      id: stored.id,
+      workspaceId: room.workspaceId,
+      kind: 'image',
+      mime,
+      name,
+      size: stored.size,
+      width: imageSize?.width ?? null,
+      height: imageSize?.height ?? null,
+      thumbId: thumbnail === null ? null : thumbnail.artifactId,
+      producedBy: auth.session.accountId,
+      createdAt: ctx.now(),
+    })
+    sendJson(res, 201, { artifactId: artifact.id, mime: artifact.mime, size: artifact.size, name: artifact.name })
+  } catch (err) {
+    console.error('roost api: room artifact upload failed', err)
+    sendError(res, 500, 'internal_error', 'artifact upload failed')
+  }
 }

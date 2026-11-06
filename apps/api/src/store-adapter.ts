@@ -264,6 +264,7 @@ export function createStorePort(store: Store): StorePort {
         text: input.text,
         actor: { kind: 'user', id: input.accountId },
         ...(input.idem === undefined ? {} : { idem: input.idem }),
+        ...(input.parts === undefined ? {} : { parts: input.parts as never }),
       })
       return toMessageRecord(message)
     },
@@ -282,12 +283,19 @@ export function createStorePort(store: Store): StorePort {
       return row === undefined || row === null ? null : row.workspace_id
     },
 
-    async postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord> {
+    async postBotMessage(input: {
+      roomId: string
+      botId: string
+      text: string
+      idem?: string
+      parts?: RoomMessageRecord['parts']
+    }): Promise<RoomMessageRecord> {
       const message = sendMessageInStore(store, {
         roomId: input.roomId,
         text: input.text,
         actor: { kind: 'bot', id: input.botId },
         ...(input.idem === undefined ? {} : { idem: input.idem }),
+        ...(input.parts === undefined ? {} : { parts: input.parts as never }),
       })
       return toMessageRecord(message)
     },
@@ -540,6 +548,7 @@ function toMessageRecord(message: {
   actor: { kind: string; id: string }
   roomId: string
   text: string
+  parts?: RoomMessageRecord['parts']
 }): RoomMessageRecord {
   return {
     seq: message.seq,
@@ -547,6 +556,7 @@ function toMessageRecord(message: {
     actorKind: message.actor.kind as RoomMessageRecord['actorKind'],
     actorId: message.actor.id,
     text: message.text,
+    ...(message.parts === undefined || message.parts.length === 0 ? {} : { parts: message.parts }),
   }
 }
 

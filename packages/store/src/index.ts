@@ -72,7 +72,7 @@ export type { CreateSessionInput, Session } from './types.ts'
 export { createRoom, getRoom, listRooms, readMessages, sendMessage, REPLY_MODES } from './rooms.ts'
 export { appendRoomSignal, readRoomEvents, roomAudience } from './room-log.ts'
 export type { AppendRoomSignalInput } from './room-log.ts'
-export type { Room, RoomMessage, SendMessageInput } from './types.ts'
+export type { MessagePart, Room, RoomMessage, SendMessageInput } from './types.ts'
 export { deleteRoom, readRoomLogPage } from './rooms.ts'
 export type { RoomLogPage } from './rooms.ts'
 
