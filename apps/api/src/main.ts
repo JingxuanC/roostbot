@@ -13,6 +13,7 @@ import { createMemoryStore } from './memory-store.ts'
 import { createStorePort } from './store-adapter.ts'
 import { openStore } from '../../../packages/store/src/index.ts'
 import { openShellRuntimeManager } from './runtime-manager-openshell.ts'
+import { localRuntimeManager } from './runtime-manager-local.ts'
 import { createSmtpMailerFromEnv } from './smtp-mailer.ts'
 import { createSleeperRegistry } from './idle-sleepers.ts'
 
@@ -91,7 +92,19 @@ async function main(): Promise<void> {
   // E6：rawStore 交给 manager，ensure 时为每个 workspace 签发 24h token；没有 SQLite
   // （ROOST_DB=memory）时退回全局 ROOST_RUNTIME_TOKEN，保持旧部署可用。
   const runtimeManager =
-    process.env.ROOST_SANDBOX === 'openshell'
+    process.env.ROOST_SANDBOX === 'local'
+      ? localRuntimeManager({
+          cpHost: process.env.ROOST_CP_HOST ?? '127.0.0.1',
+          cpPort: Number(process.env.ROOST_CP_PORT ?? port),
+          cpScheme: process.env.ROOST_CP_SCHEME === 'https' ? 'https' : 'http',
+          dshBin: process.env.ROOST_DSH_BIN ?? 'dsh',
+          nodeBin: process.execPath,
+          roomAgentPath: resolve(import.meta.dirname, '..', '..', 'runtime', 'room-agent.mjs'),
+          workRoot: process.env.ROOST_LOCAL_WORKSPACE_DIR ?? resolve(process.cwd(), 'data', 'workspaces'),
+          runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
+          log: (line: string) => console.log(`[local-runtime] ${line}`)
+        })
+      : process.env.ROOST_SANDBOX === 'openshell'
       ? openShellRuntimeManager({
           image: process.env.ROOST_SANDBOX_IMAGE ?? 'roost/agent:dev',
           cpHost: process.env.ROOST_CP_HOST ?? 'host.openshell.internal',
