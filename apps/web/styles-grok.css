@@ -700,7 +700,11 @@
   align-items: center;
   padding: var(--space-2);
   background: linear-gradient(to top, #000 70%, transparent);
+  /* 底部悬浮条只让自身控件接收点击，不能盖住上面的机器人列表。 */
+  pointer-events: none;
 }
+
+#room-view .home-dock > * { pointer-events: auto; }
 
 #room-view.is-home .home-dock { display: flex; }
 
