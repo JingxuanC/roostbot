@@ -334,7 +334,7 @@ sequenceDiagram
 | 1 | 房间事件读模型、进程内总线、SSE 写时推送、`after` / `Last-Event-ID` 续传、`round` / `speaking`、沙箱长轮询 | 不改消息 payload 的必填字段 |
 | 2 | `parts`（图片、选项、审批、工具）、答题 API、审批卡进时间线、`needs_input` 停车与重启后续跑、Bot 发卡钩子 | 不改审批状态机，不新建第二张审批表 |
 | 3 | `routines` 表、cron、隔离 run、CRUD、最小 UI。默认时区 `Asia/Shanghai` | 不替换 `workspace_schedules` |
-| 4 | `apps/web` 对齐 Grok 式界面：纯黑、用户灰胶囊、Bot 纯文本、小鸟头像、首页列表、全屏看图、选项卡、审批卡 | 不改控制面的鉴权规则 |
+| 4 | `apps/web` 对齐 Grok 式布局、统一白色界面：白底、用户浅灰胶囊、Bot 纯文本、小鸟头像、首页列表、全屏看图、选项卡、审批卡 | 不改控制面的鉴权规则 |
 
 回滚：阶段 1 之后多出来的 kind 对旧读者是可忽略的。阶段 2 的 `parts` 缺省时和今天的 `{text, role}` 相同。阶段 3 是新表，不读它就等于没有定时发言。
 
