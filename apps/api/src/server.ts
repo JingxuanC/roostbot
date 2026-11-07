@@ -205,6 +205,7 @@ import {
   writeHttpLog,
 } from './logger.ts'
 import type { HttpLogEntry } from './logger.ts'
+import { recordTrace, recentTraceSpans } from './trace.ts'
 import { createMetrics } from './metrics.ts'
 import type { MetricsRegistry } from './metrics.ts'
 import { handleAudit } from './audit-routes.ts'
@@ -2246,6 +2247,18 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
   }
 
   // Prometheus 抓取端点：无鉴权，手写 text/plain（M6-6.6）。
+  if (path === '/api/debug/traces' && method === 'GET') {
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message)
+      return
+    }
+    const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10)
+    const limit = Number.isSafeInteger(rawLimit) ? rawLimit : 100
+    sendJson(res, 200, { spans: recentTraceSpans(limit) })
+    return
+  }
+
   if (path === '/metrics') {
     if (method !== 'GET') {
       notFound(req, res, method, path)
@@ -3721,6 +3734,13 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
         // 忽略日志出口异常。
       }
       ctx.metrics.record(method, path, status, durationMs)
+      recordTrace({
+        traceId: requestId,
+        name: 'http',
+        at: startedAt,
+        durationMs,
+        attrs: { method, path, status }
+      })
     })
 
     handleRequest(ctx, req, res).catch((err: unknown) => {

@@ -70,13 +70,13 @@ export function createApiClient(options = {}) {
     return csrfTokenFromCookie(cookie)
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, requestOptions = {}) {
     const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : null)
     if (!doFetch) {
       throw new ApiError('network', '这个环境没有 fetch，连不上 API')
     }
     const cleanPath = String(path ?? '').startsWith('/') ? String(path) : `/${String(path ?? '')}`
-    const headers = {}
+    const headers = { ...(requestOptions && requestOptions.headers ? requestOptions.headers : {}) }
     const token = getToken()
     if (token) headers.authorization = `Bearer ${token}`
     if (isUnsafeMethod(method)) Object.assign(headers, csrfHeaders(method, csrfToken()))
@@ -142,7 +142,7 @@ export function createApiClient(options = {}) {
       throw new ApiError('network', '这个环境没有 fetch，连不上 API')
     }
     const cleanPath = String(path ?? '').startsWith('/') ? String(path) : `/${String(path ?? '')}`
-    const headers = {}
+    const headers = { ...(requestOptions && requestOptions.headers ? requestOptions.headers : {}) }
     const token = getToken()
     if (token) headers.authorization = `Bearer ${token}`
 
@@ -204,7 +204,7 @@ export function createApiClient(options = {}) {
     request,
     get: (path) => request('GET', path),
     getBlob,
-    post: (path, body) => request('POST', path, body),
+    post: (path, body, requestOptions) => request('POST', path, body, requestOptions),
     patch: (path, body) => request('PATCH', path, body),
     del: (path) => request('DELETE', path),
     /** 登录响应带 csrfToken 时存进内存；cookie 读不到时仍能写。 */

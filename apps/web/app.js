@@ -1134,6 +1134,72 @@ const LIVE = {
   logBefore: null,
 }
 
+// 轻量端到端 trace：?trace=1 打开面板，记录发送 → 服务端确认 → SSE → 首 token/首条 Bot 消息。
+const TRACE = {
+  enabled: (() => {
+    try { return new URLSearchParams(location.search).has('trace') || localStorage.getItem('roostTrace') === '1' } catch { return false }
+  })(),
+  id: '',
+  startedAt: 0,
+  marks: [],
+  spans: [],
+}
+
+function traceReset() {
+  TRACE.id = ''
+  TRACE.startedAt = 0
+  TRACE.marks = []
+  TRACE.spans = []
+}
+
+function traceMark(name, detail) {
+  if (!TRACE.enabled) return
+  const now = performance.now()
+  if (TRACE.startedAt === 0) TRACE.startedAt = now
+  TRACE.marks.push({ name, ms: now - TRACE.startedAt, detail: detail === undefined ? '' : String(detail) })
+  renderTracePanel()
+}
+
+async function traceFetchSpans() {
+  if (!TRACE.enabled) return
+  try {
+    const data = await api.get('/api/debug/traces?limit=40')
+    TRACE.spans = Array.isArray(data?.spans) ? data.spans : []
+    renderTracePanel()
+  } catch {
+    // trace 只是诊断，不能影响聊天。
+  }
+}
+
+function renderTracePanel() {
+  if (!TRACE.enabled) return
+  let panel = document.getElementById('trace-panel')
+  if (panel === null) {
+    panel = document.createElement('aside')
+    panel.id = 'trace-panel'
+    panel.className = 'trace-panel'
+    document.body.append(panel)
+  }
+  const lines = []
+  for (const mark of TRACE.marks) lines.push(`${mark.ms.toFixed(0).padStart(5)}ms  ${mark.name}${mark.detail ? `  ${mark.detail}` : ''}`)
+  const recent = TRACE.spans.slice(-12)
+  if (recent.length > 0) {
+    lines.push('')
+    lines.push('server spans')
+    for (const span of recent) {
+      const attrs = span.attrs || {}
+      lines.push(`${String(span.durationMs).padStart(5)}ms  ${attrs.method || ''} ${attrs.path || span.name}  ${attrs.status || ''}`)
+    }
+  }
+  panel.replaceChildren(
+    el('div', { class: 'trace-head' }, [
+      el('strong', { text: `trace ${TRACE.id || '—'}` }),
+      el('button', { type: 'button', text: '关闭', onclick: () => { TRACE.enabled = false; panel.remove() } }),
+    ]),
+    el('pre', { class: 'trace-body', text: lines.join('\n') || '等待发送…' }),
+  )
+}
+
 const STORE = {
   workspaceId: '',
   bots: [],
@@ -2400,6 +2466,9 @@ function insertEvent(event) {
   if (event && event.payload && event.payload.role === 'bot') {
     LIVE.pendingReply = false
     renderWorking()
+    if (!TRACE.marks.some((mark) => mark.name === 'first.bot')) traceMark('first.bot', event.seq ?? '')
+    else traceMark('bot.message', event.seq ?? '')
+    void traceFetchSpans()
   }
   const node = renderEvent(event)
   if (Number.isFinite(seq)) node.dataset.seq = String(seq)
@@ -2528,6 +2597,7 @@ function handleDeltaEvent(event) {
   const delta = payload && typeof payload.delta === 'string' ? payload.delta : ''
   if (delta === '') return
   streamingText += delta
+  if (!TRACE.marks.some((mark) => mark.name === 'first.delta')) traceMark('first.delta')
   const list = $('#messages')
   if (!list) return
   let node = document.getElementById('streaming-line')
@@ -2619,6 +2689,7 @@ function openStream() {
     if (stream !== LIVE.stream) return
     LIVE.reconnectAttempt = 0
     setStreamState('open')
+    traceMark('stream.open')
   })
   stream.addEventListener('message', (event) => {
     try {
@@ -3201,16 +3272,20 @@ function setupComposer() {
       growComposer()
       input.focus()
       try {
+        traceReset()
+        TRACE.id = `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        traceMark('send.submit')
         const posted = await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
           text,
           ...(pendingFiles.length > 0 ? { artifactIds: pendingFiles.splice(0, pendingFiles.length) } : {}),
           idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        })
+        }, { headers: { 'x-request-id': TRACE.id } })
         const chips = $('#composer-files')
         if (chips) {
           chips.replaceChildren()
           chips.hidden = true
         }
+        traceMark('send.ack', posted?.message?.seq ?? '')
         if (posted && posted.message) appendLiveEvent(posted.message)
         else await refreshMessages()
         LIVE.pendingReply = true

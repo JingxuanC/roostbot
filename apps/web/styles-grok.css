@@ -998,3 +998,23 @@
 #room-view .typing-indicator[hidden] { display: none; }
 #room-view .typing-indicator .thinking-dots { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
 #room-view .typing-indicator .thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--text-2); }
+
+/* ?trace=1 的诊断浮层：只读文本，不参与聊天布局。 */
+.trace-panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 9999;
+  width: min(380px, calc(100vw - 24px));
+  max-height: 55vh;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(10, 10, 12, 0.94);
+  color: #d7d7dc;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.trace-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.trace-head button { border: 0; background: transparent; color: #d7d7dc; cursor: pointer; }
+.trace-body { margin: 0; padding: 8px 10px; white-space: pre-wrap; }
