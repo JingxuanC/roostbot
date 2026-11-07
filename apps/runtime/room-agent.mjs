@@ -613,10 +613,20 @@ export async function startRoomAgent(options) {
       const value = process.env[key]
       if (typeof value === 'string' && value !== '') claudeEnv[key] = value
     }
+    const codexEnv = {}
+    for (const key of ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY']) {
+      const value = process.env[key]
+      if (typeof value === 'string' && value !== '') codexEnv[key] = value
+    }
+    const grokEnv = {}
+    for (const key of ['XAI_API_KEY', 'GROK_API_KEY', 'XAI_BASE_URL', 'GROK_BASE_URL']) {
+      const value = process.env[key]
+      if (typeof value === 'string' && value !== '') grokEnv[key] = value
+    }
     return {
       adapterConfigs: {
-        'grok-build': { command: grokBin, args: [] },
-        codex: { command: codexBin, args: [] },
+        'grok-build': { command: grokBin, args: [], env: grokEnv },
+        codex: { command: codexBin, args: [], env: codexEnv },
         'claude-code': {
           command: claudeBin,
           args: ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json'],
