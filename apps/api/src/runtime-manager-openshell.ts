@@ -127,6 +127,9 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
         // 沙箱内的边界是 OpenShell，不是 DSH 自带的 sandbox：
         // 不设这个的话 fresh session 会 pin 到 workspace-write + ask，每条 bash 都要人批。
         DSH_PERMISSION_MODE: 'danger-full-access',
+        // room-agent 装审批桥后默认会把 DSH 钉回 workspace-write；新产品默认全权，
+        // 这个显式值会覆盖它，bash/tool 不再逐次弹审批。
+        ROOST_DSH_PERMISSION_MODE: 'danger-full-access',
         ROOST_WORKDIR: '/workspace',
       }
 
