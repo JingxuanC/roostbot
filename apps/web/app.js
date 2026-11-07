@@ -2422,20 +2422,36 @@ function insertEvent(event) {
  * 用 after=LIVE.lastSeq 补拉断线期间的消息。
  * 返回是否成功；重连状态机据此决定继续退避还是重新开流。
  */
+let refreshMessagesInFlight = null
+let refreshMessagesAt = 0
+
+/**
+ * SSE 是主通道；这里只做断线补拉。多个触发源（重连、可见性、卡片事件）可能同时
+ * 调用，必须合并，否则界面会在同一秒打出一串 /messages?after=…。
+ */
 async function refreshMessages() {
   if (!LIVE.active || !LIVE.roomId) return false
+  if (refreshMessagesInFlight) return refreshMessagesInFlight
+  const now = Date.now()
+  if (now - refreshMessagesAt < 400) return true
+  refreshMessagesAt = now
   const roomId = LIVE.roomId
-  try {
-    const query = LIVE.lastSeq > 0 ? `?after=${encodeURIComponent(String(LIVE.lastSeq))}` : ''
-    const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages${query}`)
-    if (!LIVE.active || LIVE.roomId !== roomId) return false
-    const list = Array.isArray(data?.messages) ? data.messages : []
-    for (const message of list) appendLiveEvent(message)
-    return true
-  } catch (error) {
-    if (isAuthError(error)) requirePair()
-    return false
-  }
+  refreshMessagesInFlight = (async () => {
+    try {
+      const query = LIVE.lastSeq > 0 ? `?after=${encodeURIComponent(String(LIVE.lastSeq))}` : ''
+      const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages${query}`)
+      if (!LIVE.active || LIVE.roomId !== roomId) return false
+      const list = Array.isArray(data?.messages) ? data.messages : []
+      for (const message of list) appendLiveEvent(message)
+      return true
+    } catch (error) {
+      if (isAuthError(error)) requirePair()
+      return false
+    } finally {
+      refreshMessagesInFlight = null
+    }
+  })()
+  return refreshMessagesInFlight
 }
 
 /** 发消息后短轮询房间轮次；让「正在思考」和头像动画跟真实 turn 同步。 */
@@ -2462,7 +2478,7 @@ function watchRound(roomId) {
       renderWorking()
       return
     }
-    roundWatchTimer = setTimeout(tick, 800)
+    roundWatchTimer = setTimeout(tick, 1500)
   }
   roundWatchTimer = setTimeout(tick, 250)
 }
