@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="./styles.css?v=20261107d" />
     <link rel="stylesheet" href="./styles-blue.css?v=20261107d" />
     <link rel="stylesheet" href="./styles-grok.css?v=20261107d" />
-    <link rel="stylesheet" href="./styles-white.css?v=20261107e" />
+    <link rel="stylesheet" href="./styles-white.css?v=20261107f" />
   </head>
   <body>
     <div id="boot-warning" class="boot-warning" role="alert" hidden>
@@ -117,7 +117,7 @@
         <div class="brand">
           <span class="brand-name">Roost</span>
           <span class="brand-tag">M4</span>
-          <a class="head-icon" href="#/bots/new" aria-label="新建 Bot" title="新建 Bot">＋</a>
+          <a class="brand-bots" href="#/bots" aria-label="Bot 管理" title="Bot 管理">Bot</a>
           <a class="head-icon" href="#/rooms/new" aria-label="新建房间" title="新建房间">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           </a>
@@ -214,6 +214,7 @@
         </header>
         <div id="room-menu" class="room-menu" hidden>
           <a href="#/bots">Bot 与身份</a>
+          <a href="#/bots/new">新建 Bot</a>
           <a href="#/plugins">插件与面板</a>
           <a href="#/usage">用量与预算</a>
           <a href="#/schedules">定时任务</a>
@@ -362,6 +363,6 @@
         }
       }, 1200);
     </script>
-    <script type="module" src="./app.js?v=20261107d"></script>
+    <script type="module" src="./app.js?v=20261107f"></script>
   </body>
 </html>

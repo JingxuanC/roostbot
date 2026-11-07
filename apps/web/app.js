@@ -3088,14 +3088,16 @@ function setupSidebarDrawer() {
   if (!room || !toggle) return
   let lastFocus = null
   const isOpen = () => room.classList.contains('sidebar-open')
-  // 抽屉关着时不可聚焦，否则键盘会 Tab 进看不见的导航。
-  if (sidebar) sidebar.inert = true
+  const narrow = () => window.innerWidth <= 720
+  // 抽屉只存在于窄屏；桌面侧栏是可点击的常驻导航，不能设 inert，
+  // 否则视觉上还在、实际点击会穿透到 #room-view（表现为“点不动 Bot”）。
+  if (sidebar) sidebar.inert = narrow()
 
   const setOpen = (open, opener) => {
     room.classList.toggle('sidebar-open', open)
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false')
     toggle.setAttribute('aria-label', open ? '收起导航' : '展开导航')
-    if (sidebar) sidebar.inert = !open
+    if (sidebar) sidebar.inert = narrow() ? !open : false
     if (scrim) scrim.hidden = !open
     if (open) {
       lastFocus = opener || document.activeElement
@@ -3112,7 +3114,7 @@ function setupSidebarDrawer() {
   if (sidebar) {
     // 点侧栏里的链接就关掉抽屉，别挡着刚打开的房间/设置页。
     sidebar.addEventListener('click', (event) => {
-      if (event.target instanceof Element && event.target.closest('a')) setOpen(false)
+      if (narrow() && event.target instanceof Element && event.target.closest('a')) setOpen(false)
     })
   }
   document.addEventListener('keydown', (event) => {
@@ -3128,7 +3130,13 @@ function setupSidebarDrawer() {
     ui.trapTabKey(event, sidebar)
   })
   window.addEventListener('resize', () => {
-    if (window.innerWidth > 720 && isOpen()) setOpen(false)
+    if (!narrow()) {
+      if (isOpen()) setOpen(false)
+      else if (sidebar) sidebar.inert = false
+      if (scrim) scrim.hidden = true
+      return
+    }
+    if (!isOpen() && sidebar) sidebar.inert = true
   })
 }
 

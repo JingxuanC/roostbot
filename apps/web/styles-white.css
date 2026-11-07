@@ -223,3 +223,18 @@ body {
     background: #ffffff;
   }
 }
+
+/* 桌面侧栏品牌区：Bot 入口与“新建房间”加号明确分开，不再放两个加号。 */
+#room-view .brand-bots {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f1f3f5;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+#room-view .brand-bots:hover { background: #e9edf1; color: var(--text); }
