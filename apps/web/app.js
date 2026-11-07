@@ -687,7 +687,7 @@ function collapsedByDefault(delivery) {
 function renderPeerMessage(event, delivery) {
   const bot = botIdentity(event.actor.id)
   const text = event.payload.text
-  const summary = text.length > PEER_SUMMARY_CHARS ? `${text.slice(0, PEER_SUMMARY_CHARS)}…` : text
+  const summary = text.length > PEER_SUMMARY_CHARS ? `${text.slice(0, PEER_SUMMARY_CHARS)}…` : (text || (hasImagePart(event.payload) ? '图片' : ''))
   const bodyId = `peer-${event.seq}`
   const verb = PEER_VERBS[delivery] || ''
 
@@ -709,8 +709,13 @@ function renderPeerMessage(event, delivery) {
   const peerText = el('div', { class: 'peer-text' })
   peerText.append(markdownFragment(text))
   body.append(peerText)
-  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
-  if (attachments) body.append(attachments)
+  // DM/私聊的正文默认折叠；图片、选项卡和审批卡也要进折叠体，
+  // 否则图片消息只显示一行空摘要。
+  appendRichParts(body, event, false)
+  if (!hasImagePart(event.payload)) {
+    const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+    if (attachments) body.append(attachments)
+  }
   const meta = []
   if (event.peer.source) meta.push(`来源：${event.peer.source}`)
   if (event.peer.doneWhen) meta.push(`完成条件：${event.peer.doneWhen}`)
