@@ -34,6 +34,8 @@ ENV ROOST_DSH_WEB=1
 # DSH 的权限档位钉到 workspace-write，否则 approval 策略是 never，桥收不到请求。
 ENV ROOST_APPROVAL_BRIDGE=0
 ENV ROOST_APPROVAL_BRIDGE_PACKAGE=/opt/roost/packages/approvals-bridge
+# The profile plugin owns token deltas; room-agent must not re-send the final paragraph.
+ENV ROOST_STREAM_TAP=1
 # 沙箱外边界由 OpenShell 提供；这里保留 danger-full-access 作为「桥关闭时」的
 # 默认档位，桥启用时 room-agent 会覆盖它（approval 才能到达 answerer）。
 ENV DSH_PERMISSION_MODE=danger-full-access

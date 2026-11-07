@@ -426,9 +426,14 @@ export async function startRoomAgent(options) {
     const text = assistantText(params?.event)
     if (text === undefined) return
     assistant.set(params.sessionId, text)
-    // 流式文本由 approval-bridge 的 assistant-stream tap 发；这里只记最终答案，
-    // 避免整段再发一遍造成重复。
-    if (streaming.get(params.sessionId) === undefined) return
+    const live = streaming.get(params.sessionId)
+    if (live === undefined) return
+    // 镜像里装了 assistant-stream tap 时，流式文本由插件负责；否则用最终答案兜底
+    // 补一段 delta（老 fake DSH/没有 tap 的部署）。
+    if (live.chunked === true || process.env.ROOST_STREAM_TAP === '1') return
+    const delta = deltaSlice(live.sent, text)
+    live.sent = text
+    if (delta !== '') void postDelta(live.roomId, live.botId, delta)
   })
   rpc.on('session.status', (params) => {
     if (typeof params?.sessionId !== 'string') return

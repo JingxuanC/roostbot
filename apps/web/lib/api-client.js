@@ -142,7 +142,7 @@ export function createApiClient(options = {}) {
       throw new ApiError('network', '这个环境没有 fetch，连不上 API')
     }
     const cleanPath = String(path ?? '').startsWith('/') ? String(path) : `/${String(path ?? '')}`
-    const headers = { ...(requestOptions && requestOptions.headers ? requestOptions.headers : {}) }
+    const headers = {}
     const token = getToken()
     if (token) headers.authorization = `Bearer ${token}`
 

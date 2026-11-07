@@ -224,7 +224,10 @@ export function apply(
   // 不能因此让整个插件（包括 assistant-stream tap 和审批桥）加载失败。
   let tools: { register?: (definition: unknown) => unknown } | undefined
   try {
-    tools = (ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools
+    const getService = (ctx as unknown as { get?: (name: string) => unknown }).get
+    tools = typeof getService === 'function'
+      ? (getService.call(ctx, 'tools') as { register?: (definition: unknown) => unknown } | undefined)
+      : ((ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools)
   } catch {
     tools = undefined
   }

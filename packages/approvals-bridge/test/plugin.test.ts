@@ -52,6 +52,8 @@ function fakeContext() {
   return {
     ctx: {
       on(event: string, answer: DshAnswerer) {
+        // The plugin also subscribes to agent/assistant-stream for token deltas.
+        if (event === 'agent/assistant-stream') return () => {}
         assert.equal(event, 'approval/request')
         listener = answer
         return () => {}

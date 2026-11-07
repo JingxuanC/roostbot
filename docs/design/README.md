@@ -29,6 +29,7 @@
 | 23 | [compliance.md](compliance.md) | 数据驻留、导出、删除、保留期（与 storage/artifacts 的 GC 对齐） |
 | 24 | [attachments-ui.md](attachments-ui.md) | 消息附件与产物渲染：图片/PDF/HTML 沙箱/表格/代码及安全边界 |
 | 25 | [architecture-v2.md](architecture-v2.md) | 模块化单体、房间事件流推送、可恢复轮次、routine 进房间的迁移顺序 |
+| 26 | [agent-runtimes.md](agent-runtimes.md) | 多 Agent 运行时：Adapter、Native/Embedded、Grok Build/Claude Code/Codex 接入、能力/凭据/用量 |
 
 ## 读法建议
 

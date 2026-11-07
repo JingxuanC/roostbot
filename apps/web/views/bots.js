@@ -33,6 +33,129 @@ const MEMORY_OPTIONS = [
   { value: 'member', label: '个人', description: '只跟这个 Bot 有关' },
 ]
 
+// ---- 运行时（docs/design/agent-runtimes.md §5/§6/§10）----------------------
+// 字段形状以后端并行实现为准：Bot/Create/Update 增加 runtimeKind（默认 dsh）、
+// 可选 runtimeConfig / credentialRef / capabilities。这里只做展示与选择，
+// 能力缺失时显示「未探测」，绝不把缺失当成「支持」。
+export const DEFAULT_RUNTIME = 'dsh'
+export const RUNTIME_OPTIONS = [
+  { value: 'dsh', label: 'DSH', short: 'DSH' },
+  { value: 'grok-build', label: 'Grok Build', short: 'Grok Build' },
+  { value: 'claude-code', label: 'Claude Code', short: 'Claude' },
+  { value: 'codex', label: 'Codex', short: 'Codex' },
+  { value: 'hermes', label: 'Hermes', short: 'Hermes' },
+]
+const RUNTIME_BY_VALUE = new Map(RUNTIME_OPTIONS.map((option) => [option.value, option]))
+
+const CAPABILITY_FIELDS = [
+  { key: 'streaming', label: '流式', format: boolCapability },
+  { key: 'tools', label: '工具', format: (value) => enumCapability(value, { native: '原生', platform: '平台', none: '无' }) },
+  { key: 'permissions', label: '权限', format: (value) => enumCapability(value, { native: '原生', bridge: '桥接', none: '无' }) },
+  { key: 'images', label: '图片', format: imagesCapability },
+  { key: 'resume', label: '恢复', format: boolCapability },
+]
+
+function parseObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    try {
+      const parsed = JSON.parse(value)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    } catch {
+      // 后端存的是 TEXT 时也可能是坏 JSON；按「未探测」处理，不猜。
+    }
+  }
+  return null
+}
+
+function boolCapability(value) {
+  if (value === true) return '支持'
+  if (value === false) return '不支持'
+  return '未知'
+}
+
+function enumCapability(value, labels) {
+  if (typeof value !== 'string' || value === '') return '未知'
+  return labels[value] || value
+}
+
+function imagesCapability(value) {
+  const images = parseObject(value)
+  if (!images) return '未知'
+  const parts = []
+  if (images.input === true) parts.push('输入')
+  if (images.output === true) parts.push('输出')
+  if (parts.length > 0) return parts.join('+')
+  if (images.input === false && images.output === false) return '无'
+  return '未知'
+}
+
+/** Bot 的 runtimeKind；缺省按契约视为 dsh，未知字符串原样返回（不冒充 dsh）。 */
+export function botRuntimeKind(bot) {
+  const raw = bot && typeof bot === 'object' ? bot.runtimeKind ?? bot.runtime_kind : undefined
+  if (typeof raw === 'string' && raw.trim() !== '') return raw.trim()
+  return DEFAULT_RUNTIME
+}
+
+/** 列表/标题里的短标签；未知值显示「未知」，不猜成某个已知运行时。 */
+export function runtimeKindLabel(kind) {
+  const option = RUNTIME_BY_VALUE.get(String(kind ?? ''))
+  return option ? option.short : '未知'
+}
+
+/** 服务端缓存的能力对象；缺失/空对象/坏 JSON 都返回 null（= 未探测）。 */
+export function botCapabilities(bot) {
+  const raw = parseObject(
+    (bot && (bot.capabilities ?? bot.runtimeCapabilities ?? bot.runtime_capabilities)) || null
+  )
+  if (!raw) return null
+  const nested = parseObject(raw.capabilities)
+  const capabilities = nested || raw
+  const known = CAPABILITY_FIELDS.some(
+    (field) => capabilities[field.key] !== undefined && capabilities[field.key] !== null
+  )
+  return known ? capabilities : null
+}
+
+/** 服务端探测结果（契约未强制；有就展示，不伪造）。 */
+export function botRuntimeProbe(bot) {
+  const raw = parseObject(
+    (bot && (bot.runtimeProbe ?? bot.runtime_probe ?? bot.probe)) || null
+  )
+  if (!raw || typeof raw.ok !== 'boolean') return null
+  const problems = Array.isArray(raw.problems)
+    ? raw.problems.filter((item) => typeof item === 'string' && item.trim() !== '').slice(0, 3)
+    : []
+  return { ok: raw.ok === true, problems }
+}
+
+/** 紧凑能力摘要：known=false 表示「未探测」，items 中的「未知」不当作支持。 */
+export function capabilitySummary(bot) {
+  const capabilities = botCapabilities(bot)
+  const probe = botRuntimeProbe(bot)
+  if (!capabilities) return { known: false, items: [], probe }
+  const items = CAPABILITY_FIELDS.map((field) => {
+    const value = capabilities[field.key]
+    return {
+      key: field.key,
+      label: field.label,
+      value: field.format(value),
+      known: value !== undefined && value !== null,
+    }
+  })
+  return { known: true, items, probe }
+}
+
+function runtimeTagNode(bot) {
+  const kind = botRuntimeKind(bot)
+  const known = RUNTIME_BY_VALUE.has(kind)
+  return el('span', {
+    class: `runtime-tag${known ? '' : ' is-unknown'}`,
+    text: known ? runtimeKindLabel(kind) : '未知',
+    title: known ? `运行时：${runtimeKindLabel(kind)}` : `未知运行时：${kind}`,
+  })
+}
+
 export function botStatusLabel(status) {
   if (status === 'paused') return '已暂停'
   if (status === 'active') return '在岗'
@@ -62,6 +185,7 @@ function normalizeBot(payload) {
     toolsDeny: Array.isArray(bot.toolsDeny) ? bot.toolsDeny : [],
     memoryScopes: Array.isArray(bot.memoryScopes) ? bot.memoryScopes : [],
     status: bot.status === 'paused' ? 'paused' : 'active',
+    runtimeKind: botRuntimeKind(bot),
   }
 }
 
@@ -77,6 +201,7 @@ function botRow(bot) {
   const top = el('div', { class: 'bot-card-top' })
   top.append(el('span', { class: 'bot-card-name', text: bot.name }))
   top.append(statusBadge(bot.status))
+  top.append(runtimeTagNode(bot))
   main.append(top)
   if (bot.role) main.append(el('p', { class: 'bot-card-role', text: bot.role }))
   const meta = []
@@ -178,6 +303,14 @@ function createView(ctx, bots) {
   const name = ui.input({ id: 'bot-name', placeholder: '例如 选股师', maxlength: NAME_MAX, required: true })
   const role = ui.input({ id: 'bot-role', placeholder: '例如 选股', maxlength: ROLE_MAX })
   const model = ui.input({ id: 'bot-model', placeholder: '例如 deepseek-chat', maxlength: 80, required: true })
+  const runtime = ui.select({
+    id: 'bot-runtime',
+    options: RUNTIME_OPTIONS.map((option) => ({
+      value: option.value,
+      label: option.value === DEFAULT_RUNTIME ? `${option.label}（默认）` : option.label,
+    })),
+    value: DEFAULT_RUNTIME,
+  })
   const error = ui.inlineError()
   const submit = button({ label: '创建 Bot', variant: 'primary', type: 'submit' })
   const form = el('form', { class: 'form page-card', novalidate: true })
@@ -193,6 +326,12 @@ function createView(ctx, bots) {
       '模型',
       [
         field({
+          label: '运行时',
+          control: runtime,
+          id: 'bot-runtime',
+          hint: '默认 DSH。其它运行时需要服务端已装好对应 CLI 与凭据；能力以服务端探测为准。',
+        }),
+        field({
           label: '模型',
           control: model,
           id: 'bot-model',
@@ -200,7 +339,7 @@ function createView(ctx, bots) {
           hint: '创建时固定，之后全局默认变了不影响它（服务端要求创建时必须给模型）',
         }),
       ],
-      { description: '创建后模型不再跟随全局默认（docs/design/bots.md §2）。' }
+      { description: '创建后模型不再跟随全局默认（docs/design/bots.md §2）。运行时决定房间里的 Agent 适配器（docs/design/agent-runtimes.md §10）。' }
     )
   )
   form.append(error)
@@ -249,7 +388,12 @@ function createView(ctx, bots) {
     ui.setBusy(submit, true, '创建中…')
     try {
       const workspaceId = await ctx.ensureWorkspaceId()
-      const payload = { workspaceId, name: cleanName, model: model.value.trim() }
+      const payload = {
+        workspaceId,
+        name: cleanName,
+        model: model.value.trim(),
+        runtimeKind: runtime.value,
+      }
       if (cleanRole !== '') payload.role = cleanRole
       const created = normalizeBot(await ctx.api.post('/api/bots', payload))
       try {
@@ -337,6 +481,8 @@ function settingsView(ctx, bot, bots) {
   titleRow.append(titleText)
   let statusNode = statusBadge(bot.status)
   titleRow.append(statusNode)
+  let runtimeTitleTag = runtimeTagNode(bot)
+  titleRow.append(runtimeTitleTag)
   const actions = el('div', { class: 'page-title-actions' })
 
   const globalStatus = ui.statusLine('')
@@ -392,6 +538,104 @@ function settingsView(ctx, bot, bots) {
     items: MEMORY_OPTIONS.map((option) => ({ ...option, checked: bot.memoryScopes.includes(option.value) })),
   })
   const model = ui.input({ id: 'bot-setting-model', value: bot.model || '', maxlength: 80 })
+
+  // ---- 运行时：选择 + 能力摘要（§10「UI 按能力渲染」）----
+  // 缺 capabilities 时显示「未探测」，绝不显示成「支持」；credentialRef 只读展示，不编辑明文。
+  function runtimeOptionsFor(kind) {
+    const options = RUNTIME_OPTIONS.map((option) => ({
+      value: option.value,
+      label: option.value === DEFAULT_RUNTIME ? `${option.label}（默认）` : option.label,
+    }))
+    if (!RUNTIME_BY_VALUE.has(kind)) {
+      options.unshift({ value: kind, label: `未知（${kind}）`, disabled: true })
+    }
+    return options
+  }
+
+  const currentRuntime = botRuntimeKind(bot)
+  const runtime = ui.select({
+    id: 'bot-setting-runtime',
+    options: runtimeOptionsFor(currentRuntime),
+    value: currentRuntime,
+  })
+  const runtimeBox = el('div', { class: 'runtime-detail' })
+
+  function buildRuntimeDetail() {
+    const nodes = []
+    const summary = capabilitySummary(bot)
+    const head = el('div', { class: 'runtime-capability-head' })
+    head.append(el('span', { class: 'runtime-capability-label', text: summary.known ? '能力（服务端缓存）' : '能力' }))
+    head.append(
+      el('span', {
+        class: `runtime-capability-state${summary.known ? '' : ' is-unknown'}`,
+        text: summary.known ? '已上报' : '未探测',
+      })
+    )
+    nodes.push(head)
+    if (summary.known) {
+      const list = el('div', { class: 'runtime-capabilities' })
+      for (const item of summary.items) {
+        const cell = el('span', { class: `runtime-capability${item.known ? '' : ' is-unknown'}` })
+        cell.append(el('span', { class: 'runtime-capability-key', text: `${item.label} ` }))
+        cell.append(el('strong', { class: 'runtime-capability-value', text: item.value }))
+        list.append(cell)
+      }
+      nodes.push(list)
+      if (summary.items.some((item) => !item.known)) {
+        nodes.push(el('p', { class: 'field-hint', text: '部分能力服务端未上报，显示为「未知」；未知不等于支持。' }))
+      }
+      nodes.push(
+        el('p', {
+          class: 'field-hint',
+          text: '能力来自服务端缓存；切换运行时后要等新的探测/协商刷新，缓存可能滞后。',
+        })
+      )
+    } else {
+      nodes.push(
+        el('p', {
+          class: 'field-hint',
+          text: '未探测：服务端还没有这个运行时的能力数据（streaming / tools / permissions / images / resume），这里不假设它支持。',
+        })
+      )
+    }
+    const probe = summary.probe
+    if (probe) {
+      nodes.push(
+        el('p', {
+          class: `runtime-probe${probe.ok ? '' : ' is-warn'}`,
+          text: `探测：${probe.ok ? '通过' : '未通过'}${probe.problems.length > 0 ? ` · ${probe.problems.join('；')}` : ''}`,
+        })
+      )
+    } else {
+      nodes.push(
+        el('p', {
+          class: 'field-hint',
+          text: '探测状态未上报；可用性以服务端探测为准，UI 不据此宣称可用。',
+        })
+      )
+    }
+    const credentialRef =
+      typeof bot.credentialRef === 'string'
+        ? bot.credentialRef
+        : typeof bot.credential_ref === 'string'
+          ? bot.credential_ref
+          : ''
+    if (credentialRef !== '') {
+      nodes.push(el('p', { class: 'runtime-credential', text: `凭据引用：${credentialRef}（只读；明文由服务端托管）` }))
+    }
+    return nodes
+  }
+
+  function refreshRuntimeUi() {
+    const kind = botRuntimeKind(bot)
+    ui.setSelectOptions(runtime, runtimeOptionsFor(kind), kind)
+    runtimeBox.replaceChildren(...buildRuntimeDetail())
+    const nextTag = runtimeTagNode(bot)
+    runtimeTitleTag.replaceWith(nextTag)
+    runtimeTitleTag = nextTag
+  }
+
+  runtimeBox.replaceChildren(...buildRuntimeDetail())
 
   // ---- 头像上传（addendum §C）：本地读成 dataURL，保存时才随 PATCH 发 avatar.image ----
   let avatarDraft = {
@@ -546,6 +790,19 @@ function settingsView(ctx, bot, bots) {
       }),
     ])
   )
+  form.append(
+    ui.section(
+      '运行时',
+      [
+        ui.field('运行时', runtime, {
+          id: 'bot-setting-runtime',
+          hint: `默认 ${DEFAULT_RUNTIME}；改动只改这个 Bot。能力/可用性以服务端探测为准，未探测不会显示成「支持」。`,
+        }),
+        runtimeBox,
+      ],
+      { description: '运行时决定房间里的 Agent 适配器（docs/design/agent-runtimes.md §5/§6/§10）。' }
+    )
+  )
 
   // ---- 危险区 ----
   const deleteButton = ui.button('删除 Bot', { variant: 'ghost', size: 'sm' })
@@ -613,6 +870,7 @@ function settingsView(ctx, bot, bots) {
     ui.setError(error, '')
     ui.clearFieldInvalid(error)
     ui.setStatus(statusLine, '')
+    const beforeRuntime = botRuntimeKind(bot)
     const next = {
       name: name.value.trim(),
       role: role.value.trim(),
@@ -623,6 +881,7 @@ function settingsView(ctx, bot, bots) {
       approval: approval.value,
       memoryScopes: memory.getValues(),
       model: model.value.trim(),
+      runtimeKind: runtime.value,
     }
     if (next.name === '') {
       ui.setError(error, '名称不能为空')
@@ -673,6 +932,7 @@ function settingsView(ctx, bot, bots) {
       const before = Array.isArray(bot[key]) ? bot[key] : []
       if (JSON.stringify(before) !== JSON.stringify(next[key])) patch[key] = next[key]
     }
+    if (next.runtimeKind !== beforeRuntime) patch.runtimeKind = next.runtimeKind
     // 头像只在用户真的换过/移除过时发；发空对象 = 清掉图片、回到程序化图标。
     if (avatarDraft.dirty) {
       if (avatarDraft.image !== '' && !isAvatarDataUrl(avatarDraft.image)) {
@@ -693,9 +953,22 @@ function settingsView(ctx, bot, bots) {
     ui.setBusy(saveButton, true, '保存中…')
     try {
       const payload = await ctx.api.patch(path, patch)
-      const updated = normalizeBot(payload && (payload.bot || payload))
+      const updatedRaw = payload && (payload.bot || payload)
+      const updated = normalizeBot(updatedRaw)
       const merged = { ...bot, ...next, ...(updated && updated.id === bot.id ? updated : {}) }
       Object.assign(bot, merged)
+      // 旧后端可能忽略 runtimeKind 且不回该字段：不把「发出去的」当成「已保存的」。
+      const runtimeAccepted =
+        patch.runtimeKind === undefined
+          ? true
+          : Boolean(
+              updatedRaw &&
+                typeof updatedRaw === 'object' &&
+                ('runtimeKind' in updatedRaw || 'runtime_kind' in updatedRaw)
+            )
+      if (patch.runtimeKind !== undefined) {
+        bot.runtimeKind = runtimeAccepted ? botRuntimeKind(updatedRaw) : beforeRuntime
+      }
       titleText.querySelector('.page-title').textContent = bot.name
       let subtitle = titleText.querySelector('.page-subtitle')
       if (bot.role && !subtitle) {
@@ -715,7 +988,16 @@ function settingsView(ctx, bot, bots) {
         titleAvatar.replaceWith(nextTitleAvatar)
         titleAvatar = nextTitleAvatar
       }
-      ui.setStatus(statusLine, '已保存。人设/能力的改动会留版本记录。')
+      refreshRuntimeUi()
+      const savedRuntime = botRuntimeKind(bot)
+      if (patch.runtimeKind !== undefined && (!runtimeAccepted || savedRuntime !== patch.runtimeKind)) {
+        ui.setStatus(
+          statusLine,
+          `已保存其它改动，但服务端没有接受 runtimeKind=${patch.runtimeKind}（该部署的后端可能未实现该字段）；运行时显示以服务端返回为准。`
+        )
+      } else {
+        ui.setStatus(statusLine, '已保存。人设/能力的改动会留版本记录。')
+      }
       try {
         await ctx.loadBots({ force: true })
       } catch {
@@ -726,7 +1008,12 @@ function settingsView(ctx, bot, bots) {
         ctx.requirePair()
         return
       }
-      ui.setError(error, `保存失败：${cause instanceof Error ? cause.message : String(cause)}`)
+      const runtimeOnly =
+        Object.keys(patch).length === 1 && Object.prototype.hasOwnProperty.call(patch, 'runtimeKind')
+      const suffix = runtimeOnly
+        ? '（只改运行时被拒绝：该部署的后端可能还不接受 runtimeKind 的 PATCH；可先同时改其它字段或等 API 上线）'
+        : ''
+      ui.setError(error, `保存失败：${cause instanceof Error ? cause.message : String(cause)}${suffix}`)
     } finally {
       ui.setBusy(saveButton, false)
     }

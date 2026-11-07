@@ -1018,3 +1018,108 @@
 .trace-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
 .trace-head button { border: 0; background: transparent; color: #d7d7dc; cursor: pointer; }
 .trace-body { margin: 0; padding: 8px 10px; white-space: pre-wrap; }
+
+/* ---- Bot 运行时（AgentAdapter；docs/design/agent-runtimes.md §10）------------
+   Bot 列表的紧凑运行时标签与设置页的能力摘要。token 借用 styles.css 的
+   --roost-* 一套；这里只做最小样式，移动端收窄字号并允许换行。 */
+.bot-card-top {
+  flex-wrap: wrap;
+}
+
+.runtime-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid var(--roost-border, #24272C);
+  border-radius: var(--roost-radius-full, 999px);
+  color: var(--roost-muted, #8B93A3);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.runtime-tag.is-unknown {
+  border-style: dashed;
+  color: var(--roost-warn, #D9A441);
+}
+
+.runtime-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.runtime-capability-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-capability-label {
+  color: var(--roost-muted, #8B93A3);
+  font-size: 12px;
+}
+
+.runtime-capability-state {
+  font-size: 12px;
+  color: var(--roost-muted, #8B93A3);
+}
+
+.runtime-capability-state.is-unknown {
+  color: var(--roost-warn, #D9A441);
+}
+
+.runtime-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.runtime-capability {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--roost-muted, #8B93A3);
+}
+
+.runtime-capability-value {
+  color: var(--roost-ink, #E8EAEF);
+  font-weight: 500;
+}
+
+.runtime-capability.is-unknown .runtime-capability-value {
+  color: var(--roost-muted, #8B93A3);
+  font-weight: 400;
+}
+
+.runtime-probe {
+  margin: 0;
+  font-size: 12px;
+  color: var(--roost-muted, #8B93A3);
+}
+
+.runtime-probe.is-warn {
+  color: var(--roost-warn, #D9A441);
+}
+
+.runtime-credential {
+  margin: 0;
+  font-size: 12px;
+  color: var(--roost-muted, #8B93A3);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .runtime-tag {
+    font-size: 10px;
+    padding: 0 5px;
+  }
+
+  .runtime-capabilities {
+    gap: 2px 10px;
+  }
+}
