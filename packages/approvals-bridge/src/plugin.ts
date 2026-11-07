@@ -168,6 +168,58 @@ export function apply(
 
   // 给 Bot 一个真正可调用的团队创建工具。复用同一个 runtime token / workspace 配置，
   // 建房仍走控制面的 create_room 审批，不在沙箱里直接写控制面库。
+  // DSH 的 SDK 只转发 durable session/event，真正的 token 流在 agent/assistant-stream。
+  // 插件直接把它节流成 chat.message.delta，房间 SSE 才能逐字显示。
+  const streamBuffers = new Map<string, { roomId: string; botId: string; text: string; timer: ReturnType<typeof setTimeout> | null }>()
+  const flushStream = (sessionId: string) => {
+    const buffer = streamBuffers.get(sessionId)
+    if (buffer === undefined || buffer.text === '') return
+    const text = buffer.text
+    buffer.text = ''
+    void doFetch(`${settings.apiBase}/api/internal/rooms/${encodeURIComponent(buffer.roomId)}/deltas`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-runtime-token': settings.runtimeToken },
+      body: JSON.stringify({ botId: buffer.botId, delta: text }),
+    }).catch(() => undefined)
+  }
+  const onAssistantStream = (event: unknown) => {
+    if (event === null || typeof event !== 'object') return
+    const record = event as { agent?: { session?: { id?: unknown } }; frame?: { type?: unknown; chunk?: { type?: unknown; text?: unknown } } }
+    const sessionId = typeof record.agent?.session?.id === 'string' ? record.agent.session.id : ''
+    const roomMatch = /^room-(rm_[0-9A-Za-z]+)-/.exec(sessionId)
+    if (!roomMatch) return
+    const roomId = roomMatch[1]!
+    const botMatch = /-((?:bot_)[0-9A-Za-z]+)$/.exec(sessionId)
+    const botId = botMatch?.[1] ?? settings.botId
+    const frame = record.frame
+    if (frame?.type === 'start') {
+      streamBuffers.set(sessionId, { roomId, botId, text: '', timer: null })
+      return
+    }
+    if (frame?.type === 'end') {
+      const buffer = streamBuffers.get(sessionId)
+      if (buffer?.timer != null) clearTimeout(buffer.timer)
+      flushStream(sessionId)
+      streamBuffers.delete(sessionId)
+      return
+    }
+    if (frame?.type !== 'chunk' || frame.chunk?.type !== 'text-delta') return
+    const text = typeof frame.chunk.text === 'string' ? frame.chunk.text : ''
+    if (text === '') return
+    let buffer = streamBuffers.get(sessionId)
+    if (buffer === undefined) {
+      buffer = { roomId, botId, text: '', timer: null }
+      streamBuffers.set(sessionId, buffer)
+    }
+    buffer.text += text
+    if (buffer.timer !== null) return
+    buffer.timer = setTimeout(() => {
+      if (buffer.timer !== null) buffer.timer = null
+      flushStream(sessionId)
+    }, 50)
+  }
+  if (typeof ctx.on === 'function') ctx.on('agent/assistant-stream', onAssistantStream)
+
   const tools = (ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools
   if (tools !== undefined && typeof tools.register === 'function') {
     tools.register(createTeamTool(settings, doFetch))

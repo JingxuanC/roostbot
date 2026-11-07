@@ -426,13 +426,9 @@ export async function startRoomAgent(options) {
     const text = assistantText(params?.event)
     if (text === undefined) return
     assistant.set(params.sessionId, text)
-    const live = streaming.get(params.sessionId)
-    if (live === undefined) return
-    // 已经逐 token 发过就不用再把整段发一遍；最终 chat.message 会替换流式行。
-    if (live.chunked === true) return
-    const delta = deltaSlice(live.sent, text)
-    live.sent = text
-    if (delta !== '') void postDelta(live.roomId, live.botId, delta)
+    // 流式文本由 approval-bridge 的 assistant-stream tap 发；这里只记最终答案，
+    // 避免整段再发一遍造成重复。
+    if (streaming.get(params.sessionId) === undefined) return
   })
   rpc.on('session.status', (params) => {
     if (typeof params?.sessionId !== 'string') return
