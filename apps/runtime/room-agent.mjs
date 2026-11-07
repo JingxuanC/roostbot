@@ -123,6 +123,14 @@ export function assistantText(event) {
   return text === '' ? undefined : text
 }
 
+/** DSH 的实时 token 流：assistant/live-chunk 的 text-delta。 */
+export function liveChunkText(event) {
+  if (event === undefined || event.type !== 'assistant/live-chunk') return undefined
+  const chunk = event.data?.chunk
+  if (!chunk || chunk.type !== 'text-delta') return undefined
+  return typeof chunk.text === 'string' ? chunk.text : undefined
+}
+
 // [PASS] 允许中英文方括号和大小写；与 packages/rooms 的 classifyReply 同一口径
 // （沙箱镜像只拷 room-agent.mjs，不能 import 包，所以这里保留一份等价实现）。
 // 裸写 pass 不算，避免把 "pass" 当静默吞掉。
@@ -361,7 +369,33 @@ export async function startRoomAgent(options) {
 
   // sessionId → 正在生成的房间。文本变长就 POST message.delta，不等整段说完。
   const streaming = new Map()
+  const deltaBuffers = new Map()
   let deltasEnabled = true
+
+  /** 把 50ms 内的 token 合并成一个 delta，避免每个 token 都写一条事件。 */
+  function queueDelta(sessionId, roomId, botId, text) {
+    if (!deltasEnabled || text === '') return
+    let buffer = deltaBuffers.get(sessionId)
+    if (buffer === undefined) {
+      buffer = { roomId, botId, pending: '', timer: null }
+      deltaBuffers.set(sessionId, buffer)
+    }
+    buffer.pending += text
+    if (buffer.timer !== null) return
+    buffer.timer = setTimeout(() => {
+      buffer.timer = null
+      const chunk = buffer.pending
+      buffer.pending = ''
+      if (chunk !== '') void postDelta(buffer.roomId, buffer.botId, chunk)
+    }, 50)
+  }
+
+  function clearDeltaBuffer(sessionId) {
+    const buffer = deltaBuffers.get(sessionId)
+    if (buffer === undefined) return
+    if (buffer.timer !== null) clearTimeout(buffer.timer)
+    deltaBuffers.delete(sessionId)
+  }
 
   async function postDelta(roomId, botId, delta) {
     if (!deltasEnabled || typeof delta !== 'string' || delta === '') return
@@ -379,11 +413,23 @@ export async function startRoomAgent(options) {
   }
 
   rpc.on('session.event', (params) => {
+    const liveChunk = liveChunkText(params?.event)
+    if (liveChunk !== undefined) {
+      const live = streaming.get(params.sessionId)
+      if (live !== undefined && liveChunk !== '') {
+        live.sent += liveChunk
+        live.chunked = true
+        queueDelta(params.sessionId, live.roomId, live.botId, liveChunk)
+      }
+      return
+    }
     const text = assistantText(params?.event)
     if (text === undefined) return
     assistant.set(params.sessionId, text)
     const live = streaming.get(params.sessionId)
     if (live === undefined) return
+    // 已经逐 token 发过就不用再把整段发一遍；最终 chat.message 会替换流式行。
+    if (live.chunked === true) return
     const delta = deltaSlice(live.sent, text)
     live.sent = text
     if (delta !== '') void postDelta(live.roomId, live.botId, delta)
@@ -449,7 +495,7 @@ export async function startRoomAgent(options) {
     await prepareSession(sessionId)
     assistant.delete(sessionId)
     if (streamTo && typeof streamTo.roomId === 'string' && typeof streamTo.botId === 'string') {
-      streaming.set(sessionId, { roomId: streamTo.roomId, botId: streamTo.botId, sent: '' })
+      streaming.set(sessionId, { roomId: streamTo.roomId, botId: streamTo.botId, sent: '', chunked: false })
     }
     const idle = idleSignal(sessionId)
     const stop = stopSignalPromise(signal)
@@ -494,6 +540,7 @@ export async function startRoomAgent(options) {
       }
     } finally {
       streaming.delete(sessionId)
+      clearDeltaBuffer(sessionId)
       stop.cancel()
       idle.cancel()
       deadline.cancel()
