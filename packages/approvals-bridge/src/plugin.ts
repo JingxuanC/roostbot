@@ -334,7 +334,7 @@ function createSendImageTool(
       }
       const artifactId = uploadBody && uploadBody.artifact && typeof uploadBody.artifact.id === 'string' ? uploadBody.artifact.id : ''
       if (artifactId === '') throw new Error('upload image returned no artifact id')
-      const posted = await doFetch(`${settings.apiBase}/api/internal/rooms/${encodeURIComponent(roomId)}/say`, {
+      const posted = await doFetch(`${settings.apiBase}/api/rooms/${encodeURIComponent(roomId)}/say`, {
         method: 'POST',
         headers: { ...authHeaders, 'content-type': 'application/json' },
         body: JSON.stringify({ botId, ...(caption === '' ? {} : { text: caption }), artifactIds: [artifactId] }),
