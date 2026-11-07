@@ -371,7 +371,7 @@ export function createCliAdapter(options = {}) {
       }
       let child
       try {
-        child = spawn(options.command, ['--version'], { cwd: options.cwd, env: options.env, stdio: ['ignore', 'pipe', 'pipe'] })
+        child = spawn(options.command, ['--version'], { cwd: options.cwd, env: { ...process.env, ...(options.env ?? {}) }, stdio: ['ignore', 'pipe', 'pipe'] })
       } catch (error) {
         finish({ ok: false, problems: [messageOf(error)] })
         return
@@ -412,7 +412,7 @@ export function createCliAdapter(options = {}) {
     try {
       child = spawn(options.command, options.args ?? [], {
         cwd: spec.workdir,
-        env: { ...options.env, ...spec.env },
+        env: { ...process.env, ...(options.env ?? {}), ...(spec.env ?? {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
     } catch (error) {

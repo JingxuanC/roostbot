@@ -89,3 +89,28 @@ ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
 ```text
 REPLY {"actor":{"kind":"bot"},"text":"本地收到"}
 ```
+
+## 本地多 Runtime E2E
+
+在本地 Claude Code CLI 可用、并指向 fake Anthropic upstream 后：
+
+```bash
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+ROOST_CLAUDE_BIN=/path/to/claude \
+  node --experimental-strip-types scripts/local-multi-e2e.mjs
+```
+
+实测结果：
+
+```text
+REPLY {"actor":{"kind":"bot"},"text":"本地 Claude 收到"}
+```
+
+这验证了：
+
+```text
+控制面 → room-agent supervisor → Claude Code CLI adapter
+  → /v1/messages → fake upstream → advance → chat.message
+```
+
+说明 ACP/CLI Adapter 与 `ROOST_MULTI_RUNTIME` 的链路在本地是通的。

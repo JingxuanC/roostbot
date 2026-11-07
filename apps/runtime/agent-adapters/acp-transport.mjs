@@ -139,7 +139,7 @@ export function createAcpTransport(options = {}) {
 
   const child = spawn(command, args, {
     cwd,
-    env,
+    env: { ...process.env, ...(env ?? {}) },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   if (child === null || typeof child !== 'object') throw new TypeError('spawn did not return a child process')

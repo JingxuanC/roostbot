@@ -16,7 +16,7 @@
 import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
 import { decideRoutineAttempt, isolatedRoutinePrompt, ROUTINE_MAX_ATTEMPTS } from './routine-turn.mjs'
 import { spawn } from 'node:child_process'
-import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
 import { installProfilePlugin } from './profile-plugins.mjs'
@@ -606,13 +606,21 @@ export async function startRoomAgent(options) {
     const grokBin = (process.env.ROOST_GROK_BIN ?? '').trim() || 'grok'
     const claudeBin = (process.env.ROOST_CLAUDE_BIN ?? '').trim() || 'claude'
     const codexBin = (process.env.ROOST_CODEX_BIN ?? '').trim() || 'codex'
+    // Only the vendor credentials the CLI needs; never forward the control-plane
+    // runtime token or DSH keys to an external agent.
+    const claudeEnv = {}
+    for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']) {
+      const value = process.env[key]
+      if (typeof value === 'string' && value !== '') claudeEnv[key] = value
+    }
     return {
       adapterConfigs: {
         'grok-build': { command: grokBin, args: [] },
         codex: { command: codexBin, args: [] },
         'claude-code': {
           command: claudeBin,
-          args: ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json']
+          args: ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json'],
+          env: claudeEnv
         }
       },
       logger: (message, meta) => {
@@ -730,6 +738,13 @@ export async function startRoomAgent(options) {
     if (supervisor === null) throw new Error('multi-runtime supervisor unavailable')
     const text = typeof prompt === 'string' && prompt.trim() !== '' ? prompt : `房间里有人说：${messageText}`
     const workspaceId = multiRuntimeWorkspaceId()
+    const workRoot = String(options.workdir ?? process.env.ROOST_WORKDIR ?? '/workspace')
+    const botWorkdir = `${workRoot.replace(/\/+$/, '')}/agents/${targetBotId}`
+    try {
+      mkdirSync(botWorkdir, { recursive: true })
+    } catch {
+      // The adapter will report a useful spawn error if the workdir is unusable.
+    }
     const turnId = `mr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const runtimeTurn = {
       turnId,
@@ -749,7 +764,7 @@ export async function startRoomAgent(options) {
         roomId,
         botId: targetBotId,
         workspaceId,
-        workdir: `/workspace/agents/${targetBotId}`,
+        workdir: botWorkdir,
         env: {}
       },
       turn: runtimeTurn,
