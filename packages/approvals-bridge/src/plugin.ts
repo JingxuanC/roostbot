@@ -220,7 +220,14 @@ export function apply(
   }
   if (typeof ctx.on === 'function') ctx.on('agent/assistant-stream', onAssistantStream)
 
-  const tools = (ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools
+  // Cordis 对未声明 inject 的服务属性会直接抛错；取不到 tools 时只跳过工具注册，
+  // 不能因此让整个插件（包括 assistant-stream tap 和审批桥）加载失败。
+  let tools: { register?: (definition: unknown) => unknown } | undefined
+  try {
+    tools = (ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools
+  } catch {
+    tools = undefined
+  }
   if (tools !== undefined && typeof tools.register === 'function') {
     tools.register(createTeamTool(settings, doFetch))
     tools.register(createSendImageTool(settings, doFetch))
