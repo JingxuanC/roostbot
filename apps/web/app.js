@@ -46,7 +46,7 @@ import {
 } from './lib/rooms.js'
 import * as ui from './lib/ui.js'
 import { mountApprovalsPage } from './views/approvals.js'
-import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
+import { mountBotSettingsPage, mountBotsPage } from './views/bots.js?v=20261107d'
 import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
 import { mountPanelsPage } from './views/panels.js'
 import { mountMarketplacePage } from './views/marketplace.js'
