@@ -136,3 +136,23 @@ PAIR_ROOM_OK { gotClaude: true, gotCodex: true }
 
 两个不同 Runtime 的 Bot 在同一个 Roost 房间里按 @ 顺序发言，都是真实
 DeepSeek 返回，不是 fake upstream。
+
+### 三个 Runtime 同房间
+
+继续把本机 DSH 也拉进同一个房间：
+
+```bash
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+ROOST_CLAUDE_BIN=~/roost-local-agents/bin/claude \
+ROOST_CODEX_BIN=~/roost-local-agents/bin/codex-acp \
+  node --experimental-strip-types scripts/local-three-room-e2e.mjs
+```
+
+实测：
+
+```text
+room [ 'ClaudeBot', 'CodexBot', 'DshBot' ]
+THREE_ROOM_OK { gotClaude: true, gotCodex: true, gotDsh: true }
+```
+
+三个 Bot 在同一个房间里按 @ 顺序发言，全部走真实 DeepSeek。
