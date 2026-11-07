@@ -4,14 +4,68 @@
 #   + @deepseek-ai/dsh（SDK 长活进程）
 #   + room-agent.mjs（沙箱主进程：JSON-RPC 驱动 DSH，按房间管理会话）
 #
-# 构建（远端 Docker 28）：
-#   docker build -f apps/runtime/agent.Dockerfile -t roost/agent:dev .
+# 构建（远端 Docker 28；构建机的 docker bridge 关了 IPv4 forwarding，需要 host 网络拉
+# npm/apt 包）：
+#   docker build --network host -f apps/runtime/agent.Dockerfile -t roost/agent:dev .
+#
+# 外部 runtime（docs/design/agent-runtimes.md §12.1）：默认安装 Claude Code CLI +
+# Codex CLI/codex-acp；grok-build 没有公开官方安装包，默认跳过（见 GROK_BUILD_*）。
+# 所有版本固定，镜像里不写任何 key/OAuth 状态；缺少的二进制由 adapter probe 报成
+# 数据（ok:false/problems），不影响 DSH 启动，也不影响 multi-runtime 默认关闭。
 # 运行（由控制面创建沙箱时指定）：
 #   sandbox create --from roost/agent:dev -- node /opt/roost/room-agent.mjs
 FROM node:22-slim
 
 ARG DSH_VERSION=0.2.1-rc.5
+# External runtimes: pinned, opt-out via build args. No credentials are baked in.
+ARG INSTALL_CLAUDE_CODE=1
+ARG CLAUDE_CODE_VERSION=2.1.319
+ARG INSTALL_CODEX_CLI=1
+ARG CODEX_VERSION=0.167.0
+ARG INSTALL_CODEX_ACP=1
+ARG CODEX_ACP_VERSION=0.16.0
+# grok-build has no public official package/installer at the pinned date. Point
+# this at a pinned tarball (containing bin/<GROK_BUILD_BIN>) to install it;
+# default empty = explicit skip with a note.
+ARG GROK_BUILD_INSTALL_URL=
+ARG GROK_BUILD_SHA256=
+ARG GROK_BUILD_BIN=grok
+
+# libssl3: codex-acp's linux-x64 native binary links libssl.so.3. git/curl are
+# runtime needs of the external CLIs; ca-certificates is required for HTTPS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl git libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" && npm cache clean --force && dsh --version
+
+RUN set -eux; \
+    if [ "${INSTALL_CLAUDE_CODE}" = "1" ]; then \
+      npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+    else echo "NOTE: Claude Code CLI skipped (INSTALL_CLAUDE_CODE=0)"; fi; \
+    if [ "${INSTALL_CODEX_CLI}" = "1" ]; then \
+      npm install -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}"; \
+    else echo "NOTE: Codex CLI skipped (INSTALL_CODEX_CLI=0)"; fi; \
+    if [ "${INSTALL_CODEX_ACP}" = "1" ]; then \
+      npm install -g --no-audit --no-fund "@zed-industries/codex-acp@${CODEX_ACP_VERSION}"; \
+    else echo "NOTE: codex-acp skipped (INSTALL_CODEX_ACP=0)"; fi; \
+    if [ -n "${GROK_BUILD_INSTALL_URL}" ]; then \
+      echo "installing grok-build from ${GROK_BUILD_INSTALL_URL}"; \
+      mkdir -p /opt/agents/grok-build/bin; \
+      curl -fsSL "${GROK_BUILD_INSTALL_URL}" -o /tmp/grok-build.tar.gz; \
+      if [ -n "${GROK_BUILD_SHA256}" ]; then \
+        echo "${GROK_BUILD_SHA256}  /tmp/grok-build.tar.gz" | sha256sum -c -; \
+      else echo "WARNING: GROK_BUILD_SHA256 is empty; pinning hash is recommended"; fi; \
+      tar -xzf /tmp/grok-build.tar.gz -C /opt/agents/grok-build --strip-components=1; \
+      if [ -f "/opt/agents/grok-build/bin/${GROK_BUILD_BIN}" ]; then \
+        chmod +x "/opt/agents/grok-build/bin/${GROK_BUILD_BIN}"; \
+      else echo "NOTE: tarball had no bin/${GROK_BUILD_BIN}; probe will report it missing"; fi; \
+      rm -f /tmp/grok-build.tar.gz; \
+    else \
+      echo "NOTE: grok-build ACP wrapper not installed (no public official package)."; \
+      echo "      Set GROK_BUILD_INSTALL_URL (+GROK_BUILD_SHA256) to a pinned tarball."; \
+      echo "      Probe reports it as data (ok:false/problems); DSH boot is unaffected."; \
+    fi; \
+    npm cache clean --force
 
 COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
 # routine 隔离回合的纯函数；room-agent import 它，漏 COPY 会在沙箱里启动即崩。
@@ -31,9 +85,23 @@ COPY apps/runtime/agent-supervisor.mjs /opt/roost/apps/runtime/agent-supervisor.
 RUN ln -s /opt/roost/apps/runtime/agent-supervisor.mjs /opt/roost/agent-supervisor.mjs
 # 多 runtime 默认关闭；控制面可通过 ROOST_MULTI_RUNTIME=1 打开。
 ENV ROOST_MULTI_RUNTIME=0
+# Adapter commands. Missing binaries are reported by probe as data, not boot errors.
+ENV ROOST_CLAUDE_BIN=claude
+ENV ROOST_CODEX_BIN=codex-acp
+ENV ROOST_GROK_BIN=/opt/agents/grok-build/bin/grok
 # 沙箱以 uid 1000 运行：COPY 会保留宿主机源文件权限（本地可能是 600），
 # 不放开读权限时 room-agent 连 dsh-web.mjs 都 import 不了。
 RUN chmod -R a+rX /opt/roost
+
+# Build-time smoke checks (never fail on a missing external runtime):
+# - the supervisor/registry graph imports through the symlink layout;
+# - room-agent still exports its entry (boot path intact);
+# - each external runtime probe returns DATA (ok/version/auth/problems), never throws.
+RUN set -eux; \
+    dsh --version; \
+    node --input-type=module -e 'await import("/opt/roost/agent-supervisor.mjs"); await import("/opt/roost/apps/runtime/agent-adapters/registry.mjs"); console.log("multi-runtime graph ok")'; \
+    node --input-type=module -e 'const m = await import("/opt/roost/room-agent.mjs"); if (typeof m.startRoomAgent !== "function") process.exit(1); console.log("room-agent entry ok")'; \
+    node --input-type=module -e 'const { createRuntimeAdapter } = await import("/opt/roost/apps/runtime/agent-adapters/registry.mjs"); const cases = [["grok-build", { command: process.env.ROOST_GROK_BIN, args: [], initializeTimeoutMs: 1500 }], ["codex", { command: process.env.ROOST_CODEX_BIN, args: [], initializeTimeoutMs: 1500 }], ["claude-code", { command: process.env.ROOST_CLAUDE_BIN }]]; const out = {}; for (const [kind, config] of cases) { try { const adapter = createRuntimeAdapter(kind, config); const probe = await adapter.probe(); out[kind] = { ok: probe.ok, version: probe.version ?? null, auth: probe.auth, problems: (probe.problems ?? []).slice(0, 1) }; } catch (error) { out[kind] = { ok: false, error: String(error?.message ?? error) }; } } console.log(JSON.stringify(out))'
 
 # 会话日志跟工作区走（停止/启动沙箱不丢），见 docs/spikes/0002。
 ENV DSH_HOME=/workspace/.dsh
