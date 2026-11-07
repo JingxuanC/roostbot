@@ -76,3 +76,16 @@ REPLY { "seq": 7, "actor": { "kind": "bot" }, "text": "本地收到" }
   `free token balance is exhausted`。
 - macOS 上 App 的 Node 带 hardened runtime；rc.5 的原生 addon 需要匹配签名的
   Node，本地可用 ad-hoc 签名的 Node 副本跑（仅开发）。
+
+## 一键本地 E2E
+
+```bash
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+  node --experimental-strip-types scripts/local-e2e.mjs
+```
+
+脚本会启动本地控制面、fake model upstream、本地 room-agent，跑一轮真实房间消息，并打印：
+
+```text
+REPLY {"actor":{"kind":"bot"},"text":"本地收到"}
+```
