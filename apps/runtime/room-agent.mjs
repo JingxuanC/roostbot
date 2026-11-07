@@ -440,6 +440,7 @@ export async function startRoomAgent(options) {
   }
 
   rpc.on('session.event', (params) => {
+    if (process.env.ROOST_DEBUG_EVENTS === '1') log(`event ${params?.event?.type ?? '?'} ${JSON.stringify(params?.event?.data ?? {}).slice(0, 200)}`)
     const liveChunk = liveChunkText(params?.event)
     if (liveChunk !== undefined) {
       const live = streaming.get(params.sessionId)
@@ -531,10 +532,11 @@ export async function startRoomAgent(options) {
     const deadline = delay(limits.replyTimeoutMs ?? 240_000)
     let grace = null
     try {
-      await rpc.request('session/prompt', {
+      const promptResult = await rpc.request('session/prompt', {
         sessionId,
         contentBlocks: [{ type: 'text', text }]
       })
+      if (process.env.ROOST_DEBUG_EVENTS === '1') log(`prompt result ${JSON.stringify(promptResult).slice(0, 200)}`)
       // 没有 status 通知时用 session/wait 兜底（真服务端会等到空闲再回）；
       // session/wait 本身失败时不要抢先结束，继续等 idle 通知/超时。
       const fallback = rpc

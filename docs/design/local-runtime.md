@@ -50,3 +50,29 @@ node apps/runtime/room-agent.mjs
 - 外部 Runtime（Grok Build/Claude/Codex）需要本机安装对应 CLI，并设置
   `ROOST_GROK_BIN` / `ROOST_CLAUDE_BIN` / `ROOST_CODEX_BIN`。
 - 不要把这个模式暴露到公网。
+
+## 已验证的本地 E2E
+
+本机用 **DSH 0.2.1-rc.5**（不是 App 自带的 rc.3）+ 本地 fake model upstream 跑通：
+
+```text
+浏览器/HTTP → 本地控制面 → local room-agent → 本机 dsh rc.5
+  → /v1/messages → 控制面模型代理 → fake upstream
+  → chat.message → SSE
+```
+
+结果：
+
+```text
+REPLY { "seq": 7, "actor": { "kind": "bot" }, "text": "本地收到" }
+```
+
+注意：
+
+- App 自带的 DSH 是 rc.3，和 room-agent 的 SDK 事件协议不完全一致，会
+  `advanced ... missed`；本地 E2E 要显式指向 rc.5。
+- `POST /api/pairing/code` 创建的测试账号没有注册赠送额度；需要先
+  `grantTokenCredit`（或通过正常注册流程创建账号），否则模型代理返回
+  `free token balance is exhausted`。
+- macOS 上 App 的 Node 带 hardened runtime；rc.5 的原生 addon 需要匹配签名的
+  Node，本地可用 ad-hoc 签名的 Node 副本跑（仅开发）。
