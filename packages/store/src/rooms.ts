@@ -149,7 +149,11 @@ export function readMessages(
     audience: `room:${roomId}`,
     limit,
   })
-  return events.map((event) => messageFromPayload(event.seq, event.at, event.actor, roomId, event.payload))
+  // 房间日志只投影真正的 chat.message；chat.message.delta 是流式片段，
+  // 混进消息列表会渲染成一条条空消息。
+  return events
+    .filter((event) => event.kind === 'chat.message')
+    .map((event) => messageFromPayload(event.seq, event.at, event.actor, roomId, event.payload))
 }
 
 export interface RoomLogPage {
@@ -195,12 +199,12 @@ export function readRoomLogPage(
   // 窗口下界 = 第 logMax 新的一条的 seq；不足 logMax 条时从头（seq 1）起。
   const floorRow = store.db
     .prepare(
-      `SELECT seq FROM events WHERE domain = 'chat' AND audience = ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
+      `SELECT seq FROM events WHERE domain = 'chat' AND kind = 'chat.message' AND audience = ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
     )
     .get(audience, ROUND_LIMITS.logMax - 1) as { seq: number | bigint } | undefined
   const floorSeq = floorRow === undefined || floorRow === null ? 1 : toNumber(floorRow.seq)
 
-  const clauses = [`domain = 'chat'`, 'audience = ?', 'seq >= ?']
+  const clauses = [`domain = 'chat'`, `kind = 'chat.message'`, 'audience = ?', 'seq >= ?']
   const params: unknown[] = [audience, floorSeq]
   if (beforeSeq !== null) {
     clauses.push('seq < ?')

@@ -9,3 +9,6 @@ build/
 .turbo/
 coverage/
 data/
+
+# local demo/deployment state
+.local/
