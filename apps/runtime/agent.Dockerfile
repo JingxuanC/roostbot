@@ -123,4 +123,6 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/.dsh && chown -R 1000:1000 /workspace
 
 # 沙箱主进程：长活 room-agent（内部再起 `dsh --profile sdk`）。
+# OpenShell 拒绝 uid/gid 0 的 workload identity，最终镜像不能以 root 运行。
+USER 1000:1000
 CMD ["node", "/opt/roost/room-agent.mjs"]
