@@ -22,6 +22,15 @@ COPY apps/runtime/dsh-web.mjs /opt/roost/dsh-web.mjs
 # 审批桥：启动 dsh 前由 room-agent 装进 $DSH_HOME/profiles/<profile>（TODO 5.4.3）。
 COPY apps/runtime/profile-plugins.mjs /opt/roost/profile-plugins.mjs
 COPY packages/approvals-bridge /opt/roost/packages/approvals-bridge
+# 多 Agent runtime（docs/design/agent-runtimes.md）：supervisor 动态 import
+# ./agent-supervisor.mjs；镜像里用符号链接把真实文件保留在 apps/runtime/，
+# 这样 supervisor/adapters 的 ../../packages 相对导入仍然指向 /opt/roost/packages。
+COPY packages/agent-runtime /opt/roost/packages/agent-runtime
+COPY apps/runtime/agent-adapters /opt/roost/apps/runtime/agent-adapters
+COPY apps/runtime/agent-supervisor.mjs /opt/roost/apps/runtime/agent-supervisor.mjs
+RUN ln -s /opt/roost/apps/runtime/agent-supervisor.mjs /opt/roost/agent-supervisor.mjs
+# 多 runtime 默认关闭；控制面可通过 ROOST_MULTI_RUNTIME=1 打开。
+ENV ROOST_MULTI_RUNTIME=0
 # 沙箱以 uid 1000 运行：COPY 会保留宿主机源文件权限（本地可能是 600），
 # 不放开读权限时 room-agent 连 dsh-web.mjs 都 import 不了。
 RUN chmod -R a+rX /opt/roost
