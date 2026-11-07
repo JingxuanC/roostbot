@@ -37,6 +37,15 @@ import {
   handleRestoreBot
 } from './bots-routes.ts'
 import {
+  handleCloseAgentBinding,
+  handleCreateAgentBinding,
+  handleCreateRoomSlot,
+  handleDeleteRoomSlot,
+  handleGetRoomSlot,
+  handleListRoomSlots,
+  handlePatchRoomSlot,
+} from './agent-bindings-routes.ts'
+import {
   handleAddRoomMembers,
   handleCreateRoomExtended,
   handleDeleteRoom,
@@ -2465,6 +2474,54 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/slots$/.test(path)) {
+    if (method === 'GET') {
+      await handleListRoomSlots(ctx, req, res, url)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateRoomSlot(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/slots\/[^/]+$/.test(path)) {
+    if (method === 'GET') {
+      await handleGetRoomSlot(ctx, req, res, url)
+      return
+    }
+    if (method === 'PATCH') {
+      await handlePatchRoomSlot(ctx, req, res, url)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteRoomSlot(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/slots\/[^/]+\/bindings$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleCreateAgentBinding(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/bindings\/[^/]+\/close$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleCloseAgentBinding(ctx, req, res, url)
     return
   }
 

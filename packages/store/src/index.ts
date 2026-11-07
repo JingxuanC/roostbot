@@ -91,6 +91,45 @@ export {
 } from './bots.ts'
 export type { BotLifecycleOptions, BotVersion, CreateBotStoreInput, UpdateBotStoreInput } from './bots.ts'
 
+// ---- Agent Runtime：Room Slot / Binding / Session（0024_agent_runtimes.sql）----
+export {
+  BINDING_KINDS,
+  BINDING_STATES,
+  SESSION_STATUSES,
+  SLOT_STATUSES,
+  closeAgentSession,
+  closeBinding,
+  closeRoomSlot,
+  closeSlot,
+  createAgentSession,
+  createBinding,
+  createRoomSlot,
+  createSlot,
+  getAgentSession,
+  getBinding,
+  getRoomSlot,
+  getSlot,
+  listAgentSessions,
+  listBindings,
+  listRoomSlots,
+  listSlots,
+} from './agent-bindings.ts'
+export type {
+  AgentBinding,
+  AgentSessionRecord,
+  BindingKind,
+  BindingState,
+  CloseOptions,
+  CreateAgentSessionInput,
+  CreateBindingInput,
+  CreateRoomSlotInput,
+  ListBindingsFilter,
+  ListSlotsFilter,
+  RoomSlot,
+  SessionStatus,
+  SlotStatus,
+} from './agent-bindings.ts'
+
 // ---- M4：房间成员与扩展列 ------------------------------------------------------
 export {
   addRoomMembers,
