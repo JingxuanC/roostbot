@@ -2286,10 +2286,25 @@ function markThinkingAvatar(botId) {
   }
 }
 
+function syncTypingIndicator() {
+  const pill = $('#typing-indicator')
+  const text = $('#typing-text')
+  const working = $('#working')
+  const source = $('#working-text')
+  if (!pill || !text || !working || !source) return
+  const show = !working.hidden && LIVE.active && !working.classList.contains('is-offline')
+  pill.hidden = !show
+  if (!show) return
+  text.textContent = source.textContent || '正在思考…'
+  pill.classList.toggle('is-thinking', working.classList.contains('is-thinking'))
+}
+
 function renderWorking() {
   const working = $('#working')
   const text = $('#working-text')
   if (!working || !text) return
+  // Grok 布局隐藏了顶栏状态区；用消息/输入框之间的 typing pill 显示同一状态。
+  queueMicrotask(() => syncTypingIndicator())
   working.classList.remove('is-thinking')
   markThinkingAvatar('')
   if (!LIVE.active) {

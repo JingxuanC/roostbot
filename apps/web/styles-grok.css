@@ -979,3 +979,22 @@
     transition: none !important;
   }
 }
+
+/* 房间思考态：顶栏在 Grok 布局里被隐藏，用输入框上方的 pill 反馈。 */
+#room-view .typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin: 0 auto 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  flex: none;
+}
+
+#room-view .typing-indicator[hidden] { display: none; }
+#room-view .typing-indicator .thinking-dots { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+#room-view .typing-indicator .thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--text-2); }
