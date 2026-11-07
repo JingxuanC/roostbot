@@ -117,7 +117,13 @@ export async function handleInternalListBots(
     return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
   }
   if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
-  const bots = listBots(store, workspaceId).map((bot) => ({ id: bot.id, name: bot.name, role: bot.role }))
+  const bots = listBots(store, workspaceId).map((bot) => ({
+    id: bot.id,
+    name: bot.name,
+    role: bot.role,
+    runtimeKind: bot.runtimeKind ?? 'dsh',
+    ...(bot.capabilities === undefined ? {} : { capabilities: bot.capabilities })
+  }))
   sendJson(res, 200, { bots })
 }
 
