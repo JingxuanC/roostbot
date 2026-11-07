@@ -1627,6 +1627,12 @@ async function renderRoute() {
 
   if (isAuthRouteName(route.name)) {
     await ensureAuthProbe()
+    // 刷新时 URL 还停在 #/login，但 cookie 会话已经有效：直接回到工作区，
+    // 不再让用户每次刷新都点一次「进入工作区」。
+    if (route.name === 'login' && authState.status === 'authenticated') {
+      await enterLiveRoom('')
+      return
+    }
     const authMain = $('#auth-main')
     if (!authMain) return
     showView('auth')
