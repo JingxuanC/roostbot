@@ -743,6 +743,12 @@ export async function startRoomAgent(options) {
    * errors and stops on turn.ended. The supervisor's guardAgentEvents already
    * rejects a missing/duplicate terminal frame.
    */
+  /** Codex ACP prepends its model-metadata fallback warning to the answer. */
+  function stripCodexMetadataWarning(text) {
+    if (typeof text !== 'string') return text
+    return text.replace(/^Model metadata for `[^`]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.\s*/, '')
+  }
+
   async function runSupervisorTurn({ roomId, targetBotId, runtimeKind, sessionId, prompt, messageText, signal, context }) {
     const supervisor = await getSupervisor()
     if (supervisor === null) throw new Error('multi-runtime supervisor unavailable')
@@ -784,7 +790,7 @@ export async function startRoomAgent(options) {
       if (event.type === 'text.delta') {
         queueDelta(sessionId, roomId, targetBotId, event.text)
       } else if (event.type === 'text.final') {
-        finalText = event.text
+        finalText = stripCodexMetadataWarning(event.text)
       } else if (event.type === 'error') {
         errorText = event.message
         log(`multi-runtime ${runtimeKind} error for ${targetBotId}: ${event.code} ${event.message}`)

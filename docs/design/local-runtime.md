@@ -114,3 +114,25 @@ REPLY {"actor":{"kind":"bot"},"text":"本地 Claude 收到"}
 ```
 
 说明 ACP/CLI Adapter 与 `ROOST_MULTI_RUNTIME` 的链路在本地是通的。
+
+## 真实模型本地多 Bot 房间
+
+本机 Claude Code + Codex 都指向同一个 DeepSeek key：
+
+```bash
+. ~/roost-local-agents/env.sh
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+ROOST_CLAUDE_BIN=~/roost-local-agents/bin/claude \
+ROOST_CODEX_BIN=~/roost-local-agents/bin/codex-acp \
+  node --experimental-strip-types scripts/local-pair-room-e2e.mjs
+```
+
+实测：
+
+```text
+room [ 'ClaudeBot', 'CodexBot' ]
+PAIR_ROOM_OK { gotClaude: true, gotCodex: true }
+```
+
+两个不同 Runtime 的 Bot 在同一个 Roost 房间里按 @ 顺序发言，都是真实
+DeepSeek 返回，不是 fake upstream。
