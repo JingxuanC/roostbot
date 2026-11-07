@@ -30,9 +30,9 @@ RUN chmod -R a+rX /opt/roost
 ENV DSH_HOME=/workspace/.dsh
 # 沙箱里默认开面板容器（127.0.0.1:4099）；控制面/用户可设 ROOST_DSH_WEB=0 关掉。
 ENV ROOST_DSH_WEB=1
-# 审批桥默认开（可用 ROOST_APPROVAL_BRIDGE=0 覆盖）。开着时 room-agent 会把
+# 默认关闭审批桥：产品默认 Bot 全权，bash 不再逐次审批。需要审批时改成 1 并接入审批卡。
 # DSH 的权限档位钉到 workspace-write，否则 approval 策略是 never，桥收不到请求。
-ENV ROOST_APPROVAL_BRIDGE=1
+ENV ROOST_APPROVAL_BRIDGE=0
 ENV ROOST_APPROVAL_BRIDGE_PACKAGE=/opt/roost/packages/approvals-bridge
 # 沙箱外边界由 OpenShell 提供；这里保留 danger-full-access 作为「桥关闭时」的
 # 默认档位，桥启用时 room-agent 会覆盖它（approval 才能到达 answerer）。
