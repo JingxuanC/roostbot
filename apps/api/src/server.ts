@@ -1452,8 +1452,12 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
   const body = parsed.value as Record<string, unknown>
   const botId = typeof body.botId === 'string' ? body.botId.trim() : ''
   const text = typeof body.text === 'string' ? body.text.trim() : ''
+  const artifactIds = parseArtifactIds(body.artifactIds)
   if (botId === '' || botId.length > 64) {
     return sendError(res, 400, 'invalid_body', 'body.botId must be 1..64 characters')
+  }
+  if (artifactIds === null) {
+    return sendError(res, 400, 'invalid_body', 'body.artifactIds must be an array of artifact ids')
   }
   if (text.length > 8000) {
     return sendError(res, 400, 'invalid_body', 'body.text must be at most 8000 characters')
@@ -1482,12 +1486,40 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
     }
     return
   }
-  if (text === '') {
-    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
+  if (text === '' && artifactIds.length === 0) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters, or attach an image')
   }
+  if (artifactIds.length > 0 && ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'image messages need the SQLite store')
+  }
+  if (artifactIds.length > 0 && ctx.rawStore !== undefined) {
+    const workspaceId = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    for (const artifactId of artifactIds) {
+      const artifact = getArtifact(ctx.rawStore, artifactId)
+      if (artifact === null || (workspaceId !== null && artifact.workspaceId !== workspaceId)) {
+        return sendError(res, 400, 'invalid_body', `unknown artifact ${artifactId}`)
+      }
+    }
+  }
+  const parts =
+    artifactIds.length === 0
+      ? undefined
+      : [
+          ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+          ...artifactIds.map((artifactId) => ({ type: 'image' as const, artifactId })),
+        ]
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   try {
-    const message = await ctx.store.postBotMessage({ roomId, botId, text, ...(idem === undefined ? {} : { idem }) })
+    const message = await ctx.store.postBotMessage({
+      roomId,
+      botId,
+      text,
+      ...(parts === undefined ? {} : { parts }),
+      ...(idem === undefined ? {} : { idem })
+    })
+    if (ctx.rawStore !== undefined && artifactIds.length > 0) {
+      artifactIds.forEach((artifactId, position) => linkArtifact(ctx.rawStore!, message.seq, artifactId, position))
+    }
     const [postedJson] = await messagesJson(ctx, [message], roomId)
     sendJson(res, 201, { message: postedJson })
   } catch (err) {

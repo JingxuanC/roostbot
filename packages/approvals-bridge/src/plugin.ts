@@ -14,6 +14,9 @@
 //   * 轮询只信控制面的 status：approved / rejected 以外的词一律当作「还没决定」，
 //     免得一个坏响应被误读成放行。
 
+import { readFile } from 'node:fs/promises'
+import { basename, extname } from 'node:path'
+
 import { createApprovalBridge } from './bridge.ts'
 import type { ApprovalBridge, BridgeDecision, WaitInput } from './bridge.ts'
 import { defaultRequestId, installApprovalBridge } from './dsh.ts'
@@ -168,6 +171,7 @@ export function apply(
   const tools = (ctx as unknown as { tools?: { register?: (definition: unknown) => unknown } }).tools
   if (tools !== undefined && typeof tools.register === 'function') {
     tools.register(createTeamTool(settings, doFetch))
+    tools.register(createSendImageTool(settings, doFetch))
   }
 
   return { bridge, answerer }
@@ -263,6 +267,82 @@ function createTeamTool(
         members: memberBotIds.map((id) => byId.get(id) ?? id),
         note: '告诉用户在「需要你」里批准这一次建团队请求。'
       }
+    },
+  }
+}
+
+/** 把沙箱里的图片文件登记成 artifact，再以 image part 发进当前房间。 */
+function createSendImageTool(
+  settings: { apiBase: string; runtimeToken: string; workspaceId: string; botId: string },
+  doFetch: typeof fetch,
+): unknown {
+  return {
+    name: 'send_image',
+    description:
+      'Send an image file from the sandbox into the current Roost room. Use this after generating ' +
+      'a PNG/JPEG/WebP chart or picture; pass its absolute path (for example /workspace/out/chart.png).',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the image inside the sandbox' },
+        text: { type: 'string', description: 'Optional caption shown above the image' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args: Record<string, unknown>, exec: { signal?: AbortSignal; agent?: { session?: { id?: string } } }) {
+      const filePath = typeof args['path'] === 'string' ? args['path'].trim() : ''
+      if (filePath === '') throw new Error('image path is required')
+      const caption = typeof args['text'] === 'string' ? args['text'].trim() : ''
+      const sessionId = String(exec.agent?.session?.id ?? '')
+      const roomMatch = /^room-(rm_[0-9A-Za-z]+)-/.exec(sessionId)
+      if (roomMatch === null) throw new Error('send_image is only available inside a room session')
+      const roomId = roomMatch[1]!
+      const botMatch = /-((?:bot_)[0-9A-Za-z]+)$/.exec(sessionId)
+      const botId = botMatch?.[1] ?? settings.botId
+      const bytes = await readFile(filePath)
+      if (bytes.byteLength === 0) throw new Error('image file is empty')
+      if (bytes.byteLength > 20 * 1024 * 1024) throw new Error('image file exceeds 20 MiB')
+      const ext = extname(filePath).toLowerCase()
+      const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg'
+      const name = basename(filePath) || `image${ext || '.png'}`
+      const authHeaders = { 'x-runtime-token': settings.runtimeToken }
+      const uploaded = await doFetch(`${settings.apiBase}/api/internal/artifacts`, {
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'content-type': mime,
+          'x-workspace-id': settings.workspaceId,
+          'x-produced-by': botId,
+          'x-artifact-kind': 'image',
+          'x-artifact-name': name,
+          'x-file-mime': mime,
+        },
+        body: bytes,
+        signal: exec.signal,
+      })
+      const uploadBody = (await uploaded.json().catch(() => null)) as { artifact?: { id?: unknown }; message?: unknown } | null
+      if (!uploaded.ok) {
+        const message = uploadBody && typeof uploadBody === 'object' && typeof (uploadBody as { message?: unknown }).message === 'string'
+          ? String((uploadBody as { message?: unknown }).message)
+          : `HTTP ${uploaded.status}`
+        throw new Error(`upload image failed: ${message}`)
+      }
+      const artifactId = uploadBody && uploadBody.artifact && typeof uploadBody.artifact.id === 'string' ? uploadBody.artifact.id : ''
+      if (artifactId === '') throw new Error('upload image returned no artifact id')
+      const posted = await doFetch(`${settings.apiBase}/api/internal/rooms/${encodeURIComponent(roomId)}/say`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({ botId, ...(caption === '' ? {} : { text: caption }), artifactIds: [artifactId] }),
+        signal: exec.signal,
+      })
+      const postedBody = (await posted.json().catch(() => null)) as { message?: { seq?: unknown } } | null
+      if (!posted.ok) throw new Error(`post image message failed: HTTP ${posted.status}`)
+      return { artifactId, messageSeq: postedBody?.message?.seq ?? null, roomId }
     },
   }
 }
