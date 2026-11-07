@@ -2596,6 +2596,8 @@ function handleDeltaEvent(event) {
   }
   const delta = payload && typeof payload.delta === 'string' ? payload.delta : ''
   if (delta === '') return
+  // 最终消息已经落地后，迟到的 delta 不能再在它下面新建一条流式行。
+  if (!LIVE.pendingReply) return
   streamingText += delta
   if (!TRACE.marks.some((mark) => mark.name === 'first.delta')) traceMark('first.delta')
   const list = $('#messages')
@@ -3271,6 +3273,9 @@ function setupComposer() {
       syncSend()
       growComposer()
       input.focus()
+      LIVE.pendingReply = true
+      LIVE.pendingReplyBotId = LIVE.room?.responder?.botId || LIVE.room?.hostBotId || ''
+      renderWorking()
       try {
         traceReset()
         TRACE.id = `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
@@ -3293,6 +3298,9 @@ function setupComposer() {
         renderWorking()
         watchRound(LIVE.roomId)
       } catch (error) {
+        LIVE.pendingReply = false
+        LIVE.pendingReplyBotId = ''
+        renderWorking()
         if (isAuthError(error)) {
           requirePair()
           return
