@@ -204,7 +204,7 @@ import { answerChoiceCard, decorateParts, parseCard, postCard, projectApprovalDe
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
-import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
+import { readWorkspaceRuntime, startWorkspaceRuntime, stopWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
 import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
@@ -3327,15 +3327,50 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
-  if (/^\/api\/workspaces\/[^/]+\/(start|runtime)$/.test(path)) {
-    const match = /^\/api\/workspaces\/([^/]+)\/(start|runtime)$/.exec(path)
+  if (/^\/api\/workspaces\/[^/]+\/logs$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/logs$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null) {
+      sendError(res, 404, 'not_found', 'malformed workspace path')
+      return
+    }
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message)
+      return
+    }
+    const workspaces = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
+    if (!workspaces.some((workspace) => workspace.id === workspaceId)) {
+      sendError(res, 404, 'not_found', 'unknown workspace')
+      return
+    }
+    if (ctx.runtimeManager?.logs === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'runtime logs are not available for this provider')
+      return
+    }
+    try {
+      const tail = Number.parseInt(url.searchParams.get('tail') ?? '120', 10)
+      const logs = await ctx.runtimeManager.logs(workspaceId, { tail: Number.isFinite(tail) ? tail : 120 })
+      sendJson(res, 200, { logs })
+    } catch (error) {
+      sendError(res, 502, 'runtime.logs_failed', error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  if (/^\/api\/workspaces\/[^/]+\/(start|runtime|stop)$/.test(path)) {
+    const match = /^\/api\/workspaces\/([^/]+)\/(start|runtime|stop)$/.exec(path)
     const workspaceId = match === null ? null : safeDecode(match[1]!)
     const action = match?.[2]
     if (workspaceId === null || action === undefined) {
       sendError(res, 404, 'not_found', 'malformed workspace path')
       return
     }
-    if (action === 'start' && method !== 'POST') {
+    if ((action === 'start' || action === 'stop') && method !== 'POST') {
       notFound(req, res, method, path)
       return
     }
@@ -3364,6 +3399,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     }
     if (ctx.rawStore === undefined || ctx.runtimeManager === undefined) {
       sendError(res, 503, 'runtime.not_configured', 'no runtime manager configured')
+      return
+    }
+    if (action === 'stop') {
+      try {
+        const result = await stopWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+        sendJson(res, 200, result)
+      } catch (error) {
+        sendError(res, 502, 'runtime.stop_failed', error instanceof Error ? error.message : String(error))
+      }
       return
     }
     try {

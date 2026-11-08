@@ -220,11 +220,10 @@ export function localRuntimeManager(config: LocalRuntimeConfig): RuntimeManager 
       return { sandbox: entry.sandbox, phase: 'ready' }
     },
 
-    /** Local-only cleanup hook; not part of the shared RuntimeManager port. */
-    async stop(workspaceId) {
+    async stop(workspaceId, context) {
       const entry = entries.get(workspaceId)
       if (entry === undefined) return false
-      revokeEntry(entry)
+      revokeEntry(entry, context?.store)
       return true
     },
   }

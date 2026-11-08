@@ -34,6 +34,8 @@ const DEFAULT_NETWORK = process.env.ROOST_DOCKER_NETWORK ?? 'host'
 const DEFAULT_MEMORY = process.env.ROOST_DOCKER_MEMORY ?? '2g'
 const DEFAULT_CPUS = process.env.ROOST_DOCKER_CPUS ?? '2'
 const DEFAULT_PIDS = process.env.ROOST_DOCKER_PIDS ?? '2048'
+const ALLOWED_IMAGES = String(process.env.ROOST_DOCKER_ALLOWED_IMAGES ?? DEFAULT_IMAGE).split(',').map((v) => v.trim()).filter(Boolean)
+const COMMAND = ['node', '/opt/roost/room-agent.mjs']
 const READY_PATH = '/workspace/.roost/ready'
 const SANDBOX_UID = 1000
 const SANDBOX_GID = 1000
@@ -145,16 +147,18 @@ function envFile(env) {
 
 async function createContainer(spec) {
   const name = spec.name ?? containerName(spec.workspaceId)
+  if (!/^roost-ws-[a-f0-9]+$/.test(name)) throw new Error('container name must be roost-ws-<hash>')
   const image = spec.image ?? DEFAULT_IMAGE
+  if (!ALLOWED_IMAGES.includes(image)) throw new Error(`image not allowed: ${image}`)
   const dir = ensureWorkspaceDir(spec.workspaceId)
   const env = { ROOST_READY_FILE: READY_PATH, ...(spec.env ?? {}) }
   const file = envFile(env)
-  const command = Array.isArray(spec.command) && spec.command.length > 0
-    ? spec.command
-    : ['node', '/opt/roost/room-agent.mjs']
+  // The worker only runs the room-agent entrypoint. This keeps a compromised
+  // control-plane token from turning the Docker host into a generic executor.
+  const command = COMMAND
   const args = [
     'run', '-d', '--name', name,
-    '--network', spec.network ?? DEFAULT_NETWORK,
+    '--network', DEFAULT_NETWORK,
     '--user', `${SANDBOX_UID}:${SANDBOX_GID}`,
     '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges',

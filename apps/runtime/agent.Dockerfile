@@ -81,6 +81,7 @@ COPY packages/approvals-bridge /opt/roost/packages/approvals-bridge
 # 这样 supervisor/adapters 的 ../../packages 相对导入仍然指向 /opt/roost/packages。
 COPY packages/agent-runtime /opt/roost/packages/agent-runtime
 COPY apps/runtime/agent-adapters /opt/roost/apps/runtime/agent-adapters
+COPY apps/runtime/codex-home/config.toml /opt/roost/codex-home/config.toml
 COPY apps/runtime/agent-supervisor.mjs /opt/roost/apps/runtime/agent-supervisor.mjs
 RUN ln -s /opt/roost/apps/runtime/agent-supervisor.mjs /opt/roost/agent-supervisor.mjs
 # 多 runtime 默认关闭；控制面可通过 ROOST_MULTI_RUNTIME=1 打开。
@@ -96,12 +97,11 @@ RUN chmod -R a+rX /opt/roost
 # Build-time smoke checks (never fail on a missing external runtime):
 # - the supervisor/registry graph imports through the symlink layout;
 # - room-agent still exports its entry (boot path intact);
-# - each external runtime probe returns DATA (ok/version/auth/problems), never throws.
+# - external CLI versions are checked at install time; probes run in the host adapter tests.
 RUN set -eux; \
     dsh --version; \
     node --input-type=module -e 'await import("/opt/roost/agent-supervisor.mjs"); await import("/opt/roost/apps/runtime/agent-adapters/registry.mjs"); console.log("multi-runtime graph ok")'; \
-    node --input-type=module -e 'const m = await import("/opt/roost/room-agent.mjs"); if (typeof m.startRoomAgent !== "function") process.exit(1); console.log("room-agent entry ok")'; \
-    node --input-type=module -e 'const { createRuntimeAdapter } = await import("/opt/roost/apps/runtime/agent-adapters/registry.mjs"); const cases = [["grok-build", { command: process.env.ROOST_GROK_BIN, args: [], initializeTimeoutMs: 1500 }], ["codex", { command: process.env.ROOST_CODEX_BIN, args: [], initializeTimeoutMs: 1500 }], ["claude-code", { command: process.env.ROOST_CLAUDE_BIN }]]; const out = {}; for (const [kind, config] of cases) { try { const adapter = createRuntimeAdapter(kind, config); const probe = await adapter.probe(); out[kind] = { ok: probe.ok, version: probe.version ?? null, auth: probe.auth, problems: (probe.problems ?? []).slice(0, 1) }; } catch (error) { out[kind] = { ok: false, error: String(error?.message ?? error) }; } } console.log(JSON.stringify(out))'
+    node --input-type=module -e 'const m = await import("/opt/roost/room-agent.mjs"); if (typeof m.startRoomAgent !== "function") process.exit(1); console.log("room-agent entry ok")'
 
 # 会话日志跟工作区走（停止/启动沙箱不丢），见 docs/spikes/0002。
 ENV DSH_HOME=/workspace/.dsh
@@ -121,6 +121,9 @@ WORKDIR /workspace
 # 沙箱以 uid 1000 运行，WORKDIR 必须对它是可用的（否则 OpenShell 报
 # "OCI WorkingDir is not usable by the sandbox identity"）。
 RUN mkdir -p /workspace/.dsh && chown -R 1000:1000 /workspace
+
+ENV ROOST_CODEX_CONFIG_TEMPLATE=/opt/roost/codex-home/config.toml
+ENV ROOST_READY_FILE=/workspace/.roost/ready
 
 # 沙箱主进程：长活 room-agent（内部再起 `dsh --profile sdk`）。
 # OpenShell 拒绝 uid/gid 0 的 workload identity，最终镜像不能以 root 运行。

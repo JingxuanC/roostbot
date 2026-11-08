@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { openStore } from '../../../packages/store/src/index.ts'
 import { createWorkspace } from '../../../packages/store/src/workspaces.ts'
 import { getWorkspaceRuntime } from '../../../packages/store/src/workspace-runtime.ts'
-import { readWorkspaceRuntime, startWorkspaceRuntime, type RuntimeManager } from '../src/workspace-runtime.ts'
+import { readWorkspaceRuntime, startWorkspaceRuntime, stopWorkspaceRuntime, type RuntimeManager } from '../src/workspace-runtime.ts'
 
 const AT = 1_760_000_000_000
 
@@ -82,6 +82,28 @@ test('read 用 manager 的最新阶段刷新，没有 manager 时读库存', asy
       status: async () => ({ sandbox: 'user-1', phase: 'stopped' })
     })
     assert.equal(live?.phase, 'stopped')
+    assert.equal(getWorkspaceRuntime(ctx.store, ctx.workspace.id)?.phase, 'stopped')
+  } finally {
+    ctx.store.close()
+    rmSync(ctx.dir, { recursive: true, force: true })
+  }
+})
+
+
+test('stop 停止 runtime 并把阶段落为 stopped', async () => {
+  const ctx = setup()
+  try {
+    let stoppedWith: string | null = null
+    const manager: RuntimeManager = {
+      ensure: async () => ({ sandbox: 'user-stop', phase: 'ready' }),
+      status: async () => ({ sandbox: 'user-stop', phase: 'ready' }),
+      stop: async (workspaceId) => { stoppedWith = workspaceId; return true }
+    }
+    await startWorkspaceRuntime(ctx.store, ctx.workspace.id, manager)
+    const result = await stopWorkspaceRuntime(ctx.store, ctx.workspace.id, manager)
+    assert.equal(result.stopped, true)
+    assert.equal(stoppedWith, ctx.workspace.id)
+    assert.equal(result.runtime?.phase, 'stopped')
     assert.equal(getWorkspaceRuntime(ctx.store, ctx.workspace.id)?.phase, 'stopped')
   } finally {
     ctx.store.close()

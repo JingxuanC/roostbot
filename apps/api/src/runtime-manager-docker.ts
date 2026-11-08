@@ -9,6 +9,7 @@ import { issueRuntimeToken, revokeRuntimeToken } from '../../../packages/store/s
 import type { IssuedRuntimeToken } from '../../../packages/store/src/runtime-tokens.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { fetchProfileLock } from './profile-lock.ts'
+import { recordTrace } from './trace.ts'
 import {
   RuntimeProviderError,
   type RuntimeEnsureOutcome,
@@ -263,7 +264,27 @@ export function dockerRuntimeManager(config: DockerRuntimeManagerConfig): Runtim
           readyTimeoutMs: 30_000,
           labels: { app: 'roost', workspace: workspaceId },
         }
-        const ensured = await provider.ensure(spec)
+        const startedAt = Date.now()
+        let ensured: RuntimeEnsureOutcome
+        try {
+          ensured = await provider.ensure(spec)
+        } catch (error) {
+          recordTrace({
+            traceId: `docker:${workspaceId}`,
+            name: 'runtime.docker.ensure',
+            at: startedAt,
+            durationMs: Date.now() - startedAt,
+            attrs: { ok: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+          })
+          throw error
+        }
+        recordTrace({
+          traceId: `docker:${workspaceId}`,
+          name: 'runtime.docker.ensure',
+          at: startedAt,
+          durationMs: Date.now() - startedAt,
+          attrs: { ok: true, created: ensured.created !== false, sandbox: ensured.handle.name },
+        })
         if (ensured.created === false) revoke(store, token)
         const out: RuntimeEnsureResult = { sandbox: ensured.handle.name, phase: mapProviderPhase(ensured.status.phase) }
         if (ensured.created !== false && token.id !== undefined) out.tokenId = token.id
@@ -278,8 +299,20 @@ export function dockerRuntimeManager(config: DockerRuntimeManagerConfig): Runtim
       if (current === null) return null
       return { sandbox: current.handle.name, phase: mapProviderPhase(current.phase) }
     },
-    async stop(workspaceId) {
+    async stop(workspaceId, context) {
       await provider.stop({ workspaceId }, { remove: true })
+      const store = resolveStore(context)
+      if (store !== undefined) {
+        // revoke immediately; the route also revokes in stopWorkspaceRuntime.
+        try {
+          const { revokeRuntimeTokens } = await import('../../../packages/store/src/runtime-tokens.ts')
+          revokeRuntimeTokens(store, { workspaceId })
+        } catch { /* best effort */ }
+      }
+      return true
+    },
+    async logs(workspaceId, options) {
+      return await provider.logs?.({ workspaceId }, { tail: options?.tail ?? 120 }) ?? ''
     },
   }
 }
