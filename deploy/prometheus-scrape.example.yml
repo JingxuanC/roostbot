@@ -1,0 +1,11 @@
+scrape_configs:
+  - job_name: roost-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['172.17.43.89:8787']
+  - job_name: roost-docker-worker
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/roost-docker-worker.token
+    static_configs:
+      - targets: ['172.17.43.58:8790']

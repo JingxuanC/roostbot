@@ -188,7 +188,7 @@ FINAL_OK {
 ```text
 ❌ gVisor/Kata 实际安装与兼容性验收
 ❌ 第二台 Docker 宿主实际部署
-❌ CP Prometheus 告警规则
+⚠️ Prometheus 规则已写（`deploy/prometheus-roost-rules.yml`），未接实际 Alertmanager
 ❌ Grok Build 二进制 / Hermes / Native Relay
 ⚠️ read-only rootfs 默认关闭（DSH native addon 可写缓存）
 ```
