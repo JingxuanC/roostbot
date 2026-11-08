@@ -19,7 +19,7 @@ async function assertContract(provider, spec): Promise<void> {
 }
 
 test('Daytona provider creates a sandbox with a persistent volume and reuses it', async () => {
-  const sandboxes = new Map<string, { name: string; state: string }>()
+  const sandboxes = new Map<string, { id: string; name: string; state: string; toolboxProxyUrl?: string }>()
   let volumeId = ''
   const requests: Array<{ method: string; path: string; body?: any }> = []
   const provider = daytonaRuntimeProvider({
@@ -51,9 +51,12 @@ test('Daytona provider creates a sandbox with a persistent volume and reuses it'
           : new Response(JSON.stringify(sandbox), { status: 200 })
       }
       if (path === '/sandbox' && method === 'POST') {
-        const sandbox = { name: body.name, state: 'started' }
+        const sandbox = { id: 'sbx-1', name: body.name, state: 'started', toolboxProxyUrl: 'https://toolbox.test/toolbox' }
         sandboxes.set(body.name, sandbox)
         return new Response(JSON.stringify(sandbox), { status: 200 })
+      }
+      if (path === '/toolbox/sbx-1/process/execute' && method === 'POST') {
+        return new Response(JSON.stringify({ exitCode: 0, result: '' }), { status: 200 })
       }
       if (path.endsWith('/stop') && method === 'POST') {
         const name = decodeURIComponent(path.slice('/sandbox/'.length, -'/stop'.length))
@@ -74,6 +77,7 @@ test('Daytona provider creates a sandbox with a persistent volume and reuses it'
     env: { ROOST_WORKSPACE_ID: 'ws_daytona' },
     resources: { cpus: 2, memoryMb: 2048 },
   })
+  assert.ok(requests.some((request) => request.path === '/toolbox/sbx-1/process/execute'))
   const create = requests.find((request) => request.method === 'POST' && request.path === '/sandbox')
   assert.equal(create?.body.snapshot, 'roost-snapshot')
   assert.deepEqual(create?.body.volumes, [{ volumeId: 'vol-1', mountPath: '/workspace', subpath: 'ws_daytona' }])

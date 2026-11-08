@@ -60,17 +60,41 @@ DAYTONA_API_URL=https://app.daytona.io/api
 DAYTONA_API_KEY=...
 DAYTONA_ORGANIZATION_ID=...          # 可选
 DAYTONA_SNAPSHOT=roost-agent:latest  # 必需
+DAYTONA_SNAPSHOT_IMAGE=roost/agent:multi-runtime  # 可选，auto-create 时用
+DAYTONA_SNAPSHOT_AUTO_CREATE=1       # 可选：不存在时构建 snapshot
 DAYTONA_VOLUME=roost-workspaces      # 可选，默认 roost-workspaces
 DAYTONA_TARGET=...                   # 可选
 ROOST_CP_HOST=...                    # Daytona 能访问的控制面地址
 ROOST_CP_PORT=...
 ```
 
-### 已知限制
+### Readiness / exec
 
-Daytona 的生命周期 API 还没有便宜的 `/workspace/.roost/ready` 文件/exec 探针，
-第一版在 sandbox `started` 时就报告 ready。room-agent 若没真正就绪，轮次会失败；
-下一步应接 Daytona toolbox/PTY API 检查 marker，或让 room-agent 向控制面回报 ready。
+创建或恢复 sandbox 后，provider 通过 sandbox 的 `toolboxProxyUrl` 调用：
+
+```text
+POST {toolboxProxyUrl}/{sandboxId}/process/execute
+{ "command": "test -f /workspace/.roost/ready", "timeout": 10 }
+```
+
+只有 `exitCode === 0` 才报告 ready。这个路径和 LangAlpha 的 tool check 一致。
+如果某些 Daytona API 版本不返回 `toolboxProxyUrl`，provider 会退回生命周期
+`started`，并在文档里保留这个降级边界。
+
+`exec` 也走同一 toolbox 的 `process/execute`；不依赖单独的 Daytona worker。
+
+### Snapshot 自动创建
+
+设置 `DAYTONA_SNAPSHOT_AUTO_CREATE=1` 和 `DAYTONA_SNAPSHOT_IMAGE` 后，provider 会：
+
+```text
+GET  /snapshots?name=<name>
+POST /snapshots { name, imageName, entrypoint, cpu, memory, disk }
+等待 active；build_failed 报错
+inactive 先 activate
+```
+
+资源规格在建 snapshot 时写入，和 LangAlpha 的 tier snapshot 思路一致。
 
 ## 3. Kubernetes
 

@@ -135,6 +135,8 @@ async function main(): Promise<void> {
           apiKey: process.env.DAYTONA_API_KEY ?? process.env.ROOST_DAYTONA_API_KEY ?? '',
           ...(process.env.DAYTONA_ORGANIZATION_ID === undefined ? {} : { organizationId: process.env.DAYTONA_ORGANIZATION_ID }),
           snapshot: process.env.DAYTONA_SNAPSHOT ?? process.env.ROOST_DAYTONA_SNAPSHOT ?? process.env.ROOST_DOCKER_IMAGE ?? 'roost/agent:multi-runtime',
+          ...(process.env.DAYTONA_SNAPSHOT_IMAGE === undefined ? {} : { snapshotImage: process.env.DAYTONA_SNAPSHOT_IMAGE }),
+          ...(process.env.DAYTONA_SNAPSHOT_AUTO_CREATE === '1' ? { snapshotAutoCreate: true } : {}),
           volumeName: process.env.DAYTONA_VOLUME ?? process.env.ROOST_DAYTONA_VOLUME ?? 'roost-workspaces',
           ...(process.env.DAYTONA_TARGET === undefined ? {} : { target: process.env.DAYTONA_TARGET }),
           cpHost: process.env.ROOST_CP_HOST ?? '127.0.0.1',

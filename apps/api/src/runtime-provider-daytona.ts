@@ -27,6 +27,8 @@ import {
   type RuntimeProviderProbe,
   type RuntimeProviderStatus,
   type RuntimeSpec,
+  type RuntimeExecOptions,
+  type RuntimeExecResult,
 } from './runtime-provider.ts'
 
 const ID = 'daytona' as const
@@ -44,6 +46,11 @@ export interface DaytonaRuntimeProviderConfig {
   organizationId?: string
   /** Daytona snapshot built from the roost/agent image. */
   snapshot?: string
+  /** Image used to build the snapshot when auto-create is enabled. */
+  snapshotImage?: string
+  snapshotAutoCreate?: boolean
+  snapshotEntrypoint?: string[]
+  snapshotSandboxClass?: 'linux-vm' | 'container'
   /** If set, a persistent volume is created/reused and mounted at /workspace. */
   volumeName?: string
   /** Optional volume subpath prefix; the workspace id is appended. */
@@ -99,7 +106,7 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
     isolation: 'container',
     persistentWorkspace: Boolean(config.volumeName && config.volumeName.trim() !== ''),
     logs: false,
-    exec: false,
+    exec: true,
     suspend: true,
     resume: true,
     // We don't forward a network policy yet; don't claim it in capabilities.
@@ -151,6 +158,60 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
     return result.body as DaytonaSandbox
   }
 
+  function toolboxBase(sandbox: DaytonaSandbox): string {
+    const url = typeof sandbox.toolboxProxyUrl === 'string' ? sandbox.toolboxProxyUrl.trim().replace(/\/+$/, '') : ''
+    const id = typeof sandbox.id === 'string' ? sandbox.id : ''
+    return url === '' || id === '' ? '' : `${url}/${encodeURIComponent(id)}`
+  }
+
+  async function toolboxExecute(sandbox: DaytonaSandbox, command: string, timeout = 10): Promise<{ code: number; stdout: string } | null> {
+    const base = toolboxBase(sandbox)
+    if (base === '') return null
+    // The sandbox DTO points at the toolbox proxy; process execution is not on
+    // the lifecycle API. Keep the same bearer and organization headers.
+    let response: Response
+    try {
+      response = await fetchImpl(`${base}/process/execute`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          'content-type': 'application/json',
+          ...(config.organizationId === undefined ? {} : { 'X-Daytona-Organization-ID': config.organizationId }),
+        },
+        body: JSON.stringify({ command, timeout }),
+      })
+    } catch {
+      return null
+    }
+    const text = await response.text().catch(() => '')
+    let body: unknown = {}
+    try { body = text === '' ? {} : JSON.parse(text) } catch { body = { result: text } }
+    if (!response.ok) return null
+    const record = body && typeof body === 'object' ? body as { exitCode?: unknown; result?: unknown } : {}
+    return {
+      code: typeof record.exitCode === 'number' ? record.exitCode : 0,
+      stdout: typeof record.result === 'string' ? record.result : '',
+    }
+  }
+
+  /** Wait for the room-agent marker through the toolbox, like LangAlpha's tool check. */
+  async function waitForMarker(name: string, timeoutMs: number, context?: RuntimeProviderContext): Promise<void> {
+    const now = config.now ?? context?.now ?? Date.now
+    const deadline = now() + Math.max(1, timeoutMs)
+    while (now() < deadline) {
+      const sandbox = await getSandbox(name)
+      if (sandbox === null) throw new RuntimeProviderError('provider.provision_failed', `Daytona sandbox ${name} disappeared while checking readiness`)
+      // Some Daytona API versions do not return toolboxProxyUrl; fall back to
+      // the lifecycle state rather than inventing a failure. When the URL is
+      // present, a transient toolbox failure is retried, not treated as ready.
+      if (toolboxBase(sandbox) === '') return
+      const probe = await toolboxExecute(sandbox, 'test -f /workspace/.roost/ready', 10)
+      if (probe !== null && probe.code === 0) return
+      await sleep(1000)
+    }
+    throw new RuntimeProviderError('provider.ready_timeout', `Daytona sandbox ${name} started but /workspace/.roost/ready never appeared`)
+  }
+
   async function waitForSandbox(name: string, timeoutMs: number, context?: RuntimeProviderContext): Promise<RuntimeProviderStatus> {
     const now = config.now ?? context?.now ?? Date.now
     const deadline = now() + Math.max(1, timeoutMs)
@@ -166,6 +227,69 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
       await sleep(1000)
     }
     throw new RuntimeProviderError('provider.ready_timeout', `Daytona sandbox ${name} was not ready within ${timeoutMs}ms${last?.state === undefined ? '' : ` (state=${last.state})`}`)
+  }
+
+  interface DaytonaSnapshot {
+    id?: string
+    name?: string
+    state?: string
+    errorReason?: string
+  }
+
+  async function findSnapshot(name: string): Promise<DaytonaSnapshot | null> {
+    const result = await call(`/snapshots?name=${encodeURIComponent(name)}&limit=100`)
+    if (result.status !== 200) return null
+    const body = result.body as { items?: unknown }
+    const items = Array.isArray(body.items) ? body.items : []
+    const found = items.find((item) => item && typeof item === 'object' && (item as DaytonaSnapshot).name === name)
+    return found === undefined ? null : found as DaytonaSnapshot
+  }
+
+  async function waitForSnapshot(name: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + Math.max(1, timeoutMs)
+    while (Date.now() < deadline) {
+      const snapshot = await findSnapshot(name)
+      if (snapshot === null) throw new RuntimeProviderError('provider.provision_failed', `Daytona snapshot ${name} disappeared while building`)
+      const state = snapshot.state
+      if (state === 'active') return
+      if (state === 'error' || state === 'build_failed') {
+        throw new RuntimeProviderError('provider.provision_failed', `Daytona snapshot ${name} failed: ${snapshot.errorReason ?? state}`)
+      }
+      await sleep(2000)
+    }
+    throw new RuntimeProviderError('provider.ready_timeout', `Daytona snapshot ${name} was not active within ${timeoutMs}ms`)
+  }
+
+  async function ensureSnapshot(spec: RuntimeSpec): Promise<string | null> {
+    const name = (spec.image ?? config.snapshot ?? '').trim()
+    if (name === '') throw new RuntimeProviderError('provider.provision_failed', 'Daytona provider needs a snapshot (spec.image or DAYTONA_SNAPSHOT)')
+    if (config.snapshotAutoCreate !== true) return name
+    const imageName = (config.snapshotImage ?? '').trim()
+    if (imageName === '') {
+      throw new RuntimeProviderError('provider.provision_failed', 'DAYTONA_SNAPSHOT_IMAGE is required when snapshot auto-create is enabled')
+    }
+    let snapshot = await findSnapshot(name)
+    if (snapshot === null) {
+      const resources = spec.resources ?? {}
+      const body: Record<string, unknown> = {
+        name,
+        imageName,
+        entrypoint: config.snapshotEntrypoint ?? ['node', '/opt/roost/room-agent.mjs'],
+        cpu: Math.max(1, Math.round(resources.cpus ?? config.cpu ?? 2)),
+        memory: Math.max(1, Math.ceil((resources.memoryMb ?? (config.memory ?? 2) * 1024) / 1024)),
+        disk: Math.max(1, Math.round(config.disk ?? 10)),
+        ...(config.snapshotSandboxClass === undefined ? {} : { sandboxClass: config.snapshotSandboxClass }),
+      }
+      const created = await call('/snapshots', { method: 'POST', body: JSON.stringify(body) })
+      if (created.status < 200 || created.status >= 300) throw errorFor(created.status, 'snapshot create', created.body)
+      snapshot = created.body as DaytonaSnapshot
+    }
+    if (snapshot.state === 'inactive') {
+      const activated = await call(`/snapshots/${encodeURIComponent(snapshot.id ?? name)}/activate`, { method: 'POST' })
+      if (activated.status < 200 || activated.status >= 300) throw errorFor(activated.status, 'snapshot activate', activated.body)
+    }
+    if (snapshot.state !== 'active') await waitForSnapshot(name, spec.readyTimeoutMs ?? 120_000)
+    return name
   }
 
   async function ensureVolume(): Promise<{ id: string; name: string } | null> {
@@ -222,6 +346,7 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
         }
         if (phase === 'starting') {
           const status = await waitForSandbox(name, spec.readyTimeoutMs ?? 120_000, context)
+          await waitForMarker(name, spec.readyTimeoutMs ?? 120_000, context)
           const handle: RuntimeHandle = { ...status.handle, workspaceId: spec.workspaceId }
           return { handle, status: { ...status, handle }, created: false }
         }
@@ -229,14 +354,15 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
           const started = await call(`/sandbox/${encodeURIComponent(name)}/start`, { method: 'POST' })
           if (started.status < 200 || started.status >= 300) throw errorFor(started.status, 'sandbox start', started.body)
           const status = await waitForSandbox(name, spec.readyTimeoutMs ?? 120_000, context)
+          await waitForMarker(name, spec.readyTimeoutMs ?? 120_000, context)
           const handle: RuntimeHandle = { ...status.handle, workspaceId: spec.workspaceId }
           return { handle, status: { ...status, handle }, created: false }
         }
         throw new RuntimeProviderError('provider.conflict', `Daytona sandbox ${name} is in state ${existing.state ?? 'unknown'}`)
       }
 
-      const snapshot = (spec.image ?? config.snapshot ?? '').trim()
-      if (snapshot === '') throw new RuntimeProviderError('provider.provision_failed', 'Daytona provider needs a snapshot (spec.image or DAYTONA_SNAPSHOT)')
+      const snapshot = await ensureSnapshot(spec)
+      if (snapshot === null) throw new RuntimeProviderError('provider.provision_failed', 'Daytona snapshot is not available')
       const resources = spec.resources ?? {}
       const body: Record<string, unknown> = {
         name,
@@ -257,6 +383,7 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
       const created = await call('/sandbox', { method: 'POST', body: JSON.stringify(body) })
       if (created.status < 200 || created.status >= 300) throw errorFor(created.status, 'sandbox create', created.body)
       const status = await waitForSandbox(name, spec.readyTimeoutMs ?? 120_000, context)
+      await waitForMarker(name, spec.readyTimeoutMs ?? 120_000, context)
       const handle: RuntimeHandle = { ...status.handle, workspaceId: spec.workspaceId }
       return { handle, status: { ...status, handle }, created: true }
     },
@@ -270,6 +397,15 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
         phase: mapPhase(sandbox.state),
         ...(sandbox.errorReason === undefined ? {} : { message: sandbox.errorReason }),
       }
+    },
+
+    async exec(key: RuntimeKey, argv: string[], options?: RuntimeExecOptions): Promise<RuntimeExecResult> {
+      const sandbox = await getSandbox(safeName(key.workspaceId))
+      if (sandbox === null) throw new RuntimeProviderError('provider.not_found', `Daytona sandbox ${safeName(key.workspaceId)} not found`)
+      const command = argv.map((part) => `'${part.replace(/'/g, `'\\''`)}'`).join(' ')
+      const result = await toolboxExecute(sandbox, command, Math.max(1, Math.ceil((options?.timeoutMs ?? 30_000) / 1000)))
+      if (result === null) throw new RuntimeProviderError('provider.exec_failed', 'Daytona toolbox process API is unavailable')
+      return { code: result.code, stdout: result.stdout, stderr: '' }
     },
 
     async stop(key, options): Promise<void> {
