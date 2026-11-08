@@ -208,8 +208,8 @@ FINAL_OK {
 仍受外部依赖阻塞：
 
 ```text
-❌ Grok Build 官方二进制
-❌ Hermes 协议
+✅ Grok Build 官方二进制
+✅ Hermes ACP adapter（`hermes acp`）；二进制是可选安装
 ❌ 第二台 Docker 宿主
 ❌ Prometheus/Alertmanager 实例
 ❌ gVisor/Kata 安装
@@ -224,4 +224,22 @@ FINAL_OK {
 ✅ OpenShell 封存
    ROOST_RUNTIME_PROVIDER=openshell 默认启动失败
 ✅ 1339 tests pass
+```
+
+
+## 10. 第六轮补充（2026-11-08）
+
+```text
+✅ Grok Build 官方二进制
+   grok 1.0.77
+   /opt/agents/grok-build/bin/grok
+   adapter probe: ok=true, auth=unknown
+   ACP 命令: grok agent --always-approve stdio
+
+✅ Hermes ACP adapter
+   hermes acp
+   scripts/install-hermes.sh（可选安装）
+
+✅ 远端 Grok 镜像复测
+   GROK_IMG_OK {Claude, Codex, DSH}
 ```

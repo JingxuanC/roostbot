@@ -24,9 +24,9 @@ ARG INSTALL_CODEX_CLI=1
 ARG CODEX_VERSION=0.167.0
 ARG INSTALL_CODEX_ACP=1
 ARG CODEX_ACP_VERSION=0.16.0
-# grok-build has no public official package/installer at the pinned date. Point
-# this at a pinned tarball (containing bin/<GROK_BUILD_BIN>) to install it;
-# default empty = explicit skip with a note.
+# Grok Build now has an official installer (x.ai/cli/install.sh). INSTALL_GROK_BUILD=1
+# installs the pinned/released binary; the legacy GROK_BUILD_INSTALL_URL tarball
+# path remains for air-gapped builds.
 ARG GROK_BUILD_INSTALL_URL=
 ARG GROK_BUILD_SHA256=
 ARG GROK_BUILD_BIN=grok
