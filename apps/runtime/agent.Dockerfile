@@ -82,6 +82,7 @@ COPY packages/approvals-bridge /opt/roost/packages/approvals-bridge
 COPY packages/agent-runtime /opt/roost/packages/agent-runtime
 COPY apps/runtime/agent-adapters /opt/roost/apps/runtime/agent-adapters
 COPY apps/runtime/codex-home/config.toml /opt/roost/codex-home/config.toml
+COPY apps/runtime/external-approvals.mjs /opt/roost/external-approvals.mjs
 COPY apps/runtime/agent-supervisor.mjs /opt/roost/apps/runtime/agent-supervisor.mjs
 RUN ln -s /opt/roost/apps/runtime/agent-supervisor.mjs /opt/roost/agent-supervisor.mjs
 # 多 runtime 默认关闭；控制面可通过 ROOST_MULTI_RUNTIME=1 打开。

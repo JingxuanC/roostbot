@@ -109,3 +109,30 @@ test('docker provider maps worker responses and errors', async () => {
   )
   assert.ok(calls.some((url) => url.endsWith('/v1/ensure')))
 })
+
+
+test('multi-worker pool places workspaces deterministically without one global host', async () => {
+  const origins: string[] = []
+  const provider = dockerRuntimeProvider({
+    workerUrl: 'http://a',
+    workerUrls: ['http://a', 'http://b'],
+    workerToken: 'worker-token',
+    cpHost: '127.0.0.1',
+    cpPort: 8787,
+    runtimeToken: 'fallback',
+    fetchImpl: (async (url: string | URL) => {
+      const parsed = new URL(String(url))
+      origins.push(parsed.origin)
+      if (parsed.pathname === '/v1/ensure') {
+        return new Response(JSON.stringify({ ok: true, sandbox: `roost-ws-${parsed.origin.slice(-1)}`, phase: 'ready', created: true }), { status: 200 })
+      }
+      if (parsed.pathname === '/healthz') return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      return new Response(JSON.stringify({ ok: true, status: { sandbox: 'roost-ws', phase: 'ready' } }), { status: 200 })
+    }) as typeof fetch,
+  })
+  for (let i = 0; i < 20; i += 1) {
+    await provider.ensure({ workspaceId: `ws_${i}`, env: {} })
+  }
+  assert.ok(new Set(origins).size >= 2, `expected both workers, got ${[...new Set(origins)].join(',')}`)
+  assert.equal((await provider.probe()).ok, true)
+})

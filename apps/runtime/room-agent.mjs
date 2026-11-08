@@ -21,6 +21,7 @@ import { dirname } from 'node:path'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
 import { installProfilePlugin } from './profile-plugins.mjs'
+import { createExternalApprovalPolicy } from './external-approvals.mjs'
 
 /** 环境变量里的端口：非法/未设返回 undefined，交给默认值。 */
 function readPort(value) {
@@ -649,6 +650,12 @@ export async function startRoomAgent(options) {
   }
 
   /** Adapter configs come from env defaults; minimal args per design §6.1/§12.3. */
+  const externalApprovalPolicy = createExternalApprovalPolicy({
+    request,
+    workspaceId: options.workspaceId ?? process.env.ROOST_WORKSPACE_ID ?? '',
+    log: (line) => log(line)
+  })
+
   function buildSupervisorOptions() {
     const grokBin = (process.env.ROOST_GROK_BIN ?? '').trim() || 'grok'
     const claudeBin = (process.env.ROOST_CLAUDE_BIN ?? '').trim() || 'claude'
@@ -672,8 +679,8 @@ export async function startRoomAgent(options) {
     }
     return {
       adapterConfigs: {
-        'grok-build': { command: grokBin, args: [], env: grokEnv },
-        codex: { command: codexBin, args: [], env: codexEnv },
+        'grok-build': { command: grokBin, args: [], env: grokEnv, permissionPolicy: externalApprovalPolicy },
+        codex: { command: codexBin, args: [], env: codexEnv, permissionPolicy: externalApprovalPolicy },
         'claude-code': {
           command: claudeBin,
           args: ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json'],

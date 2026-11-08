@@ -27,6 +27,8 @@ export const DOCKER_RUNTIME_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface DockerRuntimeManagerConfig {
   workerUrl: string
+  /** Optional multiple Docker workers; workspace placement is deterministic. */
+  workerUrls?: string[]
   workerToken: string
   image?: string
   cpHost: string
@@ -66,8 +68,17 @@ function externalRuntimeEnv(): Record<string, string> {
   return out
 }
 
-function baseUrl(config: { workerUrl: string }): string {
-  return config.workerUrl.replace(/\/+$/, '')
+function baseUrl(config: { workerUrl: string; workerUrls?: string[] }): string[] {
+  const urls = Array.isArray(config.workerUrls) && config.workerUrls.length > 0 ? config.workerUrls : [config.workerUrl]
+  return urls.map((url) => url.replace(/\/+$/, ''))
+}
+
+function chooseBase(config: { workerUrl: string; workerUrls?: string[] }, workspaceId: string): string {
+  const urls = baseUrl(config)
+  if (urls.length === 1) return urls[0]!
+  let hash = 0
+  for (const ch of workspaceId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+  return urls[hash % urls.length]!
 }
 
 function mapProviderPhase(phase: RuntimeProviderStatus['phase']): 'ready' | 'stopped' | 'error' | 'unknown' {
@@ -94,10 +105,10 @@ export function dockerRuntimeProvider(config: DockerRuntimeManagerConfig): Runti
     secrets: 'env',
   }
 
-  async function call(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+  async function call(path: string, workspaceId: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
     let response: Response
     try {
-      response = await fetchImpl(`${baseUrl(config)}${path}`, {
+      response = await fetchImpl(`${chooseBase(config, workspaceId)}${path}`, {
         ...init,
         headers: { ...headers, ...(init.headers ?? {}) },
       })
@@ -123,15 +134,19 @@ export function dockerRuntimeProvider(config: DockerRuntimeManagerConfig): Runti
     id: 'docker',
     capabilities: () => capabilities,
     async probe() {
-      try {
-        const response = await fetchImpl(`${baseUrl(config)}/healthz`, { headers: { authorization: `Bearer ${config.workerToken}` } })
-        return { ok: response.ok, problems: response.ok ? [] : [`healthz ${response.status}`], capabilities }
-      } catch (error) {
-        return { ok: false, problems: [error instanceof Error ? error.message : String(error)], capabilities }
+      const problems: string[] = []
+      for (const url of baseUrl(config)) {
+        try {
+          const response = await fetchImpl(`${url}/healthz`, { headers: { authorization: `Bearer ${config.workerToken}` } })
+          if (!response.ok) problems.push(`${url}: healthz ${response.status}`)
+        } catch (error) {
+          problems.push(`${url}: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
+      return { ok: problems.length === 0, problems, capabilities }
     },
     async ensure(spec: RuntimeSpec): Promise<RuntimeEnsureOutcome> {
-      const body = await call('/v1/ensure', { method: 'POST', body: JSON.stringify(spec) })
+      const body = await call('/v1/ensure', spec.workspaceId, { method: 'POST', body: JSON.stringify(spec) })
       const sandbox = typeof body.sandbox === 'string' ? body.sandbox : null
       const phase = body.phase === 'ready' ? 'ready' : 'error'
       if (sandbox === null || phase !== 'ready') {
@@ -145,7 +160,7 @@ export function dockerRuntimeProvider(config: DockerRuntimeManagerConfig): Runti
       }
     },
     async status(key: RuntimeKey): Promise<RuntimeProviderStatus | null> {
-      const body = await call(`/v1/status?workspaceId=${encodeURIComponent(key.workspaceId)}`)
+      const body = await call(`/v1/status?workspaceId=${encodeURIComponent(key.workspaceId)}`, key.workspaceId)
       const status = body.status
       if (status === null || typeof status !== 'object') return null
       const record = status as { sandbox?: unknown; phase?: unknown }
@@ -157,10 +172,10 @@ export function dockerRuntimeProvider(config: DockerRuntimeManagerConfig): Runti
       return { handle, phase }
     },
     async stop(key, options) {
-      await call('/v1/stop', { method: 'POST', body: JSON.stringify({ workspaceId: key.workspaceId, remove: options?.remove === true }) })
+      await call('/v1/stop', key.workspaceId, { method: 'POST', body: JSON.stringify({ workspaceId: key.workspaceId, remove: options?.remove === true }) })
     },
     async logs(key, options) {
-      const body = await call(`/v1/logs?workspaceId=${encodeURIComponent(key.workspaceId)}&tail=${options?.tail ?? 80}`)
+      const body = await call(`/v1/logs?workspaceId=${encodeURIComponent(key.workspaceId)}&tail=${options?.tail ?? 80}`, key.workspaceId)
       return typeof body.logs === 'string' ? body.logs : ''
     },
   }

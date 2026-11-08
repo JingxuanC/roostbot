@@ -338,7 +338,7 @@ export function createAcpAdapter(options = {}) {
       let decision = 'deny'
       try {
         decision = typeof permissionPolicy === 'function'
-          ? await permissionPolicy(event, { params, sessionId: acpSessionId })
+          ? await permissionPolicy(event, { params, sessionId: acpSessionId, spec })
           : permissionPolicy
       } catch (error) {
         onDiagnostic('protocol', `permission policy failed (${messageOf(error)}); denying`)

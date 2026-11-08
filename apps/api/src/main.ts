@@ -97,6 +97,9 @@ async function main(): Promise<void> {
     runtimeProvider === 'docker'
       ? dockerRuntimeManager({
           workerUrl: process.env.ROOST_DOCKER_WORKER_URL ?? 'http://172.17.43.58:8790',
+          ...(process.env.ROOST_DOCKER_WORKER_URLS === undefined
+            ? {}
+            : { workerUrls: process.env.ROOST_DOCKER_WORKER_URLS.split(',').map((url) => url.trim()).filter(Boolean) }),
           workerToken: process.env.ROOST_DOCKER_WORKER_TOKEN ?? '',
           image: process.env.ROOST_DOCKER_IMAGE ?? process.env.ROOST_SANDBOX_IMAGE ?? 'roost/agent:multi-runtime',
           cpHost: process.env.ROOST_CP_HOST ?? '172.17.43.89',
