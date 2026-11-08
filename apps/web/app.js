@@ -465,17 +465,108 @@ function renderUserMessage(event) {
   return row
 }
 
+/** Resolve `@name` mentions of current room members to Bot ids. */
+function mentionedBotIds(text, exceptId) {
+  const source = typeof text === 'string' ? text : ''
+  if (source === '') return []
+  const ids = []
+  for (const member of roomMembers(LIVE.room)) {
+    const id = member.botId
+    if (!id || id === exceptId) continue
+    const name = member.name || botLabel(id)
+    if (name && source.includes(`@${name}`)) ids.push(id)
+  }
+  return ids
+}
+
+function botNameById(id) {
+  return STORE.bots.find((bot) => bot.id === id)?.name || botLabel(id)
+}
+
+/** A compact transcript of the handoffs between two Bots in this room. */
+function openExchangeDialog(leftId, rightId) {
+  if (!LIVE.active || typeof leftId !== 'string' || typeof rightId !== 'string' || leftId === rightId) return
+  document.querySelector('.exchange-overlay')?.remove()
+  const overlay = el('div', { class: 'exchange-overlay', role: 'presentation' })
+  const dialog = el('section', { class: 'exchange-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bot 对话' })
+  const head = el('header', { class: 'exchange-head' })
+  const left = el('span', { class: 'exchange-who' })
+  left.append(botAvatar({ id: leftId, name: botNameById(leftId) }, 22, { round: true }))
+  left.append(el('span', { text: botNameById(leftId) }))
+  const right = el('span', { class: 'exchange-who' })
+  right.append(botAvatar({ id: rightId, name: botNameById(rightId) }, 22, { round: true }))
+  right.append(el('span', { text: botNameById(rightId) }))
+  head.append(left, el('span', { class: 'exchange-swap', 'aria-hidden': 'true', text: '⇄' }), right)
+  const close = el('button', { class: 'exchange-close', type: 'button', 'aria-label': '关闭', text: '×' })
+  head.append(close)
+
+  const log = el('div', { class: 'exchange-log' })
+  const entries = ROOM.events.filter((item) => {
+    if (!item || item.domain !== 'chat' || !item.actor || item.actor.kind !== 'bot') return false
+    const text = item.payload && typeof item.payload.text === 'string' ? item.payload.text : ''
+    if (item.actor.id === leftId && mentionedBotIds(text, leftId).includes(rightId)) return true
+    if (item.actor.id === rightId && mentionedBotIds(text, rightId).includes(leftId)) return true
+    return false
+  })
+  if (entries.length === 0) {
+    log.append(el('p', { class: 'exchange-empty', text: '这两个 Bot 还没有直接交接。' }))
+  } else {
+    for (const item of entries) {
+      const row = el('div', { class: 'exchange-line' })
+      row.append(botAvatar({ id: item.actor.id, name: botNameById(item.actor.id) }, 20, { round: true }))
+      const body = el('div', { class: 'exchange-body' })
+      body.append(el('strong', { text: botNameById(item.actor.id) }))
+      const text = item.payload && typeof item.payload.text === 'string' ? item.payload.text : ''
+      const p = el('div', { class: 'exchange-text' })
+      p.append(markdownFragment(text))
+      body.append(p)
+      row.append(body)
+      log.append(row)
+    }
+  }
+  const foot = el('footer', { class: 'exchange-foot' })
+  const dm = el('button', { class: 'btn btn-quiet', type: 'button', text: '打开右侧 Bot 私聊' })
+  dm.addEventListener('click', () => {
+    overlay.remove()
+    void openBotDm(rightId).catch(() => {})
+  })
+  foot.append(dm)
+  close.addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove() })
+  document.addEventListener('keydown', function onEscape(event) {
+    if (event.key !== 'Escape') return
+    document.removeEventListener('keydown', onEscape)
+    overlay.remove()
+  })
+  dialog.append(head, log, foot)
+  overlay.append(dialog)
+  document.body.append(overlay)
+  close.focus()
+}
+
 /** 房间里的 Bot 消息：圆头像 + 名字，正文不套气泡。 */
 function renderRoomMessage(event) {
   const bot = botIdentity(event.actor.id)
   const primary = LIVE.room && LIVE.room.hostBotId === event.actor.id
   const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 28, { round: true, primary }))
-  head.append(el('span', { class: 'msg-name', text: bot.name }))
+  const headButton = el('button', { class: 'msg-head-button', type: 'button', title: `打开 ${bot.name} 的私聊` })
+  headButton.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 28, { round: true, primary }))
+  headButton.append(el('span', { class: 'msg-name', text: bot.name }))
+  headButton.addEventListener('click', () => void openBotDm(event.actor.id).catch(() => {}))
+  head.append(headButton)
   article.append(head)
-  const bubble = el('div', { class: 'bubble bubble-bot' })
   const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : ''
+  const targets = mentionedBotIds(text, event.actor.id)
+  if (targets.length > 0) {
+    const handoff = el('button', { class: 'msg-handoff', type: 'button', title: '查看两个 Bot 的交接' })
+    handoff.append(el('span', { text: bot.name }))
+    handoff.append(el('span', { class: 'handoff-swap', 'aria-hidden': 'true', text: '⇄' }))
+    handoff.append(el('span', { text: botNameById(targets[0]) }))
+    handoff.addEventListener('click', () => openExchangeDialog(event.actor.id, targets[0]))
+    article.append(handoff)
+  }
+  const bubble = el('div', { class: 'bubble bubble-bot' })
   const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
   const titles = cardTitles(parts)
   if (text !== '' && !titles.includes(text)) bubble.append(markdownFragment(event.payload.text))
@@ -722,8 +813,21 @@ function renderPeerMessage(event, delivery) {
   if (event.peer.reason) meta.push(`为什么现在说话：${event.peer.reason}`)
   if (meta.length) body.append(el('p', { class: 'peer-meta', text: meta.join(' · ') }))
 
+  const targetName = typeof event.peer.from === 'string' ? event.peer.from : ''
+  const target = targetName === '' ? null : STORE.bots.find((item) => item.name === targetName) || null
+  const open = el('button', {
+    class: 'peer-open',
+    type: 'button',
+    'aria-label': '打开消息对话',
+    text: '打开对话',
+  })
+  open.addEventListener('click', (event_) => {
+    event_.stopPropagation()
+    if (target) openExchangeDialog(event.actor.id, target.id)
+    else void openBotDm(event.actor.id).catch(() => {})
+  })
   const article = el('article', { class: 'msg msg-peer' })
-  article.append(toggle, body)
+  article.append(toggle, open, body)
 
   toggle.addEventListener('click', () => {
     const open = toggle.getAttribute('aria-expanded') !== 'true'
@@ -1732,6 +1836,7 @@ function toEvent(message, roomId) {
       attachments: Array.isArray(message.attachments) ? message.attachments : [],
       ...(Array.isArray(message.parts) ? { parts: message.parts } : {}),
     },
+    ...(message.peer !== undefined && message.peer !== null ? { peer: message.peer } : {}),
   }
 }
 

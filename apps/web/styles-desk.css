@@ -2553,3 +2553,188 @@ td.num,
 @keyframes desk-caret {
   50% { opacity: 0; }
 }
+
+/* Clickable Bot identity + bot-to-bot handoff */
+#room-view .msg-head-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+#room-view .msg-head-button:hover .msg-name {
+  color: var(--roost-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+#room-view .msg-handoff {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+#room-view .msg-handoff:hover {
+  border-color: var(--roost-accent);
+  color: var(--roost-accent);
+}
+
+#room-view .handoff-swap {
+  color: var(--roost-accent);
+}
+
+#room-view .peer-open {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--roost-accent);
+  font-family: var(--roost-font-mono);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+#room-view .peer-open:hover {
+  border-color: var(--roost-accent);
+}
+
+.exchange-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(20, 18, 14, 0.38);
+}
+
+.exchange-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(72vh, 620px);
+  border: 1px solid var(--roost-rule);
+  border-top: 3px solid var(--roost-accent);
+  background: var(--roost-surface);
+  box-shadow: 0 24px 70px rgba(20, 18, 14, 0.18);
+}
+
+.exchange-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: var(--desk-line);
+}
+
+.exchange-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--roost-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.exchange-swap {
+  color: var(--roost-accent);
+  font-family: var(--roost-font-mono);
+}
+
+.exchange-close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--roost-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.exchange-close:hover {
+  border-color: var(--roost-rule);
+  color: var(--roost-ink);
+}
+
+.exchange-log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.exchange-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.exchange-body {
+  min-width: 0;
+}
+
+.exchange-body strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--roost-ink);
+  font-family: var(--roost-font-display);
+  font-size: 12px;
+}
+
+.exchange-text {
+  color: var(--roost-ink);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.exchange-empty {
+  margin: 4px 0;
+  color: var(--roost-muted);
+  font-size: 12px;
+}
+
+.exchange-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: var(--desk-line);
+}
+
+@media (max-width: 720px) {
+  #room-view .msg-handoff {
+    margin-left: 0;
+  }
+}
+
+#room-view .msg-peer .peer-open {
+  display: inline-flex;
+  margin: 0 0 4px 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--roost-accent);
+  font-family: var(--roost-font-mono);
+  font-size: 9px;
+  cursor: pointer;
+}

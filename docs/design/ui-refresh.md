@@ -369,3 +369,24 @@ Bot 列表 / Bot 设置：都有「私聊」入口
 ```
 
 截图：[私聊](/Users/paopao/Documents/deepseek-harness/default-workspace/roostbot/docs/assets/ui-desk-dm.png)
+
+
+## 12. Bot 交接与对话（2026-11-08）
+
+参考 DS Bot 的 Exchange 设计：
+
+```text
+Bot 名字 / 头像可点 → 打开该 Bot 私聊
+Bot 消息里 @ 了另一个 Bot → 显示 A ⇄ B 交接标签
+点击交接标签 → 打开两个 Bot 在当前房间里的 handoff 对话
+```
+
+实现：
+
+```text
+apps/web/app.js
+  mentionedBotIds()
+  openExchangeDialog()
+  renderRoomMessage() 的可点头像 + A ⇄ B 标签
+  renderPeerMessage() 的「打开对话」
+```
