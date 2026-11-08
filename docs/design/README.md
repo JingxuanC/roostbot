@@ -30,6 +30,8 @@
 | 24 | [attachments-ui.md](attachments-ui.md) | 消息附件与产物渲染：图片/PDF/HTML 沙箱/表格/代码及安全边界 |
 | 25 | [architecture-v2.md](architecture-v2.md) | 模块化单体、房间事件流推送、可恢复轮次、routine 进房间的迁移顺序 |
 | 26 | [agent-runtimes.md](agent-runtimes.md) | 多 Agent 运行时：Adapter、Native/Embedded、Grok Build/Claude Code/Codex 接入、能力/凭据/用量 |
+| 27 | [runtime-providers.md](runtime-providers.md) | RuntimeProvider 接口：Docker/OpenShell/local/K8s 可替换；编排、计算、harness、工具执行分层 |
+| 28 | [docker-runtime.md](docker-runtime.md) | 不用 OpenShell：Docker worker + 一个 workspace 一个容器 + ready/网络/安全方案 |
 
 ## 读法建议
 
