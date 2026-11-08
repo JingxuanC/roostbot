@@ -25,6 +25,8 @@ const EXACT_ROUTES = new Set([
   '/api/internal/rooms',
   '/api/marketplace/plugins',
   '/api/plugin-installs',
+  '/api/native/assignments',
+  '/api/native/advance',
   '/api/approvals',
   '/api/approval-grants',
   '/api/quotas',

@@ -203,6 +203,7 @@ import { openRoundForMessage } from './round-orchestrator.ts'
 import { answerChoiceCard, decorateParts, parseCard, postCard, projectApprovalDecision } from './cards.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.ts'
+import { handleNativeAdvance, handleNativeAssignments } from './native-relay-routes.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
 import { readWorkspaceRuntime, startWorkspaceRuntime, stopWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
@@ -3425,6 +3426,24 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     } catch (error) {
       sendError(res, 502, 'runtime.start_failed', error instanceof Error ? error.message : String(error))
     }
+    return
+  }
+
+  if (path === '/api/native/assignments') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleNativeAssignments(ctx as never, req, res, url)
+    return
+  }
+
+  if (path === '/api/native/advance') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleNativeAdvance(ctx as never, req, res)
     return
   }
 

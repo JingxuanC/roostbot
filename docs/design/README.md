@@ -42,3 +42,4 @@
 - **想控成本**：1 → 4 → 5
 - **想上线运维**：21 → 20 → 22 → 23
 - **想改附件/产物界面**：15 → 12 → 24
+| 30 | [native-relay.md](native-relay.md) | Native Relay PoC：用户已有外部 Agent 会话绑定 Room Slot、轮询 assignment、回传 advance |
