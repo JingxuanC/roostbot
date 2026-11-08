@@ -208,8 +208,8 @@ FINAL_OK {
 仍受外部依赖阻塞：
 
 ```text
-✅ Grok Build 官方二进制
-✅ Hermes ACP adapter（`hermes acp`）；二进制是可选安装
+✅ Grok Build 1.0.77 官方二进制进镜像；probe ok=true
+✅ Hermes Agent 0.19.0 + ACP extra 已进镜像；adapter probe ok=true
 ❌ 第二台 Docker 宿主
 ❌ Prometheus/Alertmanager 实例
 ❌ gVisor/Kata 安装
@@ -230,7 +230,7 @@ FINAL_OK {
 ## 10. 第六轮补充（2026-11-08）
 
 ```text
-✅ Grok Build 官方二进制
+✅ Grok Build 1.0.77 官方二进制进镜像；probe ok=true
    grok 1.0.77
    /opt/agents/grok-build/bin/grok
    adapter probe: ok=true, auth=unknown
@@ -243,3 +243,19 @@ FINAL_OK {
 ✅ 远端 Grok 镜像复测
    GROK_IMG_OK {Claude, Codex, DSH}
 ```
+
+
+## 11. 第七轮补充（2026-11-08）
+
+```text
+✅ Grok Build 1.0.77 镜像内二进制
+   probe: {"ok":true,"binary":"/opt/agents/grok-build/bin/grok","auth":"unknown"}
+   ACP: grok agent --always-approve stdio
+
+✅ Hermes Agent v0.19.0 镜像内
+   pip install 'hermes-agent[acp]==0.19.0'
+   probe: {"ok":true,"version":"0.19.0","binary":"/usr/local/bin/hermes"}
+   ACP: hermes acp
+```
+
+真实模型调用仍需要用户自己的 xAI / Hermes provider 凭据；镜像本身不带 key。
