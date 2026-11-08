@@ -32,6 +32,7 @@
 | 26 | [agent-runtimes.md](agent-runtimes.md) | 多 Agent 运行时：Adapter、Native/Embedded、Grok Build/Claude Code/Codex 接入、能力/凭据/用量 |
 | 27 | [runtime-providers.md](runtime-providers.md) | RuntimeProvider 接口：Docker/OpenShell/local/K8s 可替换；编排、计算、harness、工具执行分层 |
 | 28 | [docker-runtime.md](docker-runtime.md) | 不用 OpenShell：Docker worker + 一个 workspace 一个容器 + ready/网络/安全方案 |
+| 29 | [docker-runtime-roadmap.md](docker-runtime-roadmap.md) | Docker Runtime 实施状态：已完成 / P0/P1/P2 剩余工作 / 验收顺序 |
 
 ## 读法建议
 
