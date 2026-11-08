@@ -16,7 +16,8 @@
 import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
 import { decideRoutineAttempt, isolatedRoutinePrompt, ROUTINE_MAX_ATTEMPTS } from './routine-turn.mjs'
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
 import { installProfilePlugin } from './profile-plugins.mjs'
@@ -482,6 +483,24 @@ export async function startRoomAgent(options) {
     model: options.model ?? 'deepseek-chat'
   })
   log(`sdk ready: ${initialized?.serverInfo?.name ?? 'unknown'} ${initialized?.serverInfo?.version ?? ''}`)
+
+  // Docker/remote runtime providers use a file marker instead of scraping stdout.
+  // Remove it on exit so a container that dies cannot be mistaken for ready.
+  const readyFile = String(process.env.ROOST_READY_FILE ?? '').trim()
+  if (readyFile !== '') {
+    try {
+      mkdirSync(dirname(readyFile), { recursive: true })
+      const tmp = `${readyFile}.tmp`
+      writeFileSync(tmp, JSON.stringify({
+        readyAt: Date.now(),
+        pid: process.pid,
+        dsh: initialized?.serverInfo?.version ?? null
+      }))
+      renameSync(tmp, readyFile)
+    } catch (error) {
+      log(`ready file write failed: ${errorMessage(error)}`)
+    }
+  }
 
   /**
    * 等这个 session 空闲。**必须在 prompt 之前注册**：服务端可能在 prompt 的
@@ -1389,6 +1408,9 @@ export async function startRoomAgent(options) {
       if (stopPromise !== null) return stopPromise
       stopPromise = (async () => {
         stopped = true
+        if (readyFile !== '') {
+          try { rmSync(readyFile, { force: true }) } catch { /* best effort */ }
+        }
         // 先取消/等 dsh web：abort 会让还在轮询的 startDshWeb 立刻 kill 子进程并返回。
         dshWebAbort.abort()
         if (dshWebStart !== null) await dshWebStart.catch(() => null)

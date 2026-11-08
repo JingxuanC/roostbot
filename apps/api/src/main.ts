@@ -14,6 +14,7 @@ import { createStorePort } from './store-adapter.ts'
 import { openStore } from '../../../packages/store/src/index.ts'
 import { openShellRuntimeManager } from './runtime-manager-openshell.ts'
 import { localRuntimeManager } from './runtime-manager-local.ts'
+import { dockerRuntimeManager } from './runtime-manager-docker.ts'
 import { createSmtpMailerFromEnv } from './smtp-mailer.ts'
 import { createSleeperRegistry } from './idle-sleepers.ts'
 
@@ -91,8 +92,23 @@ async function main(): Promise<void> {
   // 沙箱管理只在显式配置时启用；没有 OpenShell 的机器上 /start 返回 runtime.not_configured。
   // E6：rawStore 交给 manager，ensure 时为每个 workspace 签发 24h token；没有 SQLite
   // （ROOST_DB=memory）时退回全局 ROOST_RUNTIME_TOKEN，保持旧部署可用。
+  const runtimeProvider = (process.env.ROOST_RUNTIME_PROVIDER ?? process.env.ROOST_SANDBOX ?? '').trim()
   const runtimeManager =
-    process.env.ROOST_SANDBOX === 'local'
+    runtimeProvider === 'docker'
+      ? dockerRuntimeManager({
+          workerUrl: process.env.ROOST_DOCKER_WORKER_URL ?? 'http://172.17.43.58:8790',
+          workerToken: process.env.ROOST_DOCKER_WORKER_TOKEN ?? '',
+          image: process.env.ROOST_DOCKER_IMAGE ?? process.env.ROOST_SANDBOX_IMAGE ?? 'roost/agent:multi-runtime',
+          cpHost: process.env.ROOST_CP_HOST ?? '172.17.43.89',
+          cpPort: Number(process.env.ROOST_CP_PORT ?? port),
+          ...(process.env.ROOST_CP_SCHEME === 'https' ? { cpScheme: 'https' as const } : {}),
+          lockApiBase: process.env.ROOST_CP_API_BASE ?? `http://127.0.0.1:${port}`,
+          runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
+          ...(sqlite === undefined ? {} : { rawStore: sqlite }),
+          ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
+          log: (line: string) => console.log(`[docker-runtime] ${line}`)
+        })
+      : runtimeProvider === 'local'
       ? localRuntimeManager({
           cpHost: process.env.ROOST_CP_HOST ?? '127.0.0.1',
           cpPort: Number(process.env.ROOST_CP_PORT ?? port),
@@ -104,7 +120,7 @@ async function main(): Promise<void> {
           runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
           log: (line: string) => console.log(`[local-runtime] ${line}`)
         })
-      : process.env.ROOST_SANDBOX === 'openshell'
+      : runtimeProvider === 'openshell'
       ? openShellRuntimeManager({
           image: process.env.ROOST_SANDBOX_IMAGE ?? 'roost/agent:dev',
           cpHost: process.env.ROOST_CP_HOST ?? 'host.openshell.internal',
