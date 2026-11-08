@@ -155,6 +155,40 @@ BRIDGE_OK {
 ⚠️ read-only rootfs：可配置开启，但 DSH native addon 需要可写缓存，默认关闭
 ✅ per-Bot credentialRef（文件 secret provider，workspace 内 Bot 隔离）
 ❌ gVisor/Kata
-❌ 多 Docker 宿主 / 备份 / 配额 / 指标告警
-❌ Agent 权限桥 / Grok / Hermes / Native Relay
+⚠️ 多 Docker 宿主：provider 已支持 `ROOST_DOCKER_WORKER_URLS` 确定性放置，实际第二台宿主待部署 / 备份 / 配额 / 指标告警
+✅ ACP 权限桥（external-approvals.mjs）；Claude CLI 无 permission 协议 / Grok / Hermes / Native Relay
+```
+
+
+## 7. 第三轮补充（2026-11-08）
+
+```text
+✅ per-Bot credentialRef 文件 secret provider + 容器内 map
+✅ ACP external approval bridge -> CP approvals
+✅ multi-worker 确定性放置（ROOST_DOCKER_WORKER_URLS）
+✅ worker /metrics、workspace 启动前配额检查
+✅ 备份/恢复脚本
+✅ gVisor/Kata 评估文档
+✅ 镜像提升脚本
+✅ 远端 bridge + egress 下三 Runtime 复测
+```
+
+复测：
+
+```text
+FINAL_OK {
+  FINAL_CLAUDE_OK: true,
+  FINAL_CODEX_OK: true,
+  FINAL_DSH_OK: true
+}
+```
+
+仍未完成：
+
+```text
+❌ gVisor/Kata 实际安装与兼容性验收
+❌ 第二台 Docker 宿主实际部署
+❌ CP Prometheus 告警规则
+❌ Grok Build 二进制 / Hermes / Native Relay
+⚠️ read-only rootfs 默认关闭（DSH native addon 可写缓存）
 ```
