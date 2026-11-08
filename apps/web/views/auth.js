@@ -130,6 +130,8 @@ function loginLinks() {
     el('a', { href: '#/register', text: '注册账号' }),
     el('span', { class: 'muted', text: ' · ' }),
     el('a', { href: '#/reset', text: '忘记密码' }),
+    el('span', { class: 'muted', text: ' · ' }),
+    el('a', { href: 'https://www.roostbots.com/', target: '_blank', rel: 'noreferrer', text: '官网 ↗' }),
   ]
 }
 

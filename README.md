@@ -220,7 +220,7 @@ docs/build/          验收证据
 
 ## 官网
 
-官方站点在 `apps/site/`，零构建、零外部请求：
+官方站点在 `apps/site/`，已部署在 <https://www.roostbots.com/>；零构建、零外部请求、中英文切换：
 
 ```bash
 node scripts/serve-site.mjs        # http://127.0.0.1:4173
