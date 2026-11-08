@@ -34,7 +34,8 @@ DshBot     → DSH_DOCKER_OK
 ```text
 CP .116      ROOST_RUNTIME_PROVIDER=docker
 Docker .138  roost-docker-worker.service active
-容器         roost-ws-<hash>，network=host，uid=1000
+容器         roost-ws-<hash>，network=roost-ws（bridge），uid=1000
+出口         iptables 默认拒绝，只放行 CP + api.deepseek.com:443
 镜像         roost/agent:multi-runtime
 ```
 
@@ -50,13 +51,13 @@ Docker .138  roost-docker-worker.service active
 | stop / token revoke | worker 有 stop，CP 没有公开 stop 路径 | 停 workspace 时 stop 容器并 revoke token |
 | 容器清理 | 失败/归档容器可能残留 | 删除 workspace / 重建时清理 |
 | CP 日志接 worker | 日志只有 `docker logs` | trace/运维接口可看容器日志 |
-| worker 部署自动化 | systemd/脚本手工安装 | 仓库内一条部署命令 |
+| worker 部署自动化 | systemd/脚本手工安装 | `scripts/install-docker-worker.sh` |
 
 ### P1：安全基线
 
 | 项 | 当前状态 | 目标 |
 |---|---|---|
-| 网络 | host network | 专用 bridge + egress allowlist |
+| 网络 | ✅ bridge `roost-ws` + egress allowlist（`deploy/roost-egress-allowlist.sh`） | 保持 DNS 刷新、后续加域名白名单 |
 | 凭据 | vendor key 进容器 env | 按 Bot 注入 / CP 代理 |
 | worker API | 可请求任意 image/command | 只允许 roost-ws-* 和允许的镜像 |
 | 文件系统 | rootfs 可写 | read-only rootfs + tmpfs + workspace volume |
@@ -116,4 +117,41 @@ Agent 级权限桥
 能稳定运维：未完成 P0
 能安全多租户：未完成 P1
 生产级：未完成 P2
+```
+
+
+## 6. 第二轮补充（2026-11-08）
+
+```text
+✅ 完整 Dockerfile 从零构建 roost/agent:multi-runtime-full
+✅ worker 单测（fake docker）
+✅ provider contract test
+✅ workspace stop / runtime token revoke
+✅ runtime logs API + docker ensure trace
+✅ worker image/command/network allowlist
+✅ bridge roost-ws + NAT
+✅ egress 默认拒绝，只放行 CP 与 api.deepseek.com:443
+✅ egress service/timer
+✅ worker 安装脚本
+```
+
+远程桥接网络实测：
+
+```text
+Claude / Codex / DSH 同房间全部回复
+BRIDGE_OK {
+  CLAUDE_BRIDGE_OK: true,
+  CODEX_BRIDGE_OK: true,
+  DSH_BRIDGE_OK: true
+}
+```
+
+未完成：
+
+```text
+❌ read-only rootfs：DSH native addon 需要可写缓存，当前 hardening 默认关闭
+❌ per-Bot credentialRef
+❌ gVisor/Kata
+❌ 多 Docker 宿主 / 备份 / 配额 / 指标告警
+❌ Agent 权限桥 / Grok / Hermes / Native Relay
 ```
