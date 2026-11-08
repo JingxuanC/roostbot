@@ -429,7 +429,7 @@ function renderSidebarRooms() {
 /** Bot 名字/角色：真实列表优先，样例兜底，最后才是成员名；绝不显示内部 id。 */
 function botIdentity(id) {
   const stored = STORE.bots.find((bot) => bot.id === id)
-  if (stored) return { name: stored.name || 'Bot', role: stored.role || '' }
+  if (stored) return { name: stored.name || 'Bot', role: stored.role || '', runtimeKind: stored.runtimeKind || '' }
   const sample = BOTS[id]
   if (sample) return { name: sample.name, role: sample.role }
   const member = LIVE.room ? roomMembers(LIVE.room).find((item) => item.botId === id) : null
@@ -438,6 +438,14 @@ function botIdentity(id) {
 
 function botLabel(id) {
   return botIdentity(id).name
+}
+
+/** Full Bot shape for an avatar, including runtimeKind when the list has it. */
+function botForAvatar(id) {
+  const stored = STORE.bots.find((bot) => bot.id === id)
+  if (stored) return stored
+  const identity = botIdentity(id)
+  return { id, name: identity.name, role: identity.role, runtimeKind: identity.runtimeKind }
 }
 
 /** 附件渲染上下文：只有实时房间才画附件区；预览模式没有后端。 */
@@ -491,10 +499,10 @@ function openExchangeDialog(leftId, rightId) {
   const dialog = el('section', { class: 'exchange-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bot 对话' })
   const head = el('header', { class: 'exchange-head' })
   const left = el('span', { class: 'exchange-who' })
-  left.append(botAvatar({ id: leftId, name: botNameById(leftId) }, 22, { round: true }))
+  left.append(botAvatar(botForAvatar(leftId), 22, { round: true }))
   left.append(el('span', { text: botNameById(leftId) }))
   const right = el('span', { class: 'exchange-who' })
-  right.append(botAvatar({ id: rightId, name: botNameById(rightId) }, 22, { round: true }))
+  right.append(botAvatar(botForAvatar(rightId), 22, { round: true }))
   right.append(el('span', { text: botNameById(rightId) }))
   head.append(left, el('span', { class: 'exchange-swap', 'aria-hidden': 'true', text: '⇄' }), right)
   const close = el('button', { class: 'exchange-close', type: 'button', 'aria-label': '关闭', text: '×' })
@@ -513,7 +521,7 @@ function openExchangeDialog(leftId, rightId) {
   } else {
     for (const item of entries) {
       const row = el('div', { class: 'exchange-line' })
-      row.append(botAvatar({ id: item.actor.id, name: botNameById(item.actor.id) }, 20, { round: true }))
+      row.append(botAvatar(botForAvatar(item.actor.id), 20, { round: true }))
       const body = el('div', { class: 'exchange-body' })
       body.append(el('strong', { text: botNameById(item.actor.id) }))
       const text = item.payload && typeof item.payload.text === 'string' ? item.payload.text : ''
@@ -551,7 +559,7 @@ function renderRoomMessage(event) {
   const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
   const headButton = el('button', { class: 'msg-head-button', type: 'button', title: `打开 ${bot.name} 的私聊` })
-  headButton.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 28, { round: true, primary }))
+  headButton.append(botAvatar({ ...bot, id: event.actor.id }, 28, { round: true, primary }))
   headButton.append(el('span', { class: 'msg-name', text: bot.name }))
   headButton.addEventListener('click', () => void openBotDm(event.actor.id).catch(() => {}))
   head.append(headButton)
@@ -790,7 +798,7 @@ function renderPeerMessage(event, delivery) {
   })
   const chev = el('span', { class: 'chev', 'aria-hidden': 'true', text: '▸' })
   toggle.append(chev)
-  toggle.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 16))
+  toggle.append(botAvatar({ ...bot, id: event.actor.id }, 16))
   toggle.append(el('span', { class: 'peer-name', text: event.peer.from || bot.name }))
   if (verb) toggle.append(el('span', { class: 'peer-verb', text: ` · ${verb}` }))
   toggle.append(el('span', { class: 'peer-summary', text: ` · ${summary}` }))
@@ -2587,7 +2595,7 @@ function renderThinkingPlaceholder(botId) {
   if (node.dataset.botId !== id) {
     node.dataset.botId = id
     const head = el('header', { class: 'msg-head' })
-    head.append(botAvatar({ id, name: identity.name, role: identity.role }, 22, { round: true }))
+    head.append(botAvatar({ id, ...identity }, 22, { round: true }))
     head.append(el('span', { class: 'msg-name', text: identity.name }))
     if (identity.role !== '') head.append(el('span', { class: 'msg-role', text: identity.role }))
     const label = el('div', { class: 'thinking-label' })
@@ -2626,7 +2634,7 @@ function handleDeltaEvent(event) {
     node = el('article', { class: 'msg msg-bot streaming-line', id: 'streaming-line' })
     const identity = botIdentity(LIVE.pendingReplyBotId)
     const head = el('header', { class: 'msg-head' })
-    head.append(botAvatar({ id: LIVE.pendingReplyBotId, name: identity.name, role: identity.role }, 22, { round: true }))
+    head.append(botAvatar({ id: LIVE.pendingReplyBotId, ...identity }, 22, { round: true }))
     head.append(el('span', { class: 'msg-name', text: identity.name }))
     const body = el('div', { class: 'bubble bubble-bot streaming-body' })
     body.append(el('p', { class: 'streaming-text', text: '' }))

@@ -390,3 +390,20 @@ apps/web/app.js
   renderRoomMessage() 的可点头像 + A ⇄ B 标签
   renderPeerMessage() 的「打开对话」
 ```
+
+
+## 13. Harness 头像（2026-11-08）
+
+Bot 头像不再统一用小鸟，而是按 `runtimeKind` 显示对应 harness 标记：
+
+```text
+DSH         蓝色鲸/波
+Claude Code 橙色星芒
+Codex       黑色六边形结
+Grok Build  黑色 X
+Hermes      紫色 H / 翼
+Native Relay 灰色终端
+```
+
+未知 runtime 或旧数据仍回退程序化小鸟；自定义上传头像在未知 runtime 下仍可用。
+实现见 `apps/web/lib/dom.js` 的 `botHarnessKind` / `harnessAvatarSvg`。

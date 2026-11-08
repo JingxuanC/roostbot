@@ -2738,3 +2738,20 @@ td.num,
   font-size: 9px;
   cursor: pointer;
 }
+
+/* Runtime marks replace generic bird avatars when the harness is known. */
+.avatar-harness {
+  overflow: visible;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.avatar-harness.avatar-round {
+  border-radius: 50%;
+}
+
+.avatar-harness svg {
+  display: block;
+  border-radius: inherit;
+}
