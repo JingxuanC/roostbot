@@ -463,3 +463,13 @@ workspace volume 在 .138 的 /var/lib/roost/workspaces
 
 Codex 需要可写 CODEX_HOME；镜像提供模板，room-agent 启动时复制到
 `/workspace/.codex/config.toml`。
+
+## 16. OpenShell 封存
+
+```text
+默认不支持 openshell
+ROOST_RUNTIME_PROVIDER=openshell 会启动失败
+仅在遗留恢复时显式设置 ROOST_ALLOW_OPENSHELL=1
+```
+
+Docker 是默认生产 provider；旧 OpenShell 数据不迁移。

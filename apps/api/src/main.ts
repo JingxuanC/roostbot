@@ -93,6 +93,11 @@ async function main(): Promise<void> {
   // E6：rawStore 交给 manager，ensure 时为每个 workspace 签发 24h token；没有 SQLite
   // （ROOST_DB=memory）时退回全局 ROOST_RUNTIME_TOKEN，保持旧部署可用。
   const runtimeProvider = (process.env.ROOST_RUNTIME_PROVIDER ?? process.env.ROOST_SANDBOX ?? '').trim()
+  // OpenShell is sealed: it stays in the tree as a reference/fallback only when
+  // an operator explicitly opts in. Docker is the supported production provider.
+  if (runtimeProvider === 'openshell' && process.env.ROOST_ALLOW_OPENSHELL !== '1') {
+    throw new Error('OpenShell provider is sealed; set ROOST_ALLOW_OPENSHELL=1 only for legacy recovery')
+  }
   const runtimeManager =
     runtimeProvider === 'docker'
       ? dockerRuntimeManager({
