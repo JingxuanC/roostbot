@@ -130,8 +130,6 @@ function loginLinks() {
     el('a', { href: '#/register', text: '注册账号' }),
     el('span', { class: 'muted', text: ' · ' }),
     el('a', { href: '#/reset', text: '忘记密码' }),
-    el('span', { class: 'muted', text: ' · ' }),
-    el('a', { href: '#/', text: '用配对码登录' }),
   ]
 }
 
@@ -290,7 +288,7 @@ export async function mountRegisterPage(root, ctx) {
         '注册',
         '邮箱 + 密码创建账号；验证邮箱后再登录。',
         [form],
-        [el('a', { href: '#/login', text: '已经有账号？登录' }), el('span', { class: 'muted', text: ' · ' }), el('a', { href: '#/', text: '用配对码登录' })]
+        [el('a', { href: '#/login', text: '已经有账号？登录' })]
       )
     )
   )
@@ -390,7 +388,7 @@ export async function mountVerifyEmailPage(root, ctx, params = {}) {
         '验证邮箱',
         '验证 token 单次有效；过期或已用就重新发送。',
         [form, el('hr', { class: 'auth-rule' }), resendForm],
-        [el('a', { href: '#/login', text: '回登录' }), el('span', { class: 'muted', text: ' · ' }), el('a', { href: '#/', text: '用配对码登录' })]
+        [el('a', { href: '#/login', text: '回登录' })]
       )
     )
   )

@@ -968,144 +968,6 @@ async function serverMessage(response) {
   return `配对失败（HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}）`
 }
 
-function setupPairing() {
-  const form = $('#pair-form')
-  const boxes = Array.from(document.querySelectorAll('.code-digit'))
-  const error = $('#pair-error')
-  const submit = $('#pair-submit')
-  const note = $('#api-note')
-
-  note.textContent = API_BASE ? `API：${API_BASE}` : 'API：同源（?api=http://127.0.0.1:8787 可指定）'
-
-  const code = () => boxes.map((box) => box.value).join('')
-  const focusBox = (index) => {
-    const target = boxes[Math.max(0, Math.min(boxes.length - 1, index))]
-    if (target) target.focus()
-  }
-  const clearError = () => {
-    error.hidden = true
-    error.textContent = ''
-    ui.setFieldInvalid(boxes, false, error)
-  }
-  const showError = (message) => {
-    error.textContent = message
-    error.hidden = false
-    // 错误作用于整组配对码：六个输入都标红，读屏读到一致的原因。
-    ui.setFieldInvalid(boxes, true, error)
-  }
-  const setBusy = (busy) => {
-    submit.disabled = busy
-    submit.textContent = busy ? '配对中…' : '配对'
-    form.setAttribute('aria-busy', String(busy))
-  }
-
-  boxes.forEach((box, index) => {
-    box.addEventListener('focus', () => box.select())
-    box.addEventListener('input', () => {
-      clearError()
-      const digits = box.value.replace(/\D/g, '')
-      box.value = ''
-      if (!digits) return
-      let cursor = index
-      for (const digit of digits) {
-        if (cursor >= boxes.length) break
-        boxes[cursor].value = digit
-        cursor += 1
-      }
-      focusBox(cursor)
-    })
-    box.addEventListener('keydown', (event) => {
-      if (event.key === 'Backspace') {
-        event.preventDefault()
-        clearError()
-        if (box.value) {
-          box.value = ''
-        } else if (index > 0) {
-          boxes[index - 1].value = ''
-          focusBox(index - 1)
-        }
-      } else if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        focusBox(index - 1)
-      } else if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        focusBox(index + 1)
-      }
-    })
-    box.addEventListener('paste', (event) => {
-      const pasted = (event.clipboardData && event.clipboardData.getData('text')) || ''
-      const digits = pasted.replace(/\D/g, '').slice(0, boxes.length)
-      if (!digits) return
-      event.preventDefault()
-      clearError()
-      for (const target of boxes) target.value = ''
-      digits.split('').forEach((digit, offset) => {
-        boxes[offset].value = digit
-      })
-      focusBox(digits.length)
-    })
-  })
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault()
-    const value = code()
-    if (value.length !== boxes.length) {
-      showError(`请输入 ${boxes.length} 位数字`)
-      focusBox(boxes.findIndex((box) => !box.value))
-      return
-    }
-
-    clearError()
-    setBusy(true)
-    try {
-      const response = await fetch(API_BASE ? `${API_BASE}/api/pairing/claim` : '/api/pairing/claim', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: value }),
-      })
-
-      if (!response.ok) {
-        // 服务端的 message 原样显示（auth.md §8 的失败话术由服务端给）。
-        showError(await serverMessage(response))
-        return
-      }
-
-      let body = null
-      try {
-        body = await response.json()
-      } catch {
-        // 204 或空 body 也算成功
-      }
-      // 会话正常情况下在 HttpOnly cookie 里，前端看不到；真返回了 token 也只在内存。
-      const token = body && (body.token || body.sessionToken || (body.session && body.session.token))
-      if (typeof token === 'string' && token) {
-        sessionToken = token
-        writeSessionToken(token)
-      }
-
-      try {
-        await enterLiveRoom(token)
-      } catch (cause) {
-        const reason = cause instanceof Error ? cause.message : String(cause)
-        showError(`配对成功，但房间没载入（${reason}）。可以点「预览房间」，或稍后刷新重试。`)
-      }
-    } catch (cause) {
-      // fetch 本身失败（没服务、file://、CORS）——把原因摊开说，不假装成功。
-      const reason = cause instanceof Error ? cause.message : String(cause)
-      showError(`连不上 API（${reason}）。检查控制面是否在跑，或用 ?api= 指定地址；也可以先「预览房间」。`)
-    } finally {
-      setBusy(false)
-    }
-  })
-
-  const preview = $('#preview-btn')
-  preview.addEventListener('click', () => {
-    if (location.hash === '#room') renderRoute()
-    else navigate('#room')
-  })
-}
-
 
 // ---------------------------------------------------------------------------
 // 四、状态、API 客户端与会话
@@ -1304,7 +1166,7 @@ function requirePair(message = '') {
   resetApprovalNotifyState()
   authNotice =
     message ||
-    '会话已失效或还没登录。登录成功后会回到刚才的页面；也可以用配对码登录。'
+    '会话已失效或还没登录。登录成功后会回到刚才的页面。'
   navigate('#/login')
   setTitle('登录')
 }
@@ -1578,11 +1440,9 @@ function updatePageBackLink() {
 }
 
 function showView(name) {
-  const pair = $('#pair-view')
   const auth = $('#auth-view')
   const room = $('#room-view')
   const page = $('#page-view')
-  if (pair) pair.hidden = name !== 'pair'
   if (auth) auth.hidden = name !== 'auth'
   if (room) room.hidden = name !== 'room'
   if (page) page.hidden = name !== 'page'
@@ -1590,13 +1450,6 @@ function showView(name) {
   document.body.dataset.view = name
 }
 
-function focusPairCode() {
-  const pair = $('#pair-view')
-  if (!pair) return
-  if (pair.contains(document.activeElement)) return
-  const firstEmpty = Array.from(document.querySelectorAll('.code-digit')).find((box) => box.value === '') || $('.code-digit')
-  if (firstEmpty) firstEmpty.focus()
-}
 
 function renderNotFound(main) {
   const hash = location.hash || '#/'
@@ -1618,7 +1471,7 @@ function renderWorkspaceMismatch(main, workspaceId) {
       title: '工作区不匹配',
       body: `链接里的工作区 ${workspaceId || '（空）'} 不属于当前账号。为免把内容误跳到别的工作区，这里不自动打开。`,
       action: ui.linkButton('回到当前工作区', '#/bots', { variant: 'primary' }),
-      secondary: ui.linkButton('去配对', '#/', { variant: 'ghost' }),
+      secondary: ui.linkButton('去登录', '#/login', { variant: 'ghost' }),
     })
   )
 }
@@ -1736,17 +1589,9 @@ async function renderRoute() {
     return
   }
 
-  if (route.name === 'pair') {
-    showView('pair')
-    setTitle('配对')
-    focusPairCode()
-    return
-  }
-
   // cookie 模式下先问一次 /api/auth/me；账号接口未上线（unavailable）时不拦截，保留旧配对流程。
   await ensureAuthProbe()
-  const previewRoom = route.name === 'room' && route.params.id === null
-  if (!previewRoom && !hasToken() && authState.available) {
+  if (!hasToken()) {
     requirePair()
     return
   }
@@ -3355,7 +3200,6 @@ function boot() {
   renderSidebarBots()
   renderSidebarRooms()
   renderNeeds()
-  setupPairing()
   const pageBack = $('#page-back')
   if (pageBack) {
     // href 在渲染时可能还没拿到房间；点击时按当前状态再决定一次，保证「← 房间」不会回到配对页。

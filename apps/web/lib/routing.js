@@ -1,7 +1,7 @@
 // Hash 路由：纯函数，不碰 location / DOM，方便 node:test 直接测。
 //
 // 路由表（docs/build/m4-contract.md §5）：
-//   #/                  配对
+//   #/                  登录（云端模式；无本地配对）
 //   #/login             账号登录（cookie + CSRF）
 //   #/register          注册账号（邮箱 + 密码）
 //   #/verify-email      验证邮箱（?token=）
@@ -21,7 +21,6 @@
 //   #/usage             用量（token / 工具调用 / 成本 / 配额）
 //   #/schedules         定时任务（cron / 运行历史）
 //   #/connectors        连接器（目录 + 按 Bot 授权）
-//   兼容旧地址 #room    房间预览（假数据）
 //
 // 多端深链（ui.md §4，M5-5.4）：进入时先按下面三条解析，再由
 // canonicalWorkspaceRoute 对照当前 workspace 规范化成上面的内部路由：
@@ -30,7 +29,6 @@
 //   #/w/:workspaceId/approvals
 
 const ROUTES = new Set([
-  'pair',
   'login',
   'register',
   'verifyEmail',
@@ -97,7 +95,7 @@ export function routeMatch(hash) {
     }
     return { name, params: merged, path }
   }
-  if (path === '/') return route('pair')
+  if (path === '/') return route('login')
   // 账号流程：固定一层；token 从 ?token= 读。
   if (path === '/login') return route('login')
   if (path === '/register') return route('register')
@@ -128,9 +126,6 @@ export function routeMatch(hash) {
     if (value === null || value === '') return route('notFound')
     decoded.push(value)
   }
-
-  // 兼容 v0 的 #room：房间页预览，没有 id。
-  if (decoded.length === 1 && decoded[0] === 'room') return route('room', { id: null })
 
   // 多端深链：#/w/:workspaceId/{room|bot}/:id 或 #/w/:workspaceId/approvals。
   // 结构不完整或多了段一律 notFound，不在解析阶段猜测。

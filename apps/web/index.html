@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#F3EFE6" />
-    <meta name="description" content="Roost 网页端：配对、房间、Bot 与建群设置。" />
+    <meta name="description" content="Roost 网页端：登录、房间、Bot 与建群设置。" />
     <title>Roost · Research Rooms</title>
     <!-- 图标内联成 data URI：不额外加文件，也不让浏览器为 /favicon.ico 404 一次 -->
     <link
@@ -25,85 +25,6 @@
         请用静态服务器打开（见 <code>apps/web/README.md</code>）。
       </p>
     </div>
-
-    <!-- ------------------------------------------------------------ 页面一：配对（ui.md §3.1） -->
-    <main id="pair-view" class="pair">
-      <form id="pair-form" class="pair-card" novalidate>
-        <h1 class="wordmark">Roost</h1>
-        <p class="pair-hint">输入另一台设备上显示的配对码</p>
-
-        <fieldset class="code-fieldset">
-          <legend class="field-label">配对码</legend>
-          <div class="code" id="code-boxes">
-            <input
-              class="code-digit"
-              id="code-0"
-              type="text"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength="1"
-              aria-label="第 1 位"
-              autofocus
-            />
-            <input
-              class="code-digit"
-              id="code-1"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 2 位"
-            />
-            <input
-              class="code-digit"
-              id="code-2"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 3 位"
-            />
-            <input
-              class="code-digit"
-              id="code-3"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 4 位"
-            />
-            <input
-              class="code-digit"
-              id="code-4"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 5 位"
-            />
-            <input
-              class="code-digit"
-              id="code-5"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 6 位"
-            />
-          </div>
-        </fieldset>
-
-        <p id="pair-error" class="pair-error" role="alert" hidden></p>
-        <p id="pair-note" class="pair-note muted" role="status" hidden></p>
-
-        <button id="pair-submit" class="btn btn-primary btn-block pair-submit" type="submit">
-          配对
-        </button>
-
-        <p class="pair-foot muted">没有配对码？<a href="#/login">登录账号</a> · <a href="#/register">注册</a></p>
-        <p class="pair-foot">
-          <button id="preview-btn" class="btn btn-quiet" type="button">
-            预览房间（假数据，不配对）
-          </button>
-        </p>
-        <p id="api-note" class="api-note muted"></p>
-      </form>
-    </main>
 
     <!-- ------------------------------------------------------------ 账号页（auth.md §4；cookie 会话） -->
     <div id="auth-view" class="auth" hidden>
@@ -334,7 +255,6 @@
           <a href="#/connectors">连接器</a>
           <a href="#/settings">设置</a>
           <a href="#/login">登录</a>
-          <a href="#/">配对</a>
         </nav>
       </header>
       <p id="page-note" class="page-note" role="status" hidden></p>

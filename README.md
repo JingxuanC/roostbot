@@ -6,7 +6,7 @@
 - **异构 Runtime**：DSH、Claude Code、Codex、Grok Build（ACP）；Hermes 已有 ACP 适配
 - **Docker 运行时**：控制面签发运行 token，Docker worker 为每个 workspace 拉起独立容器
 - **BYO 模型**：DeepSeek、Anthropic、OpenAI、xAI 等用自己的 key；平台不转售推理
-- **Web / 桌面**：同源网页、桌面端、配对设备、SSE 实时消息
+- **Web / 桌面**：同源网页、桌面端、账号登录、SSE 实时消息
 
 截图：[房间](docs/assets/ui-desk-room.png) · [Bot 列表](docs/assets/ui-desk-bots.png) · [设置](docs/assets/ui-desk-settings.png)
 
@@ -104,23 +104,8 @@ ROOST_DB=/tmp/roost.db \
   node --experimental-strip-types apps/api/src/main.ts
 ```
 
-打开 <http://127.0.0.1:8787/>。第一次打开是配对页；配对后进入房间。
+打开 <http://127.0.0.1:8787/>。第一次打开是登录页；注册/登录后进入房间。当前是纯云端模式，没有本地配对页。
 
-种一组演示数据：
-
-```sh
-node --experimental-strip-types scripts/seed-demo.ts /tmp/roost.db
-```
-
-本地启动 room-agent（不配 Docker 时）：
-
-```sh
-ROOST_API=http://127.0.0.1:8787 \
-ROOST_RUNTIME_TOKEN=dev-token \
-ROOST_BOT_ID=selector \
-ROOST_DSH_BIN=apps/runtime/test/fake-dsh.mjs \
-  node --experimental-strip-types apps/runtime/room-agent.mjs
-```
 
 ## Docker Runtime
 
@@ -232,6 +217,19 @@ deploy/              systemd、nginx、worker、egress、Prometheus
 docs/design/         40 份设计文档
 docs/build/          验收证据
 ```
+
+## 官网
+
+官方站点在 `apps/site/`，零构建、零外部请求：
+
+```bash
+node scripts/serve-site.mjs        # http://127.0.0.1:4173
+```
+
+![官网](docs/assets/site-desk.png)
+
+设计参考了 Linear 的克制、Vercel 的产品即主角、Anthropic 的编辑感和 Raycast 的细节；
+文案和视觉都按 Roost 自己的 multi-agent room 定位重写。
 
 ## 文档
 
