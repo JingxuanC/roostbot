@@ -16,7 +16,7 @@
 import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
 import { decideRoutineAttempt, isolatedRoutinePrompt, ROUTINE_MAX_ATTEMPTS } from './routine-turn.mjs'
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
@@ -290,6 +290,20 @@ export function prepareApprovalBridgeProfile(options = {}) {
 
 export async function startRoomAgent(options) {
   const log = options.log ?? ((line) => console.log(`[room-agent] ${line}`))
+  // Codex needs a writable CODEX_HOME. The image carries the DeepSeek provider
+  // template; copy it into the per-workspace home so the CLI can create its
+  // session/cache files without writing to a root-owned image directory.
+  const codexHome = String(process.env.CODEX_HOME ?? '').trim()
+  const codexTemplate = String(process.env.ROOST_CODEX_CONFIG_TEMPLATE ?? '').trim()
+  if (codexHome !== '' && codexTemplate !== '') {
+    try {
+      mkdirSync(codexHome, { recursive: true })
+      const target = `${codexHome}/config.toml`
+      if (!existsSync(target) && existsSync(codexTemplate)) copyFileSync(codexTemplate, target)
+    } catch (error) {
+      log(`codex home prepare failed: ${errorMessage(error)}`)
+    }
+  }
   const botId = options.botId
   const pollMs = options.pollMs ?? 500
   // 控制面支持 GET /api/internal/events 时用长轮询，不再按 pollMs 空转。

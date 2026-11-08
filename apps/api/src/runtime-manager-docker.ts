@@ -203,6 +203,8 @@ export function dockerRuntimeManager(config: DockerRuntimeManagerConfig): Runtim
       ROOST_BOT_ID: config.botId ?? 'selector',
       ROOST_WORKSPACE_ID: workspaceId,
       ROOST_WORKDIR: '/workspace',
+      CODEX_HOME: '/workspace/.codex',
+      ROOST_CODEX_CONFIG_TEMPLATE: '/opt/roost/codex-home/config.toml',
       ROOST_STATE_FILE: '/workspace/.dsh/room-cursors.json',
       ROOST_READY_FILE: '/workspace/.roost/ready',
       ROOST_DSH_PROVIDER: 'deepseek-official',
