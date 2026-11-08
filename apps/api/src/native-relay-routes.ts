@@ -41,9 +41,14 @@ async function gate(ctx: NativeRelayContext, req: IncomingMessage, res: ServerRe
     sendError(res, 404, 'not_found', 'unknown room')
     return null
   }
-  const workspaceId = workspaceIdForRoom(ctx.store, roomId)
-  if (workspaceId === null || !(await requireWorkspaceRole(ctx.store, auth.session.accountId, workspaceId, ['owner', 'admin', 'member']))) {
-    sendError(res, 403, 'forbidden', 'not a member of this room workspace')
+  const workspaceId = workspaceIdForRoom(ctx, roomId)
+  if (workspaceId === null) {
+    sendError(res, 404, 'not_found', 'unknown room workspace')
+    return null
+  }
+  const role = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin', 'member'])
+  if (!role.ok) {
+    sendError(res, role.status, role.code, role.message)
     return null
   }
   return { store: ctx.rawStore, accountId: auth.session.accountId, room }
