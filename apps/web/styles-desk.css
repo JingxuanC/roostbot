@@ -2755,3 +2755,29 @@ td.num,
   display: block;
   border-radius: inherit;
 }
+
+/* Make the two conversation kinds explicit at a glance. */
+#room-view .home-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#room-view .home-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#room-view .home-kind {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 2px;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+}

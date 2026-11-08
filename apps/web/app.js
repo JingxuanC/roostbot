@@ -2076,7 +2076,15 @@ function renderChatRow(entry) {
   const flock = entry.kind === 'group' && entry.room ? roomFlock(entry.room, 48) : null
   row.append(flock || botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
   const text = el('div', { class: 'home-copy' })
-  text.append(el('strong', { text: entry.title }))
+  const titleLine = el('div', { class: 'home-title' })
+  titleLine.append(el('strong', { text: entry.title }))
+  titleLine.append(
+    el('span', {
+      class: 'home-kind',
+      text: entry.kind === 'group' ? '群' : entry.kind === 'dm' ? 'Bot' : '设置',
+    })
+  )
+  text.append(titleLine)
   const preview = el('span', { class: 'home-preview', text: '…' })
   text.append(preview)
   row.append(text)
