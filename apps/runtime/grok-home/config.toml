@@ -1,0 +1,14 @@
+# Grok Build -> DeepSeek OpenAI-compatible endpoint.
+# The key is read from DEEPSEEK_API_KEY in the per-Bot session env.
+[models]
+default = "deepseek-chat"
+
+[model.deepseek-chat]
+model = "deepseek-chat"
+name = "DeepSeek Chat"
+base_url = "https://api.deepseek.com/v1"
+env_key = "DEEPSEEK_API_KEY"
+api_backend = "chat_completions"
+context_window = 65536
+max_completion_tokens = 4096
+temperature = 0.3

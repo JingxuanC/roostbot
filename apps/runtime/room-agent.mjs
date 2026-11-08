@@ -305,6 +305,21 @@ export async function startRoomAgent(options) {
       log(`codex home prepare failed: ${errorMessage(error)}`)
     }
   }
+  // Grok Build reads ~/.grok/config.toml. HOME is /workspace in the container;
+  // seed the DeepSeek provider template into the writable per-workspace home.
+  const grokHome = String(process.env.ROOST_GROK_HOME ?? `${process.env.HOME ?? '/workspace'}/.grok`).trim()
+  const grokTemplate = String(process.env.ROOST_GROK_CONFIG_TEMPLATE ?? '').trim()
+  if (grokHome !== '' && grokTemplate !== '') {
+    try {
+      mkdirSync(grokHome, { recursive: true })
+      const target = `${grokHome}/config.toml`
+      // Managed Grok workspaces use the image's DeepSeek template. Overwrite a
+      // stale legacy config so an old empty file cannot hide the provider.
+      if (existsSync(grokTemplate)) copyFileSync(grokTemplate, target)
+    } catch (error) {
+      log(`grok home prepare failed: ${errorMessage(error)}`)
+    }
+  }
   const botId = options.botId
   const pollMs = options.pollMs ?? 500
   // 控制面支持 GET /api/internal/events 时用长轮询，不再按 pollMs 空转。

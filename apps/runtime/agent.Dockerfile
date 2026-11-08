@@ -99,6 +99,7 @@ COPY packages/approvals-bridge /opt/roost/packages/approvals-bridge
 COPY packages/agent-runtime /opt/roost/packages/agent-runtime
 COPY apps/runtime/agent-adapters /opt/roost/apps/runtime/agent-adapters
 COPY apps/runtime/codex-home/config.toml /opt/roost/codex-home/config.toml
+COPY apps/runtime/grok-home/config.toml /opt/roost/grok-home/config.toml
 COPY apps/runtime/external-approvals.mjs /opt/roost/external-approvals.mjs
 COPY apps/runtime/agent-supervisor.mjs /opt/roost/apps/runtime/agent-supervisor.mjs
 RUN ln -s /opt/roost/apps/runtime/agent-supervisor.mjs /opt/roost/agent-supervisor.mjs
@@ -109,6 +110,7 @@ ENV ROOST_CLAUDE_BIN=claude
 ENV ROOST_CODEX_BIN=codex-acp
 ENV ROOST_GROK_BIN=/opt/agents/grok-build/bin/grok
 ENV ROOST_HERMES_BIN=hermes
+ENV ROOST_GROK_CONFIG_TEMPLATE=/opt/roost/grok-home/config.toml
 # 沙箱以 uid 1000 运行：COPY 会保留宿主机源文件权限（本地可能是 600），
 # 不放开读权限时 room-agent 连 dsh-web.mjs 都 import 不了。
 RUN chmod -R a+rX /opt/roost
