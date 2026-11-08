@@ -192,3 +192,25 @@ FINAL_OK {
 ❌ Grok Build 二进制 / Hermes / Native Relay
 ⚠️ read-only rootfs 默认关闭（DSH native addon 可写缓存）
 ```
+
+
+## 8. 第四轮补充（2026-11-08）
+
+```text
+✅ Native Relay PoC
+   GET  /api/native/assignments
+   POST /api/native/advance
+   apps/runtime/native-relay.mjs
+   docs/design/native-relay.md
+✅ 远端控制面已部署该 API
+```
+
+仍受外部依赖阻塞：
+
+```text
+❌ Grok Build 官方二进制
+❌ Hermes 协议
+❌ 第二台 Docker 宿主
+❌ Prometheus/Alertmanager 实例
+❌ gVisor/Kata 安装
+```
