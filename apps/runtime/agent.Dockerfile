@@ -30,6 +30,8 @@ ARG CODEX_ACP_VERSION=0.16.0
 ARG GROK_BUILD_INSTALL_URL=
 ARG GROK_BUILD_SHA256=
 ARG GROK_BUILD_BIN=grok
+ARG INSTALL_GROK_BUILD=1
+ARG INSTALL_HERMES=0
 
 # libssl3: codex-acp's linux-x64 native binary links libssl.so.3. git/curl are
 # runtime needs of the external CLIs; ca-certificates is required for HTTPS.
@@ -48,7 +50,15 @@ RUN set -eux; \
     if [ "${INSTALL_CODEX_ACP}" = "1" ]; then \
       npm install -g --no-audit --no-fund "@zed-industries/codex-acp@${CODEX_ACP_VERSION}"; \
     else echo "NOTE: codex-acp skipped (INSTALL_CODEX_ACP=0)"; fi; \
-    if [ -n "${GROK_BUILD_INSTALL_URL}" ]; then \
+    if [ "${INSTALL_GROK_BUILD}" = "1" ]; then \
+      echo 'installing Grok Build from https://x.ai/cli/install.sh'; \
+      mkdir -p /opt/agents/grok-build; \
+      curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/opt/agents/grok-build bash; \
+      mkdir -p /opt/agents/grok-build/bin; \
+      cp -Lf /opt/agents/grok-build/grok /opt/agents/grok-build/bin/grok; \
+      chmod 755 /opt/agents/grok-build/bin/grok; \
+      /opt/agents/grok-build/bin/grok --version; \
+    elif [ -n "${GROK_BUILD_INSTALL_URL}" ]; then \
       echo "installing grok-build from ${GROK_BUILD_INSTALL_URL}"; \
       mkdir -p /opt/agents/grok-build/bin; \
       curl -fsSL "${GROK_BUILD_INSTALL_URL}" -o /tmp/grok-build.tar.gz; \
@@ -65,6 +75,12 @@ RUN set -eux; \
       echo "      Set GROK_BUILD_INSTALL_URL (+GROK_BUILD_SHA256) to a pinned tarball."; \
       echo "      Probe reports it as data (ok:false/problems); DSH boot is unaffected."; \
     fi; \
+    if [ "${INSTALL_HERMES}" = "1" ]; then \
+      echo 'installing Hermes Agent (ACP)'; \
+      apt-get update && apt-get install -y --no-install-recommends python3 python3-venv python3-pip; \
+      curl -fsSL https://hermes-agent.nousresearch.com/install.sh | HERMES_INSTALL_DIR=/opt/agents/hermes HERMES_HOME=/opt/agents/hermes/home bash -s -- --non-interactive --skip-browser --skip-computer-use; \
+      /opt/agents/hermes/bin/hermes --version || true; \
+    else echo 'NOTE: Hermes Agent skipped (INSTALL_HERMES=0); hermes ACP adapter probes at runtime'; fi; \
     npm cache clean --force
 
 COPY apps/runtime/room-agent.mjs /opt/roost/room-agent.mjs
@@ -91,6 +107,7 @@ ENV ROOST_MULTI_RUNTIME=0
 ENV ROOST_CLAUDE_BIN=claude
 ENV ROOST_CODEX_BIN=codex-acp
 ENV ROOST_GROK_BIN=/opt/agents/grok-build/bin/grok
+ENV ROOST_HERMES_BIN=hermes
 # 沙箱以 uid 1000 运行：COPY 会保留宿主机源文件权限（本地可能是 600），
 # 不放开读权限时 room-agent 连 dsh-web.mjs 都 import 不了。
 RUN chmod -R a+rX /opt/roost

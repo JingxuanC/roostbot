@@ -660,6 +660,7 @@ export async function startRoomAgent(options) {
     const grokBin = (process.env.ROOST_GROK_BIN ?? '').trim() || 'grok'
     const claudeBin = (process.env.ROOST_CLAUDE_BIN ?? '').trim() || 'claude'
     const codexBin = (process.env.ROOST_CODEX_BIN ?? '').trim() || 'codex'
+    const hermesBin = (process.env.ROOST_HERMES_BIN ?? '').trim() || 'hermes'
     // Only the vendor credentials the CLI needs; never forward the control-plane
     // runtime token or DSH keys to an external agent.
     const claudeEnv = {}
@@ -679,8 +680,9 @@ export async function startRoomAgent(options) {
     }
     return {
       adapterConfigs: {
-        'grok-build': { command: grokBin, args: [], env: grokEnv, permissionPolicy: externalApprovalPolicy },
+        'grok-build': { command: grokBin, args: ['agent', '--always-approve', 'stdio'], env: grokEnv, permissionPolicy: externalApprovalPolicy },
         codex: { command: codexBin, args: [], env: codexEnv, permissionPolicy: externalApprovalPolicy },
+        hermes: { command: hermesBin, args: ['acp'], env: { ...grokEnv, ...codexEnv }, permissionPolicy: externalApprovalPolicy },
         'claude-code': {
           command: claudeBin,
           args: ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json'],

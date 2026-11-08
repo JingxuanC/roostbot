@@ -95,13 +95,10 @@ test('the registry selects the NDJSON CLI for claude-code', async () => {
   assert.equal(children[0].command, 'fake-claude')
 })
 
-test('hermes and unknown kinds are explicit errors, not silent fallbacks', () => {
-  assert.throws(() => createRuntimeAdapter('hermes'), (error) => {
-    assert.ok(error instanceof AgentRuntimeError)
-    assert.equal(error.code, 'runtime.unsupported')
-    assert.match(error.message, /hermes/)
-    return true
-  })
+test('hermes selects ACP and unknown kinds are explicit errors, not silent fallbacks', () => {
+  assert.ok(REGISTRY_KINDS.includes('hermes'))
+  const hermes = createRuntimeAdapter('hermes', { command: 'fake-hermes', createTransport: () => transport })
+  assert.equal(hermes.kind, 'hermes')
   assert.throws(() => createRuntimeAdapter('mystery'), (error) => error.code === 'runtime.unsupported')
 })
 

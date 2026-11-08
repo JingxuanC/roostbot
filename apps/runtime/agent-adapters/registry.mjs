@@ -7,7 +7,7 @@
 //   grok-build   ACP (native)
 //   codex        ACP (codex-acp)
 //   claude-code  NDJSON CLI (official CLI stream-json fallback)
-//   hermes       deliberately unsupported here (design §20 question 4)
+//   hermes       ACP (hermes acp)
 //
 // Not wired into room-agent yet. Everything is injectable: ACP takes a transport
 // factory, the CLI takes spawn/parser, and the DSH adapter takes a delegate (the
@@ -361,14 +361,10 @@ export function createRuntimeAdapter(kind, config = {}) {
       return createDshAdapter(config)
     case 'grok-build':
     case 'codex':
+    case 'hermes':
       return createAcpAdapter({ ...config, kind })
     case 'claude-code':
       return createCliAdapter({ ...config, kind })
-    case 'hermes':
-      throw new AgentRuntimeError(
-        'runtime.unsupported',
-        'hermes adapter is not implemented: API vs CLI is still open (design §20)',
-      )
     default:
       throw new AgentRuntimeError('runtime.unsupported', `unsupported runtime: ${String(kind)}`)
   }

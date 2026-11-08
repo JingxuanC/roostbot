@@ -182,7 +182,7 @@ test('ACP session is single-turn and capabilities are honest', async () => {
   const adapter = createAcpAdapter({ kind: 'grok-build', createTransport: () => transport })
   assert.equal(adapter.capabilities().streaming, true)
   assert.equal(adapter.capabilities().permissions, 'native')
-  assert.throws(() => createAcpAdapter({ kind: 'hermes' }), /grok-build or codex/)
+  assert.doesNotThrow(() => createAcpAdapter({ kind: 'hermes', createTransport: () => transport }))
   const session = await adapter.openSession(spec)
   const iterable = session.send({ turnId: 'busy-1', input: 'a', context: {} as any, signal: new AbortController().signal })
   const consumer = (async () => { const out: any[] = []; for await (const event of iterable as any) out.push(event); return out })()

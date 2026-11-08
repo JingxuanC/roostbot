@@ -32,13 +32,13 @@ export interface AgentCapabilities {
 
 export function defaultCapabilities(kind: AgentRuntimeKind): AgentCapabilities {
   return {
-    streaming: kind === 'dsh' || kind === 'grok-build',
+    streaming: kind === 'dsh' || kind === 'grok-build' || kind === 'hermes',
     tools: 'native',
-    permissions: 'bridge',
+    permissions: kind === 'grok-build' ? 'native' : 'bridge',
     images: { input: true, output: false },
     resume: kind === 'dsh',
     subagents: kind === 'grok-build',
-    mcp: kind === 'dsh' || kind === 'grok-build' || kind === 'claude-code' || kind === 'codex',
+    mcp: kind === 'dsh' || kind === 'grok-build' || kind === 'claude-code' || kind === 'codex' || kind === 'hermes',
     models: [],
   }
 }

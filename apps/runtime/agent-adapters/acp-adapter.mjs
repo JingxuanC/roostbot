@@ -156,8 +156,8 @@ function stopReasonToEnd(stopReason) {
  */
 export function createAcpAdapter(options = {}) {
   const kind = options.kind
-  if (kind !== 'grok-build' && kind !== 'codex') {
-    throw new AgentRuntimeError('runtime.unsupported', `ACP adapter kind must be grok-build or codex, got ${String(kind)}`)
+  if (kind !== 'grok-build' && kind !== 'codex' && kind !== 'hermes') {
+    throw new AgentRuntimeError('runtime.unsupported', `ACP adapter kind must be grok-build, codex or hermes, got ${String(kind)}`)
   }
   const protocolVersion = options.protocolVersion ?? 1
   const initializeTimeoutMs = options.initializeTimeoutMs ?? 10_000
