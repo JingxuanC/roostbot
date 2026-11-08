@@ -9,7 +9,7 @@
 // Adding Docker, Kubernetes, gVisor or a microVM provider must not touch rooms,
 // SSE, events, bot APIs or the AgentAdapter contract.
 
-export const RUNTIME_PROVIDER_IDS = ['local', 'openshell', 'docker', 'kubernetes'] as const
+export const RUNTIME_PROVIDER_IDS = ['local', 'openshell', 'docker', 'kubernetes', 'daytona'] as const
 
 export type RuntimeProviderId = (typeof RUNTIME_PROVIDER_IDS)[number]
 

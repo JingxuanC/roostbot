@@ -71,6 +71,54 @@ Browser / Desktop / IM
 - [实施状态与剩余工作](docs/design/docker-runtime-roadmap.md)
 - [Grok Build 本地 + DeepSeek](docs/design/grok-build-local.md)
 
+## Runtime Providers
+
+控制面只依赖 `RuntimeProvider`，计算层可替换：
+
+| Provider | 生命周期 | 持久 workspace | 状态 |
+|---|---|---|---|
+| `docker` | Docker worker + `roost-ws-<hash>` 容器 | 宿主机 bind mount | ✅ 生产默认 |
+| `local` | 本机 `room-agent` 子进程 | 本地目录 | ✅ 开发/本机 |
+| `daytona` | Daytona sandbox + volume | Daytona Volume（FUSE/S3） | ✅ Provider + 契约测试 |
+| `kubernetes` | Pod + PVC | PVC | ✅ Provider + 契约测试 |
+| `openshell` | 旧 OpenShell supervisor | 卷 | ⛔ 已封存，仅显式恢复 |
+
+选择方式：
+
+```sh
+ROOST_RUNTIME_PROVIDER=docker
+# 或 daytona / kubernetes / local
+```
+
+### Daytona
+
+```sh
+ROOST_RUNTIME_PROVIDER=daytona
+DAYTONA_API_KEY=...
+DAYTONA_SNAPSHOT=roost-agent:latest   # 从 roost/agent 镜像构建的 snapshot
+DAYTONA_VOLUME=roost-workspaces       # 可选
+ROOST_CP_HOST=<Daytona 能访问的控制面地址>
+ROOST_CP_PORT=8787
+```
+
+Daytona sandbox 由 snapshot entrypoint 启动 `node /opt/roost/room-agent.mjs`。
+详见 [daytona-kubernetes.md](docs/design/daytona-kubernetes.md)。
+
+### Kubernetes
+
+```sh
+ROOST_RUNTIME_PROVIDER=kubernetes
+ROOST_K8S_API_URL=https://kubernetes.default.svc
+ROOST_K8S_NAMESPACE=roost
+ROOST_K8S_IMAGE=ghcr.io/<org>/roost-agent:latest
+ROOST_K8S_STORAGE_CLASS=standard
+ROOST_CP_HOST=<Pod 能访问的控制面地址>
+ROOST_CP_PORT=8787
+```
+
+每个 workspace 一个 PVC + 一个长活 Pod；Pod 的 readinessProbe 检查
+`/workspace/.roost/ready`。`stop` 删除 Pod、保留 PVC。
+
 ## 支持的 Runtime
 
 | Runtime | 接入方式 | 模型来源 | 状态 |

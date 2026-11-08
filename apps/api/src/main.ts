@@ -5,7 +5,7 @@
 //
 // 默认用 SQLite（`ROOST_DB`，缺省 `./data/roost.db`）：Bot/房间/轮次等 M4 能力需要它。
 // `ROOST_DB=memory` 显式选择内存实现（重启即丢，仅演示用）。监听地址默认回环。
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { DEFAULT_HOST, DEFAULT_PORT, startServer } from './server.ts'
 import type { StartedServer } from './server.ts'
@@ -15,6 +15,8 @@ import { openStore } from '../../../packages/store/src/index.ts'
 import { openShellRuntimeManager } from './runtime-manager-openshell.ts'
 import { localRuntimeManager } from './runtime-manager-local.ts'
 import { dockerRuntimeManager } from './runtime-manager-docker.ts'
+import { daytonaRuntimeManager } from './runtime-manager-daytona.ts'
+import { kubernetesRuntimeManager } from './runtime-manager-kubernetes.ts'
 import { createSmtpMailerFromEnv } from './smtp-mailer.ts'
 import { createSleeperRegistry } from './idle-sleepers.ts'
 
@@ -77,6 +79,16 @@ function installShutdown(started: StartedServer, extraStop?: () => void): void {
   process.once('SIGTERM', () => shutdown('SIGTERM'))
 }
 
+function readKubernetesToken(): string {
+  const env = (process.env.ROOST_K8S_TOKEN ?? process.env.KUBERNETES_TOKEN ?? '').trim()
+  if (env !== '') return env
+  try {
+    return readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token', 'utf8').trim()
+  } catch {
+    return ''
+  }
+}
+
 async function main(): Promise<void> {
   const port = readPort()
   // 沙箱要通过 host.openshell.internal 访问控制面，所以默认仍是回环，但允许显式放开。
@@ -116,6 +128,46 @@ async function main(): Promise<void> {
           ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
           ...(process.env.ROOST_BOT_CREDENTIALS_FILE === undefined ? {} : { credentialsFile: process.env.ROOST_BOT_CREDENTIALS_FILE }),
           log: (line: string) => console.log(`[docker-runtime] ${line}`)
+        })
+      : runtimeProvider === 'daytona'
+      ? daytonaRuntimeManager({
+          apiUrl: process.env.DAYTONA_API_URL ?? process.env.ROOST_DAYTONA_API_URL ?? 'https://app.daytona.io/api',
+          apiKey: process.env.DAYTONA_API_KEY ?? process.env.ROOST_DAYTONA_API_KEY ?? '',
+          ...(process.env.DAYTONA_ORGANIZATION_ID === undefined ? {} : { organizationId: process.env.DAYTONA_ORGANIZATION_ID }),
+          snapshot: process.env.DAYTONA_SNAPSHOT ?? process.env.ROOST_DAYTONA_SNAPSHOT ?? process.env.ROOST_DOCKER_IMAGE ?? 'roost/agent:multi-runtime',
+          volumeName: process.env.DAYTONA_VOLUME ?? process.env.ROOST_DAYTONA_VOLUME ?? 'roost-workspaces',
+          ...(process.env.DAYTONA_TARGET === undefined ? {} : { target: process.env.DAYTONA_TARGET }),
+          cpHost: process.env.ROOST_CP_HOST ?? '127.0.0.1',
+          cpPort: Number(process.env.ROOST_CP_PORT ?? port),
+          ...(process.env.ROOST_CP_SCHEME === 'https' ? { cpScheme: 'https' as const } : {}),
+          lockApiBase: process.env.ROOST_CP_API_BASE ?? `http://127.0.0.1:${port}`,
+          runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
+          ...(sqlite === undefined ? {} : { rawStore: sqlite }),
+          ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
+          ...(process.env.ROOST_BOT_CREDENTIALS_FILE === undefined ? {} : { credentialsFile: process.env.ROOST_BOT_CREDENTIALS_FILE }),
+          log: (line: string) => console.log(`[daytona-runtime] ${line}`)
+        })
+      : runtimeProvider === 'kubernetes'
+      ? kubernetesRuntimeManager({
+          apiUrl: process.env.ROOST_K8S_API_URL ?? 'https://kubernetes.default.svc',
+          token: readKubernetesToken(),
+          namespace: process.env.ROOST_K8S_NAMESPACE ?? 'roost',
+          image: process.env.ROOST_K8S_IMAGE ?? process.env.ROOST_DOCKER_IMAGE ?? 'roost/agent:multi-runtime',
+          ...(process.env.ROOST_K8S_IMAGE_PULL_SECRETS === undefined
+            ? {}
+            : { imagePullSecrets: process.env.ROOST_K8S_IMAGE_PULL_SECRETS.split(',').map((name) => name.trim()).filter(Boolean) }),
+          ...(process.env.ROOST_K8S_SERVICE_ACCOUNT === undefined ? {} : { serviceAccountName: process.env.ROOST_K8S_SERVICE_ACCOUNT }),
+          ...(process.env.ROOST_K8S_STORAGE_CLASS === undefined ? {} : { storageClassName: process.env.ROOST_K8S_STORAGE_CLASS }),
+          ...(process.env.ROOST_K8S_STORAGE_SIZE === undefined ? {} : { storageSize: process.env.ROOST_K8S_STORAGE_SIZE }),
+          cpHost: process.env.ROOST_CP_HOST ?? '127.0.0.1',
+          cpPort: Number(process.env.ROOST_CP_PORT ?? port),
+          ...(process.env.ROOST_CP_SCHEME === 'https' ? { cpScheme: 'https' as const } : {}),
+          lockApiBase: process.env.ROOST_CP_API_BASE ?? `http://127.0.0.1:${port}`,
+          runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
+          ...(sqlite === undefined ? {} : { rawStore: sqlite }),
+          ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
+          ...(process.env.ROOST_BOT_CREDENTIALS_FILE === undefined ? {} : { credentialsFile: process.env.ROOST_BOT_CREDENTIALS_FILE }),
+          log: (line: string) => console.log(`[k8s-runtime] ${line}`)
         })
       : runtimeProvider === 'local'
       ? localRuntimeManager({
