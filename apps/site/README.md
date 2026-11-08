@@ -1,7 +1,7 @@
 # Roost 官网
 
 零构建静态站：`index.html` + `styles.css` + `main.js` + `assets/`。
-主题与产品网页共用 Research Desk 语言：暖纸、墨色、深绿单一强调、衬线标题、等宽标签。
+风格：欧美极简、中性黑白灰、无衬线标题、等宽标签、1px 分隔线；支持 EN / 中文切换。
 
 ## 本地预览
 
@@ -14,9 +14,9 @@ PORT=8080 node scripts/serve-site.mjs
 
 | 文件 | 内容 |
 |---|---|
-| `index.html` | Hero / 产品截图 / 三个原则 / Runtime 表 / 工作方式 / 安全 / 开源 / FAQ / CTA |
+| `index.html` | Hero / 产品截图 / 三个原则 / Runtime 表 / 工作方式 / 安全 / 开源 / FAQ / CTA；文案用 `data-i18n` 双语 |
 | `styles.css` | 设计 token、响应式（980 / 760 断点）、印刷/减少动态 |
-| `main.js` | 导航滚动态、移动端抽屉、reveal observer、年份、`data-app` 链接 |
+| `main.js` | EN/中文词典与切换、导航滚动态、移动端抽屉、reveal、年份、`data-app` 链接 |
 | `assets/room.png` | 产品截图（来自 `docs/assets/ui-desk-room.png`） |
 
 ## 设计参考
@@ -28,6 +28,8 @@ PORT=8080 node scripts/serve-site.mjs
 - 参考讨论：[The Best AI Startup Websites in 2026](https://studiomaydit.com/blog/best-ai-startup-websites-2026)。
 
 原则：不复制表面，只复用原则；Roost 自己的差异是「多个 Agent 在同一房间，共享上下文」。
+
+语言：默认跟随浏览器语言，可用右上角 `EN / 中文` 切换；`?lang=en` 可强制英文。
 
 ## 部署
 

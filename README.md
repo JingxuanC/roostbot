@@ -228,8 +228,8 @@ node scripts/serve-site.mjs        # http://127.0.0.1:4173
 
 ![官网](docs/assets/site-desk.png)
 
-设计参考了 Linear 的克制、Vercel 的产品即主角、Anthropic 的编辑感和 Raycast 的细节；
-文案和视觉都按 Roost 自己的 multi-agent room 定位重写。
+欧美极简、中性黑白灰、无衬线排版；支持 EN / 中文切换（右上角，或 `?lang=en`）。
+设计参考 Linear 的克制、Vercel 的产品即主角、Anthropic 的安静和 Raycast 的细节。
 
 ## 文档
 
