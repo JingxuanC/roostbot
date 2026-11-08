@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Roost container egress allowlist
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=ROOST_EGRESS_SUBNET=172.30.0.0/16
+Environment=ROOST_EGRESS_CP_HOST=172.17.43.89
+Environment=ROOST_EGRESS_DOMAINS=api.deepseek.com
+ExecStart=/bin/sh /opt/roost/roost-egress-allowlist.sh

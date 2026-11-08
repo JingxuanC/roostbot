@@ -35,6 +35,7 @@ const DEFAULT_MEMORY = process.env.ROOST_DOCKER_MEMORY ?? '2g'
 const DEFAULT_CPUS = process.env.ROOST_DOCKER_CPUS ?? '2'
 const DEFAULT_PIDS = process.env.ROOST_DOCKER_PIDS ?? '2048'
 const ALLOWED_IMAGES = String(process.env.ROOST_DOCKER_ALLOWED_IMAGES ?? DEFAULT_IMAGE).split(',').map((v) => v.trim()).filter(Boolean)
+const HARDENED = (process.env.ROOST_DOCKER_HARDENED ?? '1') !== '0'
 const COMMAND = ['node', '/opt/roost/room-agent.mjs']
 const READY_PATH = '/workspace/.roost/ready'
 const SANDBOX_UID = 1000
@@ -163,6 +164,7 @@ async function createContainer(spec) {
     '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges',
     '--pids-limit', String(spec.resources?.pids ?? DEFAULT_PIDS),
+    ...(HARDENED ? ['--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=512m', '--tmpfs', '/run:rw,nosuid,nodev,size=64m'] : []),
     '--memory', String(spec.resources?.memoryMb ? `${spec.resources.memoryMb}m` : DEFAULT_MEMORY),
     '--cpus', String(spec.resources?.cpus ?? DEFAULT_CPUS),
     '--label', 'roost.managed=true',
