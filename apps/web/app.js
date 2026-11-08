@@ -1870,28 +1870,34 @@ function enterPreviewRoom() {
 const roomPreviews = new Map()
 
 function conversationEntries() {
-  const used = new Set()
   const entries = []
+  // Groups first, like a chat app: a room is a conversation, not a folder.
+  for (const room of STORE.rooms) {
+    if (room.dm === true) continue
+    const hostId = room.hostBotId || (room.members && room.members[0] && room.members[0].botId) || room.id
+    entries.push({
+      kind: 'group',
+      bot: { id: hostId, name: room.name || '房间' },
+      room,
+      title: room.name || '房间',
+      primary: true,
+      dm: false,
+    })
+  }
+  // One private conversation per Bot. This is the DSBot-style list: creating a
+  // Bot creates its chat and it appears here immediately.
   for (const bot of STORE.bots) {
     const dm = STORE.rooms.find(
       (item) => item.dm === true && (item.members || []).some((member) => member.botId === bot.id)
     )
-    const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id && item.dm !== true)
-    const joined = STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
-    const room = dm || hosted[0] || joined[0] || null
-    if (room) used.add(room.id)
     entries.push({
+      kind: dm === undefined ? 'bot' : 'dm',
       bot,
-      room,
+      room: dm || null,
       title: bot.name || 'Bot',
-      primary: room !== null && room.hostBotId === bot.id && (room.members || []).length >= 2,
-      dm: room !== null && room.dm === true,
+      primary: false,
+      dm: dm !== undefined,
     })
-  }
-  for (const room of STORE.rooms) {
-    if (used.has(room.id) || room.dm === true) continue
-    const hostId = room.hostBotId || (room.members && room.members[0] && room.members[0].botId) || room.id
-    entries.push({ bot: { id: hostId, name: room.name || '房间' }, room, title: room.name || '房间', primary: true, dm: false })
   }
   return entries
 }
@@ -1954,7 +1960,8 @@ function roomsForBot(bot) {
 function renderChatRow(entry) {
   const href = entry.room ? `#/rooms/${encodeURIComponent(entry.room.id)}` : `#/bots/${encodeURIComponent(entry.bot.id)}`
   const row = el('a', { class: 'home-row', href })
-  row.append(botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
+  const flock = entry.kind === 'group' && entry.room ? roomFlock(entry.room, 48) : null
+  row.append(flock || botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
   const text = el('div', { class: 'home-copy' })
   text.append(el('strong', { text: entry.title }))
   const preview = el('span', { class: 'home-preview', text: '…' })
@@ -1962,9 +1969,9 @@ function renderChatRow(entry) {
   row.append(text)
   const time = el('time', { class: 'home-time', text: '' })
   row.append(time)
-  const candidates = roomsForBot(entry.bot)
+  const candidates = entry.room ? [entry.room] : roomsForBot(entry.bot)
   if (candidates.length === 0) {
-    preview.textContent = '点开看看'
+    preview.textContent = entry.kind === 'bot' ? '点开设置' : '还没有消息'
     return row
   }
   void (async () => {

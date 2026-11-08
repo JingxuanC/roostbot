@@ -14,7 +14,7 @@
 
 ```text
 ✅ 控制面 + 网页 + SQLite 单机闭环
-✅ 多 Agent 房间 / 轮次 / 流式输出 / 私聊 / 审批
+✅ 多 Agent 房间 / 私聊 Bot / 轮次 / 流式输出 / 审批
 ✅ RuntimeProvider 抽象
 ✅ Docker runtime（worker + workspace 容器）
 ✅ Claude Code / Codex / DSH / Grok Build 真实模型调用

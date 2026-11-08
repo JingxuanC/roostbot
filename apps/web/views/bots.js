@@ -421,11 +421,19 @@ function createView(ctx, bots) {
       const created = normalizeBot(await ctx.api.post('/api/bots', payload))
       try {
         await ctx.loadBots({ force: true })
+        await ctx.loadRooms({ force: true })
+        ctx.refreshSidebar?.()
       } catch {
         // 列表刷新失败不影响创建成功；设置页会自己再取一次。
       }
       if (created && typeof created.id === 'string' && created.id !== '') {
-        ctx.navigate(`#/bots/${encodeURIComponent(created.id)}`)
+        // A new Bot is a new private conversation: open it immediately, like
+        // adding a contact in a chat app. Its DM also appears in the sidebar.
+        try {
+          await ctx.openBotDm(created.id)
+        } catch {
+          ctx.navigate(`#/bots/${encodeURIComponent(created.id)}`)
+        }
       } else {
         ctx.navigate('#/bots')
       }

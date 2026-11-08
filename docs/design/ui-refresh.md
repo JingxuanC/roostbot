@@ -353,3 +353,19 @@ Bot、插件、用量、定时、连接器、审批全部进入 #/settings 的�
 
 
 > 2026-11-08：纯云端模式。`#/` 直接进登录，配对码页面、`#room` 预览和配对入口已下线；侧栏管理入口已收进设置页。
+
+
+## 11. 对话列表（2026-11-08，用户反馈）
+
+用户指出「房间」不应作为顶层概念，参考 DSBot：创建 Bot 的同时就把它的私聊放进同一个对话列表。
+
+调整：
+
+```text
+侧栏标题：房间 → 对话
+列表顺序：群组在前，Bot 私聊在后
+每创建一个 Bot：自动刷新 rooms，并直接打开它的私聊
+Bot 列表 / Bot 设置：都有「私聊」入口
+```
+
+截图：[私聊](/Users/paopao/Documents/deepseek-harness/default-workspace/roostbot/docs/assets/ui-desk-dm.png)
