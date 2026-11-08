@@ -369,6 +369,20 @@ export async function startRoomAgent(options) {
   // 插件面板容器（ADR 0004 / wave1 §C）：沙箱里额外一个 `dsh web`，只绑 127.0.0.1:4099。
   // 后台启动、**不阻塞 SDK 会话**：面板容器起不来时只记日志（dsh-web 里打 reason），
   // 房间对话照常。ROOST_DSH_WEB=0 关闭；进程退出（stop）时一并 kill。
+  // Per-Bot vendor env is delivered as a workspace-scoped JSON map. Keep it
+  // out of adapter configs (which are shared) and merge it into the session spec.
+  let botCredentialMap = {}
+  try {
+    const raw = String(process.env.ROOST_BOT_CREDENTIALS ?? '').trim()
+    if (raw !== '') botCredentialMap = JSON.parse(raw)
+  } catch {
+    log('ROOST_BOT_CREDENTIALS is not valid JSON; ignoring')
+  }
+  function botCredentialEnv(botId) {
+    const entry = botCredentialMap[botId]
+    return entry !== null && typeof entry === 'object' && !Array.isArray(entry) ? { ...entry } : {}
+  }
+
   const dshWebEnabled = (process.env.ROOST_DSH_WEB ?? '1') !== '0'
   const dshWebPort =
     readPort(options.dshWebPort ?? process.env.ROOST_DSH_WEB_PORT ?? process.env.DSH_WEB_PORT) ??
@@ -814,7 +828,7 @@ export async function startRoomAgent(options) {
         botId: targetBotId,
         workspaceId,
         workdir: botWorkdir,
-        env: {}
+        env: botCredentialEnv(targetBotId)
       },
       turn: runtimeTurn,
       options: {}

@@ -106,6 +106,7 @@ async function main(): Promise<void> {
           runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
           ...(sqlite === undefined ? {} : { rawStore: sqlite }),
           ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
+          ...(process.env.ROOST_BOT_CREDENTIALS_FILE === undefined ? {} : { credentialsFile: process.env.ROOST_BOT_CREDENTIALS_FILE }),
           log: (line: string) => console.log(`[docker-runtime] ${line}`)
         })
       : runtimeProvider === 'local'
@@ -130,6 +131,7 @@ async function main(): Promise<void> {
           runtimeToken: process.env.ROOST_RUNTIME_TOKEN ?? '',
           ...(sqlite === undefined ? {} : { rawStore: sqlite }),
           ...(process.env.ROOST_BOT_ID === undefined ? {} : { botId: process.env.ROOST_BOT_ID }),
+          ...(process.env.ROOST_BOT_CREDENTIALS_FILE === undefined ? {} : { credentialsFile: process.env.ROOST_BOT_CREDENTIALS_FILE }),
           log: (line: string) => console.log(`[sandbox] ${line}`)
         })
       : undefined

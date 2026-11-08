@@ -178,12 +178,12 @@ export function createAcpAdapter(options = {}) {
   }
   const createTransport = typeof options.createTransport === 'function'
     ? options.createTransport
-    : () => createAcpTransport({
+    : (request = {}) => createAcpTransport({
       spawn: options.spawn,
       command: options.command,
       args: options.args ?? [],
-      env: options.env,
-      cwd: options.cwd,
+      env: { ...(options.env ?? {}), ...(request?.spec?.env ?? {}) },
+      cwd: request?.spec?.workdir ?? options.cwd,
       requestTimeoutMs,
       onDiagnostic,
     })

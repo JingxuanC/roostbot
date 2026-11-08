@@ -9,6 +9,7 @@ import { issueRuntimeToken, revokeRuntimeToken } from '../../../packages/store/s
 import type { IssuedRuntimeToken } from '../../../packages/store/src/runtime-tokens.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { fetchProfileLock } from './profile-lock.ts'
+import { botCredentialEnvMap, loadBotCredentialFile } from './bot-credentials.ts'
 import { recordTrace } from './trace.ts'
 import {
   RuntimeProviderError,
@@ -38,6 +39,8 @@ export interface DockerRuntimeManagerConfig {
   tokenTtlMs?: number
   now?: () => number
   botId?: string
+  /** Optional file mapping credentialRef -> vendor env. */
+  credentialsFile?: string
   log?: (line: string) => void
   fetchImpl?: typeof fetch
   /** Provider injection for tests; defaults to the HTTP worker implementation. */
@@ -168,6 +171,14 @@ export function dockerRuntimeManager(config: DockerRuntimeManagerConfig): Runtim
   const provider = config.provider ?? dockerRuntimeProvider(config)
   const log = config.log ?? (() => {})
   const image = config.image ?? 'roost/agent:multi-runtime'
+  let credentialRegistry = {}
+  if (config.credentialsFile !== undefined && config.credentialsFile.trim() !== '') {
+    try {
+      credentialRegistry = loadBotCredentialFile(config.credentialsFile)
+    } catch (error) {
+      log(`credential file ignored: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
 
   function resolveStore(context?: { store?: Store }): Store | undefined {
     return context?.store ?? config.rawStore
@@ -225,6 +236,10 @@ export function dockerRuntimeManager(config: DockerRuntimeManagerConfig): Runtim
       ...externalRuntimeEnv(),
     }
     if (store !== undefined) {
+      const botCredentials = botCredentialEnvMap(store, workspaceId, credentialRegistry)
+      if (Object.keys(botCredentials).length > 0) {
+        env.ROOST_BOT_CREDENTIALS = JSON.stringify(botCredentials)
+      }
       try {
         const lock = await fetchProfileLock({
           apiBase: config.lockApiBase ?? `http://127.0.0.1:${config.cpPort}`,
