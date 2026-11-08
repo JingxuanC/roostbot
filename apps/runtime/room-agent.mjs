@@ -315,7 +315,13 @@ export async function startRoomAgent(options) {
       const target = `${grokHome}/config.toml`
       // Managed Grok workspaces use the image's DeepSeek template. Overwrite a
       // stale legacy config so an old empty file cannot hide the provider.
-      if (existsSync(grokTemplate)) copyFileSync(grokTemplate, target)
+      // The template points at the control-plane model proxy via this
+      // placeholder; a local BYO setup falls back to api.deepseek.com.
+      if (existsSync(grokTemplate)) {
+        const base = (String(process.env.DEEPSEEK_BASE_URL ?? '').trim().replace(/\/+$/, '')) || 'https://api.deepseek.com'
+        const template = readFileSync(grokTemplate, 'utf8').replaceAll('__ROOST_DEEPSEEK_BASE_URL__', base)
+        writeFileSync(target, template)
+      }
     } catch (error) {
       log(`grok home prepare failed: ${errorMessage(error)}`)
     }
@@ -689,7 +695,10 @@ export async function startRoomAgent(options) {
       if (typeof value === 'string' && value !== '') codexEnv[key] = value
     }
     const grokEnv = {}
-    for (const key of ['XAI_API_KEY', 'GROK_API_KEY', 'XAI_BASE_URL', 'GROK_BASE_URL']) {
+    // Grok's DeepSeek provider reads its key/base URL from the child env. The
+    // managed runtime injects the workspace-scoped model-proxy token as
+    // DEEPSEEK_API_KEY; local/BYO configurations keep their own values.
+    for (const key of ['XAI_API_KEY', 'GROK_API_KEY', 'XAI_BASE_URL', 'GROK_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']) {
       const value = process.env[key]
       if (typeof value === 'string' && value !== '') grokEnv[key] = value
     }

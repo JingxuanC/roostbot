@@ -299,8 +299,10 @@ test('flag unset never fetches bot runtimes or constructs a supervisor', async (
 test('ROOST_MULTI_RUNTIME=1 creates the supervisor lazily with env-derived adapter configs', async () => {
   const previous = process.env.ROOST_MULTI_RUNTIME
   const previousGrok = process.env.ROOST_GROK_BIN
+  const previousDeepseek = process.env.DEEPSEEK_API_KEY
   process.env.ROOST_MULTI_RUNTIME = '1'
   process.env.ROOST_GROK_BIN = '/opt/agents/grok-build/bin/grok'
+  process.env.DEEPSEEK_API_KEY = 'rt-test-key'
   const cp = await fakeControlPlane({
     assignments: [{ roundId: 'rd_env', roomId: 'rm_test', botId: 'bot_grok', index: 0, total: 1, prompt: 'env 路径' }]
   })
@@ -318,6 +320,7 @@ test('ROOST_MULTI_RUNTIME=1 creates the supervisor lazily with env-derived adapt
     assert.deepEqual(cp.state.advances[0].result, { kind: 'posted', text: 'env answer' })
     assert.equal(configs.length, 1, 'supervisor created once, lazily')
     assert.equal(configs[0].adapterConfigs['grok-build'].command, '/opt/agents/grok-build/bin/grok')
+    assert.equal(configs[0].adapterConfigs['grok-build'].env.DEEPSEEK_API_KEY, 'rt-test-key')
     assert.equal(configs[0].adapterConfigs['claude-code'].command, 'claude')
     assert.equal(configs[0].adapterConfigs.codex.command, 'codex')
     assert.equal(typeof configs[0].logger, 'function')
@@ -329,6 +332,8 @@ test('ROOST_MULTI_RUNTIME=1 creates the supervisor lazily with env-derived adapt
     else process.env.ROOST_MULTI_RUNTIME = previous
     if (previousGrok === undefined) delete process.env.ROOST_GROK_BIN
     else process.env.ROOST_GROK_BIN = previousGrok
+    if (previousDeepseek === undefined) delete process.env.DEEPSEEK_API_KEY
+    else process.env.DEEPSEEK_API_KEY = previousDeepseek
   }
 })
 

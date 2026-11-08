@@ -6,9 +6,19 @@ default = "deepseek-chat"
 [model.deepseek-chat]
 model = "deepseek-chat"
 name = "DeepSeek Chat"
-base_url = "https://api.deepseek.com/v1"
+base_url = "__ROOST_DEEPSEEK_BASE_URL__/v1"
 env_key = "DEEPSEEK_API_KEY"
 api_backend = "chat_completions"
 context_window = 65536
 max_completion_tokens = 4096
 temperature = 0.3
+
+
+# Managed workspaces talk to the control-plane model proxy, not the public
+# DeepSeek endpoint directly. The proxy key is the per-workspace runtime token
+# and is passed as DEEPSEEK_API_KEY by room-agent.
+[features]
+remote_fetch = false
+
+[cli]
+auto_update = false
