@@ -2420,3 +2420,136 @@ td.num,
 .settings-hub-link:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
+
+/* Bot list: direct-message action next to the settings card */
+.bot-card-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bot-card-item .bot-card {
+  flex: 1;
+}
+
+.bot-dm-button {
+  flex: none;
+  min-width: 54px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 3px;
+  background: var(--roost-surface);
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.bot-dm-button:hover:not(:disabled) {
+  border-color: var(--roost-accent);
+  color: var(--roost-accent);
+}
+
+.bot-dm-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+/* Per-bot thinking placeholder inside the conversation, not only in the header. */
+.thinking-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 0 22px;
+  border-top: var(--desk-line);
+}
+
+.thinking-placeholder .msg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-placeholder .msg-head .avatar {
+  width: 22px;
+  height: 22px;
+  border: var(--desk-line);
+  border-radius: 2px;
+}
+
+.thinking-placeholder .thinking-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 30px;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.thinking-placeholder .thinking-dots {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 10px;
+}
+
+.thinking-placeholder .thinking-dots i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: desk-thinking-dot 1.1s ease-in-out infinite;
+}
+
+.thinking-placeholder .thinking-dots i:nth-child(2) { animation-delay: 0.14s; }
+.thinking-placeholder .thinking-dots i:nth-child(3) { animation-delay: 0.28s; }
+
+@keyframes desk-thinking-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+@media (max-width: 720px) {
+  .bot-card-item {
+    gap: 6px;
+  }
+
+  .bot-dm-button {
+    min-width: 48px;
+    font-size: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-placeholder .thinking-dots i {
+    animation: none;
+  }
+}
+
+/* keep the old global typing pill out of the way; the placeholder carries the state */
+#room-view #typing-indicator {
+  display: none !important;
+}
+
+#room-view .streaming-line .bubble-bot {
+  margin-left: 30px;
+}
+
+#room-view .streaming-line .streaming-body {
+  min-height: 22px;
+}
+
+#room-view .streaming-line .streaming-text::after {
+  content: "▍";
+  color: var(--roost-accent);
+  animation: desk-caret 900ms steps(1) infinite;
+}
+
+@keyframes desk-caret {
+  50% { opacity: 0; }
+}

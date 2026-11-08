@@ -175,6 +175,50 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
   }
 }
 
+export async function handleOpenBotDm(
+  ctx: BotsRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
+  const match = /^\/api\/bots\/([^/]+)\/dm$/.exec(url.pathname)
+  let botId = null
+  if (match !== null) {
+    try { botId = decodeURIComponent(match[1]) } catch { botId = null }
+  }
+  if (botId === null || botId === '') return sendError(res, 404, 'not_found', 'malformed bot path')
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'direct messages need the SQLite store')
+  }
+  try {
+    const bot = await ctx.store.getBot({ accountId: auth.session.accountId, botId })
+    if (bot === null) return sendError(res, 404, 'bot.not_found', `unknown bot ${botId}`)
+    const dm = createDmRoom(ctx.rawStore, {
+      workspaceId: bot.workspaceId,
+      botId,
+      createdBy: auth.session.accountId,
+      at: ctx.now(),
+    })
+    sendJson(res, 200, {
+      room: {
+        id: dm.id,
+        workspaceId: dm.workspaceId,
+        name: dm.name,
+        replyMode: dm.replyMode,
+        responder: { kind: 'member', botId },
+        members: [{ botId, role: 'host' }],
+        hostBotId: botId,
+        dm: true,
+        createdAt: dm.createdAt,
+      },
+    })
+  } catch (err) {
+    sendBotFailure(res, err)
+  }
+}
+
 export async function handleGetBot(
   ctx: BotsRouteContext,
   req: IncomingMessage,

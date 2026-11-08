@@ -193,7 +193,7 @@ function statusBadge(status) {
   return ui.badge(botStatusLabel(status), status === 'paused' ? 'warn' : 'ok')
 }
 
-function botRow(bot) {
+function botRow(ctx, bot) {
   const href = `#/bots/${encodeURIComponent(bot.id)}`
   const link = el('a', { class: 'bot-card', href })
   link.append(botAvatar(bot, 32))
@@ -211,14 +211,37 @@ function botRow(bot) {
   main.append(el('p', { class: 'bot-card-meta muted', text: meta.join(' · ') }))
   link.append(main)
   link.append(el('span', { class: 'row-chev', 'aria-hidden': 'true', text: '›' }))
-  return el('li', { class: 'bot-card-item' }, [link])
+
+  const item = el('li', { class: 'bot-card-item' }, [link])
+  const dmButton = el('button', {
+    class: 'bot-dm-button',
+    type: 'button',
+    'aria-label': `和 ${bot.name} 私聊`,
+    text: '私聊',
+  })
+  dmButton.addEventListener('click', async (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dmButton.disabled = true
+    dmButton.textContent = '打开中…'
+    try {
+      await ctx.openBotDm(bot.id)
+    } catch (error) {
+      dmButton.textContent = '打开失败'
+      dmButton.title = error instanceof Error ? error.message : String(error)
+      setTimeout(() => {
+        if (dmButton.isConnected) {
+          dmButton.disabled = false
+          dmButton.textContent = '私聊'
+          dmButton.title = ''
+        }
+      }, 1800)
+    }
+  })
+  item.append(dmButton)
+  return item
 }
 
-/**
- * 「已删除」筛选的禁用态（docs/build/m4-addendum.md §C）。
- * 控制面目前 DELETE 是硬删，没有「列出已删除 / 恢复」接口，所以这里只放禁用按钮+说明，
- * 不做一个永远空的筛选器，也不假装能恢复。
- */
 function archivedFilterRow() {
   const row = el('div', { class: 'bot-filter-row' })
   const chip = el('button', {
@@ -240,7 +263,7 @@ function archivedFilterRow() {
 
 function listShell(ctx, bots) {
   const header = ui.pageHeader('Bot', {
-    subtitle: bots.length ? `共 ${bots.length} 个 · 点开是设置，不是聊天` : '长期身份；进房间的是它的脸',
+    subtitle: bots.length ? `共 ${bots.length} 个 · 点开是设置；私聊直接进对话` : '长期身份；进房间的是它的脸',
     actions: ui.linkButton('新建 Bot', '#/bots/new', { variant: 'primary' }),
   })
   const board = el('div', { class: 'page-card' })
@@ -254,7 +277,7 @@ function listShell(ctx, bots) {
       })
     )
   } else {
-    board.append(el('ul', { class: 'bot-cards' }, bots.map(botRow)))
+    board.append(el('ul', { class: 'bot-cards' }, bots.map((bot) => botRow(ctx, bot))))
   }
   return el('div', { class: 'stack' }, [header, board])
 }
@@ -484,6 +507,21 @@ function settingsView(ctx, bot, bots) {
   let runtimeTitleTag = runtimeTagNode(bot)
   titleRow.append(runtimeTitleTag)
   const actions = el('div', { class: 'page-title-actions' })
+
+  const dmButton = ui.button('私聊', {
+    variant: 'primary',
+    size: 'sm',
+    onClick: async () => {
+      ui.setBusy(dmButton, true, '打开中…')
+      try {
+        await ctx.openBotDm(bot.id)
+      } catch (error) {
+        ui.setStatus(globalStatus, `私聊打开失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+        ui.setBusy(dmButton, false)
+      }
+    },
+  })
+  actions.append(dmButton)
 
   const globalStatus = ui.statusLine('')
   const pauseButton = ui.button(bot.status === 'paused' ? '恢复' : '暂停', {

@@ -32,6 +32,7 @@ import {
   handleCreateBot,
   handleDeleteBot,
   handleGetBot,
+  handleOpenBotDm,
   handleListBots,
   handlePatchBot,
   handleRestoreBot
@@ -3647,6 +3648,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     }
     if (method === 'POST') {
       await handleCreateBot(ctx, req, res)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/bots\/[^/]+\/dm$/.test(path)) {
+    if (method === 'POST') {
+      await handleOpenBotDm(ctx, req, res, url)
       return
     }
     notFound(req, res, method, path)

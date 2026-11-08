@@ -1231,6 +1231,21 @@ async function loadBots(options = {}) {
   }
 }
 
+/** Open (or create) the private room for one Bot, then enter it. */
+async function openBotDm(botId) {
+  if (typeof botId !== 'string' || botId === '') throw new Error('unknown bot')
+  const data = await api.post(`/api/bots/${encodeURIComponent(botId)}/dm`, {})
+  const room = data && data.room ? data.room : null
+  if (!room || typeof room.id !== 'string' || room.id === '') throw new Error('私聊房间创建失败')
+  try {
+    await loadRooms({ force: true })
+  } catch {
+    // 侧栏刷新失败不影响打开 DM。
+  }
+  navigate(`#/rooms/${encodeURIComponent(room.id)}`)
+  return room
+}
+
 function normalizeRoom(payload) {
   const room = payload && typeof payload === 'object' && payload.room ? payload.room : payload
   if (!room || typeof room !== 'object') return null
@@ -1292,6 +1307,7 @@ function pageContext() {
     loadBots,
     loadRooms,
     loadRoom,
+    openBotDm,
     requirePair,
     hasToken,
     authState: () => authState,
@@ -1857,24 +1873,25 @@ function conversationEntries() {
   const used = new Set()
   const entries = []
   for (const bot of STORE.bots) {
-    const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id)
+    const dm = STORE.rooms.find(
+      (item) => item.dm === true && (item.members || []).some((member) => member.botId === bot.id)
+    )
+    const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id && item.dm !== true)
     const joined = STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
-    const room = (hosted.length > 0 ? hosted : joined)[0] || null
+    const room = dm || hosted[0] || joined[0] || null
     if (room) used.add(room.id)
-    const members = room && Array.isArray(room.members) ? room.members : []
     entries.push({
       bot,
       room,
       title: bot.name || 'Bot',
-      primary: room !== null && room.hostBotId === bot.id && members.length >= 2,
+      primary: room !== null && room.hostBotId === bot.id && (room.members || []).length >= 2,
+      dm: room !== null && room.dm === true,
     })
   }
   for (const room of STORE.rooms) {
-    if (used.has(room.id)) continue
-    const memberIds = (room.members || []).map((member) => member.botId).filter(Boolean)
-    if (memberIds.length > 0 && memberIds.every((id) => entries.some((entry) => entry.bot && entry.bot.id === id))) continue
+    if (used.has(room.id) || room.dm === true) continue
     const hostId = room.hostBotId || (room.members && room.members[0] && room.members[0].botId) || room.id
-    entries.push({ bot: { id: hostId, name: room.name || '房间' }, room, title: room.name || '房间', primary: true })
+    entries.push({ bot: { id: hostId, name: room.name || '房间' }, room, title: room.name || '房间', primary: true, dm: false })
   }
   return entries
 }
@@ -2224,6 +2241,7 @@ function renderWorking() {
   working.classList.remove('is-thinking')
   markThinkingAvatar('')
   if (!LIVE.active) {
+    clearThinkingPlaceholder()
     working.hidden = false
     working.classList.remove('is-offline')
     text.textContent = ROOM.working.text
@@ -2231,6 +2249,7 @@ function renderWorking() {
   }
   // 离线或流断开时，状态区优先说明连接问题；恢复 open 后回到轮次状态。
   if (LIVE.streamState === 'reconnecting') {
+    clearThinkingPlaceholder()
     working.hidden = false
     working.classList.add('is-offline')
     text.textContent = '离线，正在重连…'
@@ -2242,10 +2261,12 @@ function renderWorking() {
     working.classList.add('is-thinking')
     text.textContent = '正在思考…'
     markThinkingAvatar(LIVE.pendingReplyBotId)
+    renderThinkingPlaceholder(LIVE.pendingReplyBotId)
     return
   }
   const round = LIVE.room && LIVE.room.round
   if (!round) {
+    clearThinkingPlaceholder()
     working.hidden = true
     working.classList.remove('is-thinking')
     markThinkingAvatar('')
@@ -2259,19 +2280,24 @@ function renderWorking() {
   if (slot) {
     working.hidden = false
     text.textContent = `${botLabel(slot.botId)} 正在说`
+    renderThinkingPlaceholder(slot.botId)
     return
   }
   if (liveSpeaking !== '') {
     working.hidden = false
     text.textContent = `${botLabel(liveSpeaking)} 正在说`
+    renderThinkingPlaceholder(liveSpeaking)
     return
   }
   if (round.state === 'running') {
     const waiting = roundStatusItems(round, (botId) => botLabel(botId)).find((item) => item.status === 'waiting')
     working.hidden = false
     text.textContent = waiting ? `轮到 ${waiting.name}…` : '本轮进行中'
+    if (waiting && waiting.botId) renderThinkingPlaceholder(waiting.botId)
+    else clearThinkingPlaceholder()
     return
   }
+  clearThinkingPlaceholder()
   working.hidden = true
 }
 
@@ -2309,6 +2335,7 @@ function insertEvent(event) {
   const placeholder = list.querySelector('.messages-empty')
   if (placeholder) placeholder.remove()
   if (event && event.payload && event.payload.role === 'bot') {
+    clearThinkingPlaceholder()
     LIVE.pendingReply = false
     renderWorking()
     if (!TRACE.marks.some((mark) => mark.name === 'first.bot')) traceMark('first.bot', event.seq ?? '')
@@ -2427,9 +2454,43 @@ function handleRoundEvent(event) {
 
 let streamingText = ''
 
+function clearThinkingPlaceholder() {
+  document.getElementById('thinking-placeholder')?.remove()
+}
+
+/** Show the waiting Bot in the conversation itself, not only in the header. */
+function renderThinkingPlaceholder(botId) {
+  const list = $('#messages')
+  const id = typeof botId === 'string' ? botId : ''
+  if (!list || !LIVE.active || id === '') {
+    clearThinkingPlaceholder()
+    return
+  }
+  let node = document.getElementById('thinking-placeholder')
+  if (node === null) {
+    node = el('article', { class: 'msg msg-bot thinking-placeholder', id: 'thinking-placeholder', 'aria-live': 'polite' })
+    list.append(node)
+  }
+  const identity = botIdentity(id)
+  if (node.dataset.botId !== id) {
+    node.dataset.botId = id
+    const head = el('header', { class: 'msg-head' })
+    head.append(botAvatar({ id, name: identity.name, role: identity.role }, 22, { round: true }))
+    head.append(el('span', { class: 'msg-name', text: identity.name }))
+    if (identity.role !== '') head.append(el('span', { class: 'msg-role', text: identity.role }))
+    const label = el('div', { class: 'thinking-label' })
+    label.append(el('span', { class: 'thinking-dots', 'aria-hidden': 'true' }, [el('i'), el('i'), el('i')]))
+    label.append(el('span', { text: '正在思考…' }))
+    node.replaceChildren(head, label)
+  }
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 100
+  if (nearBottom) list.scrollTop = list.scrollHeight
+}
+
 function clearStreaming() {
   streamingText = ''
   document.getElementById('streaming-line')?.remove()
+  clearThinkingPlaceholder()
 }
 
 function handleDeltaEvent(event) {
@@ -2443,6 +2504,7 @@ function handleDeltaEvent(event) {
   if (delta === '') return
   // 最终消息已经落地后，迟到的 delta 不能再在它下面新建一条流式行。
   if (!LIVE.pendingReply) return
+  clearThinkingPlaceholder()
   streamingText += delta
   if (!TRACE.marks.some((mark) => mark.name === 'first.delta')) traceMark('first.delta')
   const list = $('#messages')
@@ -2450,12 +2512,17 @@ function handleDeltaEvent(event) {
   let node = document.getElementById('streaming-line')
   if (!node) {
     node = el('article', { class: 'msg msg-bot streaming-line', id: 'streaming-line' })
+    const identity = botIdentity(LIVE.pendingReplyBotId)
+    const head = el('header', { class: 'msg-head' })
+    head.append(botAvatar({ id: LIVE.pendingReplyBotId, name: identity.name, role: identity.role }, 22, { round: true }))
+    head.append(el('span', { class: 'msg-name', text: identity.name }))
+    const body = el('div', { class: 'bubble bubble-bot streaming-body' })
+    body.append(el('p', { class: 'streaming-text', text: '' }))
+    node.append(head, body)
     list.append(node)
   }
-  node.replaceChildren(el('p', { class: 'streaming-text', text: streamingText }))
-  const dots = el('span', { class: 'thinking-dots typing-indicator', 'aria-hidden': 'true' })
-  dots.append(el('i'), el('i'), el('i'))
-  node.append(dots)
+  const line = node.querySelector('.streaming-text')
+  if (line) line.textContent = streamingText
   list.scrollTop = list.scrollHeight
   LIVE.pendingReply = true
   renderWorking()
