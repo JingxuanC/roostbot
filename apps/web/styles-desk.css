@@ -2313,3 +2313,110 @@ td.num,
   --radius-card: 3px;
   --radius-pill: 999px;
 }
+
+/* ------------------------------------------------------------------ minimal rail + settings hub */
+
+/* Grok-style minimal room rail: conversations and a quiet settings exit. */
+#room-view .drawer-manage {
+  display: none !important;
+}
+
+#room-view .sidebar .needs-link,
+#room-view .sidebar .approvals-link {
+  display: none !important;
+}
+
+#room-view .sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding: 14px 10px 0;
+  border-top: var(--desk-line);
+}
+
+#room-view .sidebar-settings-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 0;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+#room-view .sidebar-settings-link:hover {
+  color: var(--roost-accent);
+}
+
+#room-view .sidebar-bottom .sidebar-foot {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-hub {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 4px 0 8px;
+  border-top: var(--desk-line);
+  border-bottom: var(--desk-line);
+  background: var(--roost-rule);
+}
+
+.settings-hub-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  align-items: baseline;
+  min-height: 64px;
+  padding: 12px 14px;
+  background: var(--roost-surface);
+  color: var(--roost-ink);
+  text-decoration: none;
+}
+
+.settings-hub-link:hover {
+  background: #f7f2e8;
+}
+
+.settings-hub-title {
+  grid-column: 1;
+  grid-row: 1;
+  font-family: var(--roost-font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-hub-desc {
+  grid-column: 1;
+  grid-row: 2;
+  color: var(--roost-muted);
+  font-size: 11px;
+}
+
+.settings-hub-arrow {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .settings-hub {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.settings-hub-link:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}

@@ -337,3 +337,16 @@ apps/web/test/desk-theme.test.ts
 ![Bot list](docs/assets/ui-desk-bots.png)
 ![Settings](docs/assets/ui-desk-settings.png)
 ![Mobile room](docs/assets/ui-desk-mobile.png)
+
+
+## 10. 极简侧栏（2026-11-08，用户反馈）
+
+用户指出「管理」列表不应常驻房间侧栏，参考 Grok Bot 的极简模式。已调整为：
+
+```text
+侧栏只保留：品牌 / 搜索 / 房间列表 / 新建房间 / 设置
+Bot、插件、用量、定时、连接器、审批全部进入 #/settings 的「管理入口」
+```
+
+设置页顶部新增管理索引（Bot 与身份、插件与面板、用量与预算、定时任务、
+房间定时、连接器、审批），不再把后台导航塞进房间界面。

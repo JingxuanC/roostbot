@@ -192,9 +192,30 @@ function notificationSection() {
   })
 }
 
+function settingsHub() {
+  const links = [
+    ['#/bots', 'Bot 与身份', '运行时、模型与工具权限'],
+    ['#/plugins', '插件与面板', '扩展能力与面板'],
+    ['#/usage', '用量与预算', 'Token 与成本'],
+    ['#/schedules', '定时任务', '定时运行'],
+    ['#/routines', '房间定时', '房间内的定时回合'],
+    ['#/connectors', '连接器', '外部数据与工具'],
+    ['#/approvals', '审批', '需要你决定的动作'],
+  ]
+  const nav = el('nav', { class: 'settings-hub', 'aria-label': '管理' })
+  for (const [href, title, description] of links) {
+    const link = el('a', { class: 'settings-hub-link', href })
+    link.append(el('span', { class: 'settings-hub-title', text: title }))
+    link.append(el('span', { class: 'settings-hub-desc', text: description }))
+    link.append(el('span', { class: 'settings-hub-arrow', 'aria-hidden': 'true', text: '→' }))
+    nav.append(link)
+  }
+  return nav
+}
+
 function settingsView(ctx, root, state) {
   const header = ui.pageHeader(PAGE_TITLE, {
-    subtitle: '成员、设备与长期授权都在这里管理；单次批准不会写入长期授权。',
+    subtitle: '工作区、模型、成员与所有管理入口。',
     actions: [ui.linkButton('需要你', '#/approvals', { variant: 'ghost' })],
   })
 
@@ -206,7 +227,7 @@ function settingsView(ctx, root, state) {
   board.append(membersSection(pageCtx, state.members, remount))
   board.append(devicesSection(pageCtx, state.devices, remount))
   for (const node of grantsSections(ctx, root, state)) board.append(node)
-  return el('div', { class: 'stack' }, [header, notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
+  return el('div', { class: 'stack' }, [header, settingsHub(), notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
 }
 
 // ---------------------------------------------------------------------------
