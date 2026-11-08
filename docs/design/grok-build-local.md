@@ -75,3 +75,22 @@ ACP:      createAcpAdapter('grok-build', {...}).probe()
 
 `auth: unknown` 是 probe 不主动发模型请求，不代表调用失败；实际 headless 和 ACP
 turn 都已返回 DeepSeek 文本。
+
+## 远端 Roost 也跑通
+
+镜像内同样放置：
+
+```text
+/opt/roost/grok-home/config.toml
+ROOST_GROK_CONFIG_TEMPLATE=/opt/roost/grok-home/config.toml
+```
+
+room-agent 在启动时把模板复制到 `/workspace/.grok/config.toml`；GrokBot 的
+per-Bot credentialRef 提供 `DEEPSEEK_API_KEY`。远端实测：
+
+```text
+GrokBot → GROK_DEEPSEEK_ROOM_OK
+```
+
+所以 Grok Build 的「真实模型调用」不依赖 xAI 账号，DeepSeek OpenAI-compatible
+endpoint 即可。

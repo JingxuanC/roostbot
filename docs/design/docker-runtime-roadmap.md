@@ -258,4 +258,4 @@ FINAL_OK {
    ACP: hermes acp
 ```
 
-真实模型调用仍需要用户自己的 xAI / Hermes provider 凭据；镜像本身不带 key。
+Grok Build 已用 DeepSeek OpenAI-compatible endpoint 跑通；Hermes 可用 DeepSeek provider；镜像本身仍不带 key。
