@@ -36,6 +36,8 @@ const DEFAULT_CPUS = process.env.ROOST_DOCKER_CPUS ?? '2'
 const DEFAULT_PIDS = process.env.ROOST_DOCKER_PIDS ?? '2048'
 const ALLOWED_IMAGES = String(process.env.ROOST_DOCKER_ALLOWED_IMAGES ?? DEFAULT_IMAGE).split(',').map((v) => v.trim()).filter(Boolean)
 const HARDENED = (process.env.ROOST_DOCKER_HARDENED ?? '1') !== '0'
+const WORKSPACE_MAX_MB = Number(process.env.ROOST_DOCKER_WORKSPACE_MAX_MB ?? 0)
+const stats = { startedAt: Date.now(), ensures: 0, stops: 0, failures: 0 }
 const COMMAND = ['node', '/opt/roost/room-agent.mjs']
 const READY_PATH = '/workspace/.roost/ready'
 const SANDBOX_UID = 1000
@@ -202,6 +204,22 @@ async function waitReady(name, timeoutMs = 30_000) {
   throw new Error(`ready timeout after ${timeoutMs}ms\n${logs}`)
 }
 
+
+async function workspaceSizeMb(workspaceId) {
+  const dir = workspaceDir(workspaceId)
+  return await new Promise((resolve) => {
+    const child = spawn('du', ['-sm', dir], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout?.on('data', (chunk) => { out += String(chunk) })
+    child.once('error', () => resolve(0))
+    child.once('close', () => {
+      const first = out.trim().split(/\s+/)[0]
+      const value = Number(first)
+      resolve(Number.isFinite(value) ? value : 0)
+    })
+  })
+}
+
 const inflight = new Map()
 
 async function ensureRuntime(spec) {
@@ -212,6 +230,9 @@ async function ensureRuntime(spec) {
   const running = inflight.get(key)
   if (running !== undefined) return running
   const work = (async () => {
+    if (WORKSPACE_MAX_MB > 0 && (await workspaceSizeMb(workspaceId)) > WORKSPACE_MAX_MB) {
+      throw new Error(`workspace quota exceeded (${WORKSPACE_MAX_MB} MB)`)
+    }
     const state = await inspect(name)
     if (state !== null && state.Running === true) {
       if (await isReady(name)) {
@@ -232,7 +253,12 @@ async function ensureRuntime(spec) {
   })()
   inflight.set(key, work)
   try {
-    return await work
+    const result = await work
+    stats.ensures += 1
+    return result
+  } catch (error) {
+    stats.failures += 1
+    throw error
   } finally {
     inflight.delete(key)
   }
@@ -263,6 +289,7 @@ async function stopRuntime(workspaceId, remove) {
     await runDocker(['stop', '-t', '10', name], { timeoutMs: 20_000 })
   }
   if (remove === true) await removeContainer(name)
+  stats.stops += 1
   return true
 }
 
@@ -312,6 +339,23 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req)
       const removed = await stopRuntime(body.workspaceId, body.remove === true)
       return sendJson(res, 200, { ok: true, removed })
+    }
+    if (req.method === 'GET' && url.pathname === '/metrics') {
+      const lines = [
+        '# HELP roost_docker_worker_up Worker process is up.',
+        '# TYPE roost_docker_worker_up gauge',
+        'roost_docker_worker_up 1',
+        '# TYPE roost_docker_worker_ensures_total counter',
+        `roost_docker_worker_ensures_total ${stats.ensures}`,
+        '# TYPE roost_docker_worker_stops_total counter',
+        `roost_docker_worker_stops_total ${stats.stops}`,
+        '# TYPE roost_docker_worker_failures_total counter',
+        `roost_docker_worker_failures_total ${stats.failures}`,
+        '# TYPE roost_docker_worker_uptime_seconds gauge',
+        `roost_docker_worker_uptime_seconds ${Math.floor((Date.now() - stats.startedAt) / 1000)}`,
+      ]
+      res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4', 'cache-control': 'no-store' })
+      return res.end(`${lines.join('\n')}\n`)
     }
     if (req.method === 'GET' && url.pathname === '/v1/logs') {
       const workspaceId = safeWorkspaceId(url.searchParams.get('workspaceId') ?? '')

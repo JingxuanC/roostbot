@@ -58,7 +58,10 @@ Docker .138  roost-docker-worker.service active
 | 项 | 当前状态 | 目标 |
 |---|---|---|
 | 网络 | ✅ bridge `roost-ws` + egress allowlist（`deploy/roost-egress-allowlist.sh`） | 保持 DNS 刷新、后续加域名白名单 |
-| 凭据 | vendor key 进容器 env | 按 Bot 注入 / CP 代理 |
+| worker 指标 | ✅ `/metrics`（ensures/stops/failures/uptime） | CP 接入告警 |
+| workspace 配额 | ✅ 启动前 `du` 检查和容器资源上限 | 运行时硬配额 |
+| 备份 | ✅ `scripts/backup-docker-workspaces.sh` | 一致性快照 |
+| 凭据 | ✅ 按 Bot 的 credentialRef JSON map 注入（workspace 内隔离） | 后续接 Vault/KMS |
 | worker API | 可请求任意 image/command | 只允许 roost-ws-* 和允许的镜像 |
 | 文件系统 | rootfs 可写 | read-only rootfs + tmpfs + workspace volume |
 | seccomp | Docker 默认 | 明确 seccomp profile |
@@ -149,8 +152,8 @@ BRIDGE_OK {
 未完成：
 
 ```text
-❌ read-only rootfs：DSH native addon 需要可写缓存，当前 hardening 默认关闭
-❌ per-Bot credentialRef
+⚠️ read-only rootfs：可配置开启，但 DSH native addon 需要可写缓存，默认关闭
+✅ per-Bot credentialRef（文件 secret provider，workspace 内 Bot 隔离）
 ❌ gVisor/Kata
 ❌ 多 Docker 宿主 / 备份 / 配额 / 指标告警
 ❌ Agent 权限桥 / Grok / Hermes / Native Relay
