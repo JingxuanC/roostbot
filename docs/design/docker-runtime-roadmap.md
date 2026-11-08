@@ -214,3 +214,14 @@ FINAL_OK {
 ❌ Prometheus/Alertmanager 实例
 ❌ gVisor/Kata 安装
 ```
+
+
+## 9. 第五轮补充（2026-11-08）
+
+```text
+✅ Native Relay 端到端测试
+   slot -> native binding -> assignment -> advance -> room message
+✅ OpenShell 封存
+   ROOST_RUNTIME_PROVIDER=openshell 默认启动失败
+✅ 1339 tests pass
+```
