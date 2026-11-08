@@ -411,3 +411,55 @@ DSH+Claude+Codex 同房间
 - 复用已构建的多 Runtime 镜像
 
 第一版用 host network + 非 root 容器跑通；安全加固和 gVisor/Kata 放到第二阶段。
+
+## 15. 实施记录（2026-11-08）
+
+已落地并远程验证：
+
+```text
+CP .116      ROOST_RUNTIME_PROVIDER=docker
+Docker .138   roost-docker-worker.service active
+镜像          roost/agent:multi-runtime (uid 1000)
+容器          roost-ws-a123e5ad9c4b  network=host
+```
+
+远程真实 DeepSeek 验证：
+
+```text
+ClaudeBot  → CLAUDE_DOCKER_OK
+CodexBot   → CODEX_DOCKER_OK
+DshBot     → DSH_DOCKER_OK
+同房间     → THREE_OK {Claude/Codex/DSH 全部回复}
+```
+
+部署文件：
+
+```text
+deploy/roost-docker-worker.service
+deploy/docker-worker.env.example
+```
+
+CP 额外环境：
+
+```bash
+ROOST_RUNTIME_PROVIDER=docker
+ROOST_DOCKER_WORKER_URL=http://172.17.43.58:8790
+ROOST_DOCKER_WORKER_TOKEN=...
+ROOST_DOCKER_IMAGE=roost/agent:multi-runtime
+ROOST_CP_HOST=172.17.43.89
+ROOST_CP_PORT=8787
+ROOST_CP_SCHEME=http
+ROOST_CP_API_BASE=http://127.0.0.1:8787
+ROOST_MULTI_RUNTIME=1
+```
+
+第一版限制：
+
+```text
+host network（无网络隔离）
+vendor key 进入容器
+workspace volume 在 .138 的 /var/lib/roost/workspaces
+```
+
+Codex 需要可写 CODEX_HOME；镜像提供模板，room-agent 启动时复制到
+`/workspace/.codex/config.toml`。
