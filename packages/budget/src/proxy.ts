@@ -173,11 +173,18 @@ function forwardHeaders(req: IncomingMessage, key: string): Record<string, strin
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
     if (HOP_BY_HOP_HEADERS.has(lower) || INTERNAL_HEADERS.has(lower)) continue
+    // Do not let a client negotiate zstd/br with the upstream: fetch gives us
+    // the still-compressed bytes for encodings it cannot decode (notably zstd),
+    // and the proxy does not relay content-encoding. Grok Build sends zstd and
+    // then sees a stream of invalid UTF-8. Always ask the upstream for identity.
+    if (lower === 'accept-encoding') continue
     if (lower === 'x-api-key') continue
     if (lower.startsWith('x-roost-')) continue
     if (value === undefined) continue
     headers[lower] = Array.isArray(value) ? value.join(', ') : value
   }
+  // Keep the upstream response readable for both the usage parser and clients.
+  headers['accept-encoding'] = 'identity'
   if (key !== '') {
     headers['authorization'] = `Bearer ${key}`
     // DSH 的 Messages 传输发 x-api-key；上游可能是 Anthropic 兼容端点。

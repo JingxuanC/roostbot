@@ -169,6 +169,9 @@ test('转发 POST：固定上游路径、body 与头透传、authorization 换�
     assert.equal(seen.headers['x-trace-id'], 'trace-1')
     assert.equal(seen.headers['x-runtime-token'], undefined)
     assert.equal(seen.headers['x-roost-workspace-id'], undefined)
+    // zstd/br from Grok Build must never reach the upstream: the proxy cannot
+    // relay content-encoding, so it always asks for identity bytes.
+    assert.equal(seen.headers['accept-encoding'], 'identity')
     assert.equal(seen.body, JSON.stringify(CHAT_BODY))
   } finally {
     await proxy.close()
