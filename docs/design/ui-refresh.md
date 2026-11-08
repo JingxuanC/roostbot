@@ -1,7 +1,7 @@
 # 前端 UI 重设计：把 Roost 做得安静、简洁、优雅
 
-> 状态：**已实现（2026-11-05，2026-11-07 统一为白色主题）**：白色底、浅灰分区、无侧栏房间壳、抽屉设置入口、移动端适配。
-> 实现见 `apps/web/styles-white.css`（在 `styles-blue.css` / `styles-grok.css` 之后加载）+ `apps/web/index.html` + `apps/web/app.js`；本文保留设计依据与验收标准。
+> 状态：**已实现（2026-11-05；2026-11-08 统一为 Research Desk 主题）**：暖纸底、墨色文字、深绿单一强调、桌面常驻导航栏、移动端抽屉、设置页统一排版。
+> 实现见 `apps/web/styles-desk.css`（最后加载，覆盖 `styles.css` / `styles-blue.css` / `styles-grok.css` / `styles-white.css`）+ `apps/web/index.html`；本文保留设计依据与验收标准。
 > 上游：`ui.md`（三原则与信息架构）、`bot-avatar.md`（鸟）。本文只回答一件事：
 > 现有实现如何收敛成「简洁优雅」，以及每一步怎么验收。
 
@@ -309,3 +309,31 @@ Bot 管理、房间管理、插件、用量、定时、连接器、设备、审�
 - 管理页仍使用既有 hash 路由（`#/bots`、`#/plugins`、`#/usage`…），没有迁移到 `/settings/*` 前缀；入口已统一收进抽屉。路由迁移留作后续。
 - 消息区保留了「加载更早的消息」按钮；短会话时会出现在消息上方。
 - `发送` 仍是文字按钮而不是纯图标，保证可读性。
+
+
+## 9. Research Desk 主题（2026-11-08）
+
+用户反馈「整体风格统一、UI 好看一点」后，按 `ui-design` skill 的研究台方向重做：
+
+```text
+paper #f3efe6 / ink #25221c / accent #2f5b4c
+serif display + sans body + mono labels
+hairline rules, 1-4px radius, no gradients
+no card-grid decoration; tables/lists use rules
+desktop: persistent rail; mobile: drawer
+```
+
+落地文件：
+
+```text
+apps/web/styles-desk.css
+apps/web/index.html（主题色/占位、desk 样式最后加载）
+apps/web/test/desk-theme.test.ts
+```
+
+截图：
+
+![Room](docs/assets/ui-desk-room.png)
+![Bot list](docs/assets/ui-desk-bots.png)
+![Settings](docs/assets/ui-desk-settings.png)
+![Mobile room](docs/assets/ui-desk-mobile.png)

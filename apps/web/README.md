@@ -82,6 +82,7 @@ token 仍保留（`app.js` 的 `sessionToken`，只在内存），所以现有 t
 
 ```
 index.html          四个视图的静态骨架（配对 / 账号 / 房间 / 路由页外壳）
+styles-desk.css     最终主题（Research Desk：纸/墨/深绿；最后加载）
 app.js              入口：状态、路由、房间页、SSE、输入区、@ 菜单
 styles.css          设计 token + 组件样式（深色一套）
 lib/glyph.js        程序化图标（packages/identity/src/glyph.ts 的等价重写，无 DOM）

@@ -8,7 +8,7 @@
 - **BYO 模型**：DeepSeek、Anthropic、OpenAI、xAI 等用自己的 key；平台不转售推理
 - **Web / 桌面**：同源网页、桌面端、配对设备、SSE 实时消息
 
-截图：[房间](docs/assets/ui-app-room.png) · [Bot 列表](docs/assets/ui-app-bots.png) · [设置](docs/assets/ui-app-settings.png)
+截图：[房间](docs/assets/ui-desk-room.png) · [Bot 列表](docs/assets/ui-desk-bots.png) · [设置](docs/assets/ui-desk-settings.png)
 
 ## 现在是什么状态
 
