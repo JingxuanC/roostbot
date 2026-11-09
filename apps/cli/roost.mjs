@@ -305,7 +305,7 @@ function autostartInfo() {
   <key>Label</key><string>com.roost.daemon</string>
   <key>ProgramArguments</key><array><string>${plistEscape(node)}</string><string>${plistEscape(cli)}</string><string>daemon</string><string>run</string></array>
   <key>EnvironmentVariables</key><dict><key>ROOST_HOME</key><string>${plistEscape(home)}</string></dict>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>${plistEscape(join(home, 'daemon.log'))}</string>
   <key>StandardErrorPath</key><string>${plistEscape(join(home, 'daemon.log'))}</string>
 </dict></plist>
@@ -322,7 +322,7 @@ After=network-online.target
 Type=simple
 ExecStart=${node} ${cli} daemon run
 Environment=ROOST_HOME=${home}
-Restart=always
+Restart=on-failure
 RestartSec=5
 
 [Install]
