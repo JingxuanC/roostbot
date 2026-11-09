@@ -487,6 +487,7 @@ export {
   listComputers,
   listQueuedComputerJobs,
   markComputerJobRunning,
+  renewComputerJobLease,
   revokeComputer,
   revokeComputerBinding,
   touchComputer,

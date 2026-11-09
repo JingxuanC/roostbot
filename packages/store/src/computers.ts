@@ -486,10 +486,23 @@ export function finishComputerJob(
   return getComputerJob(store, input.jobId)
 }
 
+export function renewComputerJobLease(
+  store: Store,
+  input: { jobId: string; computerId: string; leaseMs?: number; now?: number },
+): ComputerJob | null {
+  assertOpen(store)
+  const now = input.now ?? Date.now()
+  const changed = store.db.prepare(
+    "UPDATE computer_jobs SET state = 'running', lease_until = ?, updated_at = ? WHERE id = ? AND computer_id = ? AND (state = 'claimed' OR state = 'running')",
+  ).run(now + (input.leaseMs ?? 60_000), now, input.jobId, input.computerId)
+  if (Number(changed.changes) === 0) return null
+  return getComputerJob(store, input.jobId)
+}
+
 export function expireComputerJobs(store: Store, now = Date.now()): number {
   assertOpen(store)
   const result = store.db.prepare(
-    "UPDATE computer_jobs SET state = 'expired', updated_at = ? WHERE state = 'claimed' AND lease_until < ?",
+    "UPDATE computer_jobs SET state = 'queued', lease_until = NULL, updated_at = ? WHERE state IN ('claimed', 'running') AND lease_until < ?",
   ).run(now, now)
   return Number(result.changes)
 }

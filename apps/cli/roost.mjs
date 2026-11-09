@@ -474,10 +474,17 @@ async function runJob(config, flags, job) {
       if (typeof workdir !== 'string' || workdir === '') {
         result = { kind: 'failed', code: 'project_missing', message: 'no local workdir for this binding' }
       } else {
-      const ran = await runAgent(command, String(job.payload?.prompt || ''), workdir, 240_000, postDelta)
-      await deltaChain
-      if (ran.code === 0 && ran.stdout.trim() !== '') result = { kind: 'posted', text: ran.stdout.trim() }
-      else result = { kind: 'failed', code: 'agent_exit', message: (ran.stderr || ran.stdout || `agent exited ${ran.code}`).trim().slice(0, 2000) }
+        const lease = setInterval(() => {
+          void request(config, flags, 'POST', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs/${encodeURIComponent(job.id)}/lease`, undefined, config.computer.token).catch(() => {})
+        }, 30_000)
+        try {
+          const ran = await runAgent(command, String(job.payload?.prompt || ''), workdir, 240_000, postDelta)
+          await deltaChain
+          if (ran.code === 0 && ran.stdout.trim() !== '') result = { kind: 'posted', text: ran.stdout.trim() }
+          else result = { kind: 'failed', code: 'agent_exit', message: (ran.stderr || ran.stdout || `agent exited ${ran.code}`).trim().slice(0, 2000) }
+        } finally {
+          clearInterval(lease)
+        }
       }
     }
   }

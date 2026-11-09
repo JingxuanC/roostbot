@@ -475,3 +475,29 @@ MCP 配置：
 ```
 
 这样本地 Agent 可以自己查电脑、查 binding、绑定 Bot、查 job、检查 workspace。
+
+## 18. P1 收尾（2026-11-09）
+
+- Web 设置页增加绑定表单：Computer + Project + Bot + Agent
+- 本地项目由 `roost project add` 注册，云端只看到 id/label，路径不上传
+- daemon 支持 `--concurrency N` 多 lane
+- job claim 租约 60s，daemon 每 30s 续租；daemon 崩溃后 lease 过期会重新入队
+- `GET /api/computers/:id/jobs/history` / `GET /api/computers/:id/jobs/:jobId` 供检查
+- `roost mcp serve` 暴露绑定/检查工具，供本地 Agent 使用
+
+MCP 配置：
+
+```json
+{
+  "mcpServers": {
+    "roost": { "command": "roost", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+### 仍留给下一阶段
+
+- 安装包 / 自动更新
+- 本地 Agent 的并发 lane UI
+- 云端 Agent 反向调用本地 MCP（P2）
+- workspace 文件双向同步（P2）

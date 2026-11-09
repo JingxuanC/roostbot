@@ -33,6 +33,7 @@ import {
   heartbeatComputer,
   listComputerBindings,
   listComputerJobs,
+  renewComputerJobLease,
   getComputerJob,
   listComputers,
   revokeComputer,
@@ -231,6 +232,19 @@ export async function handleGetComputerJob(ctx: ComputersRouteContext, req: Inco
   if (decodeURIComponent(match[1]!) !== computer.id) return sendError(res, 403, 'computer.forbidden', 'computer token does not match path')
   const job = getComputerJob(ctx.rawStore, decodeURIComponent(match[2]!))
   if (job === null || job.computerId !== computer.id) return sendError(res, 404, 'job.not_found', 'unknown job')
+  sendJson(res, 200, { job })
+}
+
+export async function handleComputerJobLease(ctx: ComputersRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const computer = authenticateComputer(ctx, req, res)
+  if (computer === null || ctx.rawStore === undefined) return
+  const match = /^\/api\/computers\/([^/]+)\/jobs\/([^/]+)\/lease$/.exec(url.pathname)
+  if (match === null) return sendError(res, 404, 'not_found', 'malformed job lease path')
+  const computerId = decodeURIComponent(match[1]!)
+  const jobId = decodeURIComponent(match[2]!)
+  if (computerId !== computer.id) return sendError(res, 403, 'computer.forbidden', 'computer token does not match path')
+  const job = renewComputerJobLease(ctx.rawStore, { jobId, computerId, leaseMs: 60_000, now: ctx.now() })
+  if (job === null) return sendError(res, 409, 'job.not_leased', 'job is not claimed/running for this computer')
   sendJson(res, 200, { job })
 }
 

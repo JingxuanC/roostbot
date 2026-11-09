@@ -134,6 +134,12 @@ roost daemon autostart enable
 roost daemon start
 ```
 
+本地 Agent 也可通过 MCP 使用 Roost 的绑定/检查工具：
+
+```json
+{"mcpServers":{"roost":{"command":"roost","args":["mcp","serve"]}}}
+```
+
 也可以在 Web 设置页「本地电脑」里直接选择电脑 / 项目 / Bot / Agent 绑定。
 
 之后房间里的这个 Bot 会把轮次派给本地 `roostd`，在本机目录启动 Agent，
