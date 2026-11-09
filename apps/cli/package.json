@@ -4,10 +4,11 @@
   "description": "Connect your local computer to a Roost workspace and run agents locally.",
   "type": "module",
   "bin": {
-    "roost": "./roost.mjs"
+    "roost": "./bin/roost"
   },
   "files": [
     "roost.mjs",
+    "bin/roost",
     "README.md"
   ],
   "engines": {
@@ -25,5 +26,9 @@
     "agents",
     "cli",
     "local-computer"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

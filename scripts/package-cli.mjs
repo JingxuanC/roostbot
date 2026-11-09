@@ -6,7 +6,7 @@
 // No npm required. The installer checks for Node >= 22.18; standalone binaries
 // are a later packaging step (Node SEA/Bun) and do not change these entrypoints.
 import { createHash } from 'node:crypto'
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -51,6 +51,9 @@ mkdirSync(npmPkg, { recursive: true })
 for (const name of ['package.json', 'roost.mjs', 'README.md']) {
   copyFileSync(join(root, 'apps', 'cli', name), join(npmPkg, name))
 }
+mkdirSync(join(npmPkg, 'bin'), { recursive: true })
+copyFileSync(join(root, 'apps', 'cli', 'bin', 'roost'), join(npmPkg, 'bin', 'roost'))
+chmodSync(join(npmPkg, 'bin', 'roost'), 0o755)
 const npmTar = spawnSync('tar', ['-czf', npmRelease, '-C', npmRoot, 'package'], { encoding: 'utf8' })
 if (npmTar.status !== 0) {
   console.error(`package-cli: npm tar failed: ${npmTar.stderr || npmTar.stdout}`)
