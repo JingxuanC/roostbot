@@ -32,7 +32,7 @@ async function startFakeOpenConnector(): Promise<{ url: string; seen: Seen[]; cl
       return send(200, { data: { authorizationUrl: 'https://provider.example/oauth' } })
     }
     if (req.method === 'GET' && req.url === '/v1/connections') {
-      return send(200, { data: [{ service: 'github', connectionName: 'roost_abc', status: 'active' }] })
+      return send(200, { data: [{ service: 'github', alias: 'roost_abc', status: 'active' }] })
     }
     if (req.method === 'POST' && req.url === '/v1/actions/github.list_issues') {
       return send(200, { data: { ok: true } })

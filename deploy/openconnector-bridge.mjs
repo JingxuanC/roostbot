@@ -101,7 +101,7 @@ async function statusFor(slug, connectionName = '') {
   if (NO_AUTH.has(slug)) return 'connected'
   const connections = await gateway('/v1/connections', { token: ADMIN })
   const match = (Array.isArray(connections) ? connections : []).find((item) =>
-    item && item.service === slug && (connectionName === '' || item.connectionName === connectionName))
+    item && item.service === slug && (connectionName === '' || item.alias === connectionName || item.connectionName === connectionName))
   if (!match) return 'revoked'
   if (match.status === 'active') return 'connected'
   if (match.status === 'expired') return 'expired'
