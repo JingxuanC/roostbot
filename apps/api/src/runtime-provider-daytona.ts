@@ -40,6 +40,13 @@ const STARTING = new Set([
 ])
 const STOPPED = new Set(['stopped', 'paused', 'archived', 'destroying'])
 
+// Snapshot 状态机与 LangAlpha 的 Daytona provider 对齐
+// （ptc_agent/core/sandbox/providers/daytona.py 的 _SNAPSHOT_IN_PROGRESS / _SNAPSHOT_FAILED）：
+//   * 构建中：pending / pulling / building / snapshotting / removing → 等待它 settle
+//   * 失败：error / build_failed → 名字被占住，删除后重建（auto-create 时）
+const SNAPSHOT_IN_PROGRESS = new Set(['pending', 'pulling', 'building', 'snapshotting', 'removing'])
+const SNAPSHOT_FAILED = new Set(['error', 'build_failed'])
+
 export interface DaytonaRuntimeProviderConfig {
   apiUrl?: string
   apiKey: string
@@ -148,7 +155,8 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
         : status === 404 ? 'provider.not_found'
         : status === 409 ? 'provider.conflict'
         : 'provider.provision_failed'
-    return new RuntimeProviderError(code, message, { retryable: status >= 500 })
+    // 429（Daytona 限流）与 5xx 都值得重试；LangAlpha 也把 429 当 transient 处理。
+    return new RuntimeProviderError(code, message, { retryable: status === 429 || status >= 500 })
   }
 
   async function getSandbox(name: string): Promise<DaytonaSandbox | null> {
@@ -245,19 +253,28 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
     return found === undefined ? null : found as DaytonaSnapshot
   }
 
-  async function waitForSnapshot(name: string, timeoutMs: number): Promise<void> {
+
+  /** 等 snapshot 离开“构建中”状态（inactive/active/失败都算 settle），返回最后一次观察到的快照。 */
+  async function waitForSettledSnapshot(name: string, timeoutMs: number): Promise<DaytonaSnapshot | null> {
     const deadline = Date.now() + Math.max(1, timeoutMs)
+    let last = await findSnapshot(name)
     while (Date.now() < deadline) {
-      const snapshot = await findSnapshot(name)
-      if (snapshot === null) throw new RuntimeProviderError('provider.provision_failed', `Daytona snapshot ${name} disappeared while building`)
-      const state = snapshot.state
-      if (state === 'active') return
-      if (state === 'error' || state === 'build_failed') {
-        throw new RuntimeProviderError('provider.provision_failed', `Daytona snapshot ${name} failed: ${snapshot.errorReason ?? state}`)
-      }
+      if (last === null) return null
+      if (last.state === undefined || !SNAPSHOT_IN_PROGRESS.has(last.state)) return last
+      await sleep(2000)
+      last = await findSnapshot(name)
+    }
+    return last
+  }
+
+  /** 删除 snapshot 并等名字真正释放；失败不抛错（调用方决定后续如何报错）。 */
+  async function deleteSnapshotForRebuild(snapshot: DaytonaSnapshot, name: string): Promise<void> {
+    const id = typeof snapshot.id === 'string' && snapshot.id !== '' ? snapshot.id : name
+    await call(`/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => undefined)
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if ((await findSnapshot(name)) === null) return
       await sleep(2000)
     }
-    throw new RuntimeProviderError('provider.ready_timeout', `Daytona snapshot ${name} was not active within ${timeoutMs}ms`)
   }
 
   async function ensureSnapshot(spec: RuntimeSpec): Promise<string | null> {
@@ -268,27 +285,60 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
     if (imageName === '') {
       throw new RuntimeProviderError('provider.provision_failed', 'DAYTONA_SNAPSHOT_IMAGE is required when snapshot auto-create is enabled')
     }
+
     let snapshot = await findSnapshot(name)
+
+    // 失败的 snapshot 会一直占住名字，必须先删掉再重建（与 LangAlpha 的 build_snapshot 一致）。
+    if (snapshot !== null && snapshot.state !== undefined && SNAPSHOT_FAILED.has(snapshot.state)) {
+      await deleteSnapshotForRebuild(snapshot, name)
+      snapshot = null
+    }
+
     if (snapshot === null) {
       const resources = spec.resources ?? {}
       const body: Record<string, unknown> = {
         name,
         imageName,
         entrypoint: config.snapshotEntrypoint ?? ['node', '/opt/roost/room-agent.mjs'],
+        // 资源烘焙进 snapshot：Daytona 创建 sandbox 时不允许再覆盖 snapshot 的 cpu/memory/disk。
         cpu: Math.max(1, Math.round(resources.cpus ?? config.cpu ?? 2)),
         memory: Math.max(1, Math.ceil((resources.memoryMb ?? (config.memory ?? 2) * 1024) / 1024)),
         disk: Math.max(1, Math.round(config.disk ?? 10)),
         ...(config.snapshotSandboxClass === undefined ? {} : { sandboxClass: config.snapshotSandboxClass }),
       }
       const created = await call('/snapshots', { method: 'POST', body: JSON.stringify(body) })
-      if (created.status < 200 || created.status >= 300) throw errorFor(created.status, 'snapshot create', created.body)
-      snapshot = created.body as DaytonaSnapshot
+
+      if (created.status === 409) {
+        // 另一个构建抢到了同一个名字：等它 settle，只有 active 才可用。
+        snapshot = await waitForSettledSnapshot(name, spec.readyTimeoutMs ?? 120_000)
+        if (snapshot === null || snapshot.state !== 'active') {
+          throw new RuntimeProviderError(
+            'provider.provision_failed',
+            `Daytona snapshot ${name} is held by another build and is not active (state=${snapshot?.state ?? 'missing'})`,
+          )
+        }
+      } else if (created.status < 200 || created.status >= 300) {
+        throw errorFor(created.status, 'snapshot create', created.body)
+      } else {
+        snapshot = created.body as DaytonaSnapshot
+      }
     }
-    if (snapshot.state === 'inactive') {
+
+    const state = snapshot.state
+    if (state === 'inactive') {
       const activated = await call(`/snapshots/${encodeURIComponent(snapshot.id ?? name)}/activate`, { method: 'POST' })
       if (activated.status < 200 || activated.status >= 300) throw errorFor(activated.status, 'snapshot activate', activated.body)
+    } else if (state !== 'active') {
+      // 构建中（或状态缺失）：等到 settle；settle 后仍不是 active 就报错，避免拿半成品创建 sandbox。
+      const settled = await waitForSettledSnapshot(name, spec.readyTimeoutMs ?? 120_000)
+      if (settled === null || settled.state !== 'active') {
+        throw new RuntimeProviderError(
+          'provider.ready_timeout',
+          `Daytona snapshot ${name} was not active within the readiness window (state=${settled?.state ?? 'missing'})`,
+        )
+      }
     }
-    if (snapshot.state !== 'active') await waitForSnapshot(name, spec.readyTimeoutMs ?? 120_000)
+
     return name
   }
 
@@ -363,15 +413,15 @@ export function daytonaRuntimeProvider(config: DaytonaRuntimeProviderConfig): Ru
 
       const snapshot = await ensureSnapshot(spec)
       if (snapshot === null) throw new RuntimeProviderError('provider.provision_failed', 'Daytona snapshot is not available')
-      const resources = spec.resources ?? {}
+      // Daytona sizes a sandbox from its snapshot: sending cpu/memory/disk together with a
+      // snapshot is rejected with "Cannot specify Sandbox resources when using a snapshot".
+      // The snapshot created by ensureSnapshot() already carries the requested resources, so
+      // the snapshot is authoritative for existing snapshots too.
       const body: Record<string, unknown> = {
         name,
         snapshot,
         env: spec.env ?? {},
         labels: { app: 'roost', workspace: spec.workspaceId, ...(spec.labels ?? {}) },
-        cpu: Math.max(1, Math.round(resources.cpus ?? config.cpu ?? 2)),
-        memory: Math.max(1, Math.ceil((resources.memoryMb ?? (config.memory ?? 2) * 1024) / 1024)),
-        disk: Math.max(1, Math.round(config.disk ?? 10)),
         autoStopInterval: config.autoStopInterval ?? 0,
         autoPauseInterval: 0,
         autoDeleteInterval: -1,

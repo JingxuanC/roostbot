@@ -51,6 +51,13 @@ test('Daytona provider creates a sandbox with a persistent volume and reuses it'
           : new Response(JSON.stringify(sandbox), { status: 200 })
       }
       if (path === '/sandbox' && method === 'POST') {
+        // Current Daytona rejects resources together with a snapshot; guard the regression.
+        if (body.cpu !== undefined || body.memory !== undefined || body.disk !== undefined) {
+          return new Response(
+            JSON.stringify({ message: 'Cannot specify Sandbox resources when using a snapshot' }),
+            { status: 400 },
+          )
+        }
         const sandbox = { id: 'sbx-1', name: body.name, state: 'started', toolboxProxyUrl: 'https://toolbox.test/toolbox' }
         sandboxes.set(body.name, sandbox)
         return new Response(JSON.stringify(sandbox), { status: 200 })
@@ -80,8 +87,127 @@ test('Daytona provider creates a sandbox with a persistent volume and reuses it'
   assert.ok(requests.some((request) => request.path === '/toolbox/sbx-1/process/execute'))
   const create = requests.find((request) => request.method === 'POST' && request.path === '/sandbox')
   assert.equal(create?.body.snapshot, 'roost-snapshot')
+  // Resources come from the snapshot on current Daytona, never from the create body.
+  assert.equal(create?.body.cpu, undefined)
+  assert.equal(create?.body.memory, undefined)
+  assert.equal(create?.body.disk, undefined)
   assert.deepEqual(create?.body.volumes, [{ volumeId: 'vol-1', mountPath: '/workspace', subpath: 'ws_daytona' }])
   assert.equal(create?.body.autoStopInterval, 0)
+})
+
+test('Daytona provider deletes a failed snapshot and rebuilds it', async () => {
+  const requests: Array<{ method: string; path: string; body?: any }> = []
+  const sandboxes = new Map<string, any>()
+  let snapshotExists = true
+  let deleted = false
+  const provider = daytonaRuntimeProvider({
+    apiKey: 'k',
+    apiUrl: 'https://daytona.test/api',
+    snapshot: 'roost-agent',
+    snapshotImage: 'roost/agent:multi-runtime',
+    snapshotAutoCreate: true,
+    fetchImpl: (async (url: string | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      const path = new URL(String(url)).pathname.replace('/api', '')
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      requests.push({ method, path, body })
+      if (path === '/snapshots' && method === 'GET') {
+        return snapshotExists
+          ? new Response(
+              JSON.stringify({ items: [{ id: 'snap-old', name: 'roost-agent', state: 'build_failed' }] }),
+              { status: 200 },
+            )
+          : new Response('{"items":[]}', { status: 200 })
+      }
+      if (path === '/snapshots/snap-old' && method === 'DELETE') {
+        deleted = true
+        snapshotExists = false
+        return new Response('{}', { status: 200 })
+      }
+      if (path === '/snapshots' && method === 'POST') {
+        return new Response(JSON.stringify({ id: 'snap-new', name: body.name, state: 'active' }), { status: 200 })
+      }
+      if (path.startsWith('/sandbox/') && method === 'GET') {
+        const name = decodeURIComponent(path.slice('/sandbox/'.length))
+        const sandbox = sandboxes.get(name)
+        return sandbox === undefined
+          ? new Response('{"message":"not found"}', { status: 404 })
+          : new Response(JSON.stringify(sandbox), { status: 200 })
+      }
+      if (path === '/sandbox' && method === 'POST') {
+        const sandbox = { id: 'sbx-1', name: body.name, state: 'started', toolboxProxyUrl: 'https://toolbox.test/toolbox' }
+        sandboxes.set(body.name, sandbox)
+        return new Response(JSON.stringify(sandbox), { status: 200 })
+      }
+      if (path === '/toolbox/sbx-1/process/execute' && method === 'POST') {
+        return new Response(JSON.stringify({ exitCode: 0, result: '' }), { status: 200 })
+      }
+      if (path.startsWith('/sandbox/') && method === 'DELETE') {
+        sandboxes.delete(decodeURIComponent(path.slice('/sandbox/'.length)))
+        return new Response('{}', { status: 200 })
+      }
+      return new Response(JSON.stringify({ message: `unhandled ${method} ${path}` }), { status: 500 })
+    }) as typeof fetch,
+  })
+
+  const spec = { workspaceId: 'ws_rebuild', image: 'roost-agent', resources: { cpus: 2, memoryMb: 2048 } }
+  const outcome = await provider.ensure(spec)
+
+  assert.equal(outcome.created, true)
+  assert.equal(outcome.status.phase, 'ready')
+  assert.equal(deleted, true, 'failed snapshot must be deleted before rebuilding')
+  assert.ok(requests.some((request) => request.method === 'POST' && request.path === '/snapshots'))
+  await provider.stop({ workspaceId: 'ws_rebuild' }, { remove: true })
+})
+
+test('Daytona provider waits out a concurrent snapshot build on 409', async () => {
+  let snapshotBuilds = 0
+  const sandboxes = new Map<string, any>()
+  const provider = daytonaRuntimeProvider({
+    apiKey: 'k',
+    apiUrl: 'https://daytona.test/api',
+    snapshot: 'roost-agent',
+    snapshotImage: 'roost/agent:multi-runtime',
+    snapshotAutoCreate: true,
+    fetchImpl: (async (url: string | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      const path = new URL(String(url)).pathname.replace('/api', '')
+      if (path === '/snapshots' && method === 'GET') {
+        snapshotBuilds++
+        // 第一次看到 building，之后变成 active
+        const state = snapshotBuilds === 1 ? 'building' : 'active'
+        return new Response(JSON.stringify({ items: [{ id: 'snap-1', name: 'roost-agent', state }] }), { status: 200 })
+      }
+      if (path === '/snapshots' && method === 'POST') {
+        return new Response('{"message":"snapshot already exists"}', { status: 409 })
+      }
+      if (path.startsWith('/sandbox/') && method === 'GET') {
+        const name = decodeURIComponent(path.slice('/sandbox/'.length))
+        const sandbox = sandboxes.get(name)
+        return sandbox === undefined
+          ? new Response('{"message":"not found"}', { status: 404 })
+          : new Response(JSON.stringify(sandbox), { status: 200 })
+      }
+      if (path === '/sandbox' && method === 'POST') {
+        const body = JSON.parse(String(init?.body))
+        const sandbox = { id: 'sbx-1', name: body.name, state: 'started', toolboxProxyUrl: 'https://toolbox.test/toolbox' }
+        sandboxes.set(body.name, sandbox)
+        return new Response(JSON.stringify(sandbox), { status: 200 })
+      }
+      if (path.includes('/process/execute')) {
+        return new Response(JSON.stringify({ exitCode: 0, result: '' }), { status: 200 })
+      }
+      if (path.startsWith('/sandbox/') && method === 'DELETE') {
+        sandboxes.delete(decodeURIComponent(path.slice('/sandbox/'.length)))
+        return new Response('{}', { status: 200 })
+      }
+      return new Response(JSON.stringify({ message: `unhandled ${method} ${path}` }), { status: 500 })
+    }) as typeof fetch,
+  })
+
+  const outcome = await provider.ensure({ workspaceId: 'ws_race', image: 'roost-agent' })
+  assert.equal(outcome.created, true)
+  await provider.stop({ workspaceId: 'ws_race' }, { remove: true })
 })
 
 test('Kubernetes provider creates a PVC + long-lived Pod with the ready marker probe', async () => {
