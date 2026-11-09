@@ -180,12 +180,12 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { url: callback })
       }
       const returnUri = `${ROOST_PUBLIC_BASE}/api/connectors/callback/${encodeURIComponent(slug)}?state=${encodeURIComponent(state)}&status=connected`
-      const data = await gateway(`/v1/connections/${encodeURIComponent(slug)}/connect`, {
+      const data = await gateway('/api/oauth/connection-requests', {
         method: 'POST',
         token: ADMIN,
-        body: { returnUri, ...(connectionName === '' ? {} : { connectionName }) }
+        body: { service: slug, returnUri, ...(connectionName === '' ? {} : { connectionName }) }
       })
-      const urlValue = data && (data.url || data.authorizationUrl || data.redirectUrl)
+      const urlValue = data && (data.authorizationUrl || data.url || data.redirectUrl)
       if (typeof urlValue !== 'string' || urlValue === '') {
         return json(res, 502, { error: 'OpenConnector did not return an authorization URL' })
       }

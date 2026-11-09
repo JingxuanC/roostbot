@@ -28,8 +28,8 @@ async function startFakeOpenConnector(): Promise<{ url: string; seen: Seen[]; cl
       res.writeHead(status, { 'content-type': 'application/json' })
       res.end(JSON.stringify(payload))
     }
-    if (req.method === 'POST' && req.url === '/v1/connections/github/connect') {
-      return send(200, { data: { url: 'https://provider.example/oauth' } })
+    if (req.method === 'POST' && req.url === '/api/oauth/connection-requests') {
+      return send(200, { data: { authorizationUrl: 'https://provider.example/oauth' } })
     }
     if (req.method === 'GET' && req.url === '/v1/connections') {
       return send(200, { data: [{ service: 'github', connectionName: 'roost_abc', status: 'active' }] })
@@ -107,8 +107,9 @@ test('OpenConnector bridge forwards named connections and proxies OAuth callback
     })
     assert.equal(authorized.status, 200)
     assert.deepEqual(await authorized.json(), { url: 'https://provider.example/oauth' })
-    const connect = fake.seen.find((row) => row.path === '/v1/connections/github/connect')
+    const connect = fake.seen.find((row) => row.path === '/api/oauth/connection-requests')
     assert.equal(connect?.body.connectionName, 'roost_abc')
+    assert.equal(connect?.body.service, 'github')
     assert.match(String(connect?.body.returnUri), /state=s1/)
 
     const status = await fetch(`${bridge.url}/status?slug=github&connectionName=roost_abc`, {
