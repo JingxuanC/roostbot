@@ -108,6 +108,13 @@ async function statusFor(slug, connectionName = '') {
   return 'revoked'
 }
 
+async function findNamedConnection(slug, connectionName) {
+  if (connectionName === '') return null
+  const connections = await gateway('/v1/connections', { token: ADMIN })
+  return (Array.isArray(connections) ? connections : []).find((item) =>
+    item && item.service === slug && (item.alias === connectionName || item.connectionName === connectionName)) ?? null
+}
+
 async function readBody(req) {
   let size = 0
   const chunks = []
@@ -180,10 +187,16 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { url: callback })
       }
       const returnUri = `${ROOST_PUBLIC_BASE}/api/connectors/callback/${encodeURIComponent(slug)}?state=${encodeURIComponent(state)}&status=connected`
+      const existing = await findNamedConnection(slug, connectionName)
       const data = await gateway('/api/oauth/connection-requests', {
         method: 'POST',
         token: ADMIN,
-        body: { service: slug, returnUri, ...(connectionName === '' ? {} : { connectionName }) }
+        body: {
+          service: slug,
+          returnUri,
+          ...(connectionName === '' ? {} : { connectionName }),
+          ...(existing && typeof existing.id === 'string' ? { appId: existing.id } : {})
+        }
       })
       const urlValue = data && (data.authorizationUrl || data.url || data.redirectUrl)
       if (typeof urlValue !== 'string' || urlValue === '') {
