@@ -255,6 +255,20 @@ test('连接 / 回调 / 断开：owner 起 OAuth，state 一次有效，断开�
   })
 })
 
+test('回调兼容 OpenConnector 的 status=success', async () => {
+  await withApi(async (fx) => {
+    const started = await fx.call('POST', '/api/connectors/github/connect', { body: { workspaceId: fx.wsId }, token: TOKEN })
+    assert.equal(started.status, 201)
+    const callback = await fx.call(
+      'GET',
+      `/api/connectors/callback/github?state=${started.json.state}&status=success&service=github&code=None`,
+    )
+    assert.equal(callback.status, 200, JSON.stringify(callback.json))
+    assert.equal(callback.json.connected, true)
+    assert.equal(fx.store.db.prepare('SELECT COUNT(*) AS n FROM connections WHERE workspace_id = ?').get(fx.wsId).n, 1)
+  })
+})
+
 test('state 校验：篡改、绑定 slug 不符、过期都 400', async () => {
   await withApi(async (fx) => {
     const started = await fx.call('POST', '/api/connectors/github/connect', { body: { workspaceId: fx.wsId }, token: TOKEN })

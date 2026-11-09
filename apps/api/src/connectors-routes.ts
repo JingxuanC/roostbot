@@ -247,8 +247,17 @@ export async function handleConnectorCallback(
   // state 一次有效：先消费，后面的校验失败也不会让同一个 state 被重放。
   pendingStates.delete(state)
 
-  if (status !== 'connected') {
-    return sendError(res, 400, 'connector.oauth_failed', `provider returned status ${status || '(empty)'}`)
+  // OpenConnector 的 callbackReturnUri 会把 returnUri 上的 status 覆盖成
+  // success/error；兼容早期 bridge 直接回调 status=connected。
+  if (status !== 'connected' && status !== 'success') {
+    const code = url.searchParams.get('code') ?? ''
+    const message = url.searchParams.get('message') ?? ''
+    return sendError(
+      res,
+      400,
+      'connector.oauth_failed',
+      `provider returned status ${status || '(empty)'}${code === '' ? '' : ` (${code})`}${message === '' ? '' : `: ${message}`}`,
+    )
   }
 
   let backendStatus: string
