@@ -44,3 +44,4 @@
 - **想改附件/产物界面**：15 → 12 → 24
 | 30 | [native-relay.md](native-relay.md) | Native Relay PoC：用户已有外部 Agent 会话绑定 Room Slot、轮询 assignment、回传 advance |
 | 31 | [daytona-kubernetes.md](daytona-kubernetes.md) | Daytona 与 Kubernetes RuntimeProvider；Kagent 的边界 |
+| 32 | [local-computer.md](local-computer.md) | 本地 Computer / roostd / CLI：把电脑加入 workspace，派发本地 Agent 任务 |
