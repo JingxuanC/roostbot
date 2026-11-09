@@ -223,3 +223,123 @@ CREATE TABLE connector_calls (
 - **断开**只删本地连接并写事件，**没有调用网关撤销 token**（`GatewayBackend` 尚无 revoke 方法）。
 
 遗留：真实网关字段对齐（authorize/status 的 workspaceId/state 透传、accountLabel 回写、目录动作读写标记）、OAuth code→token 交换、网关侧 token 撤销、回调 302 前端页、state 共享存储。
+
+## 13. 多账号连接模型（2026-11-09 修正）
+
+旧模型 `connections UNIQUE(workspace_id, slug)` 把“工作区连接”和“用户账号”合成了一层，导致：
+
+- 一个 workspace 只能有一个 GitHub 账号
+- 多人无法连各自账号
+- bridge 的 `statusFor()`/`call` 不带 named connection，所有 workspace/用户会落到同一个默认 GitHub token
+
+v1 修正为四层，而不是三层：
+
+```text
+Connector App         部署级：GitHub OAuth App 的 clientId/clientSecret
+Connection            账号级：某个用户授权的账号，alias = roost_<hash>
+Workspace Default     workspace+slug 的默认连接
+Bot Grant             bot + connectionId + access/actions
+```
+
+### 数据模型
+
+migration `0027_connector_accounts.sql`：
+
+```sql
+connections (
+  id, workspace_id, slug, backend, status, account_label,
+  account_id, alias, is_default, created_at,
+  UNIQUE (workspace_id, slug, account_id),
+  UNIQUE (workspace_id, alias)
+)
+
+connector_grants (
+  ...,
+  connection_id,   -- null = workspace 默认连接
+  UNIQUE (workspace_id, bot_id, slug)
+)
+```
+
+`connectionAliasFor(workspaceId, accountId, slug)` 生成稳定 alias：
+
+```text
+roost_<sha256(workspaceId + accountId + slug)[0..24]>
+```
+
+### 网关契约
+
+控制面发给 bridge：
+
+```json
+POST /authorize
+{
+  "slug": "github",
+  "workspaceId": "ws_x",
+  "accountId": "acc_y",
+  "connectionName": "roost_abc123",
+  "state": "..."
+}
+```
+
+```json
+POST /call
+{
+  "slug": "github",
+  "action": "list_issues",
+  "args": {},
+  "workspaceId": "ws_x",
+  "botId": "bot_z",
+  "connectionName": "roost_abc123"
+}
+```
+
+bridge 转发 OpenConnector：
+
+```text
+POST /v1/connections/github/connect
+  { returnUri, connectionName }
+
+POST /v1/actions/github.list_issues
+  x-oo-connector-alias: roost_abc123
+
+GET /v1/connections
+  按 connectionName 过滤
+```
+
+### OAuth callback
+
+OAuth App 仍然只需要一个，部署级。
+
+建议：
+
+```text
+https://roostbots.com/oauth/callback
+  → nginx
+  → bridge :3011 /oauth/callback
+  → OpenConnector :3010 /oauth/callback
+  → 302 回 https://roostbots.com/api/connectors/callback/<slug>
+```
+
+bridge 已加未鉴权的 callback 代理；nginx 需要加：
+
+```nginx
+location = /oauth/callback {
+  proxy_pass http://<bridge-host>:3011;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+OpenConnector 设置：
+
+```text
+OOMOL_CONNECT_ORIGIN=https://roostbots.com
+```
+
+### UI 语义
+
+- 任何成员都可以“连接我的账号”
+- 卡片显示当前账号自己的连接；没有自己的连接时显示 workspace 默认
+- owner/admin 在“按 Bot 授权”里选择 Bot 使用哪条连接
+- `connections` 仍只是展示用 account_label，不含 token

@@ -94,6 +94,8 @@ export class HttpGatewayBackend implements GatewayBackend {
     const body: Record<string, unknown> = { slug }
     if (options.workspaceId !== undefined) body['workspaceId'] = options.workspaceId
     if (options.state !== undefined) body['state'] = options.state
+    if (options.accountId !== undefined) body['accountId'] = options.accountId
+    if (options.connectionAlias !== undefined) body['connectionName'] = options.connectionAlias
 
     const response = await this.request('POST', '/authorize', body)
     this.assertOk(response, 'authorize')
@@ -107,6 +109,8 @@ export class HttpGatewayBackend implements GatewayBackend {
   async status(slug: string, options: ConnectorStatusOptions = {}): Promise<ConnectionStatus> {
     const query = new URLSearchParams({ slug })
     if (options.workspaceId !== undefined) query.set('workspaceId', options.workspaceId)
+    if (options.accountId !== undefined) query.set('accountId', options.accountId)
+    if (options.connectionAlias !== undefined) query.set('connectionName', options.connectionAlias)
 
     const response = await this.request('GET', `/status?${query.toString()}`)
     this.assertOk(response, 'status')
@@ -130,6 +134,8 @@ export class HttpGatewayBackend implements GatewayBackend {
       botId: call.botId,
     }
     if (call.idem !== undefined) body['idem'] = call.idem
+    if (call.accountId !== undefined) body['accountId'] = call.accountId
+    if (call.connectionAlias !== undefined) body['connectionName'] = call.connectionAlias
 
     let response: GatewayResponse
     try {

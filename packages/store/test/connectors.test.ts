@@ -37,7 +37,7 @@ function eventsOf(store: Store, kind: string): { payload: Record<string, unknown
     .map((event) => ({ payload: event.payload }))
 }
 
-test('连接：upsert 覆盖、按 workspace 列出、断开幂等并写事件', async () => {
+test('连接：按账号 upsert、多连接、默认连接与断开幂等', async () => {
   await withStore(async (store) => {
     const wsId = seedWorkspace(store)
 
@@ -51,31 +51,74 @@ test('连接：upsert 覆盖、按 workspace 列出、断开幂等并写事件',
       at: NOW,
     })
     assert.equal(first.slug, 'github')
-    assert.equal(first.status, 'connected')
+    assert.equal(first.accountId, 'acc_owner')
+    assert.equal(first.isDefault, true)
+    assert.match(first.alias, /^roost_[a-f0-9]{24}$/)
 
-    // 同一 workspace+slug 覆盖：id 保持不变，状态/展示名更新。
+    // 同一账号再次 upsert：id 保持不变，状态/展示名更新。
     const second = upsertConnection(store, {
       workspaceId: wsId,
       slug: 'github',
       backend: 'openconnector',
       status: 'expired',
       accountLabel: 'dev2@example.com',
-      connectedBy: 'acc_admin',
+      connectedBy: 'acc_owner',
       at: NOW + 1000,
     })
     assert.equal(second.id, first.id)
     assert.equal(second.status, 'expired')
     assert.equal(second.accountLabel, 'dev2@example.com')
     assert.equal(listConnections(store, wsId).length, 1)
-    assert.equal(getConnection(store, wsId, 'github')?.connectedBy, 'acc_admin')
-    assert.equal(getConnection(store, wsId, 'missing'), null)
-    assert.deepEqual(eventsOf(store, 'connector.connected').length, 2)
 
-    assert.equal(deleteConnection(store, { workspaceId: wsId, slug: 'github', by: 'acc_owner', at: NOW + 2000 }), true)
-    assert.equal(deleteConnection(store, { workspaceId: wsId, slug: 'github', by: 'acc_owner', at: NOW + 3000 }), false)
+    // 另一个账号可以有自己的连接；不会覆盖第一个人的连接。
+    const other = upsertConnection(store, {
+      workspaceId: wsId,
+      slug: 'github',
+      backend: 'openconnector',
+      status: 'connected',
+      accountLabel: 'other@example.com',
+      connectedBy: 'acc_other',
+      at: NOW + 2000,
+    })
+    assert.notEqual(other.id, first.id)
+    assert.equal(other.isDefault, false)
+    assert.equal(getConnection(store, wsId, 'github')?.id, first.id)
+    assert.equal(getConnection(store, wsId, 'github', 'acc_other')?.id, other.id)
+    assert.equal(getConnection(store, wsId, 'missing'), null)
+    assert.deepEqual(eventsOf(store, 'connector.connected').length, 3)
+
+    assert.equal(deleteConnection(store, { workspaceId: wsId, slug: 'github', accountId: 'acc_other', by: 'acc_owner', at: NOW + 3000 }), true)
+    assert.equal(getConnection(store, wsId, 'github', 'acc_other'), null)
+    assert.equal(getConnection(store, wsId, 'github')?.id, first.id)
+    assert.equal(deleteConnection(store, { workspaceId: wsId, slug: 'github', by: 'acc_owner', at: NOW + 4000 }), true)
+    assert.equal(deleteConnection(store, { workspaceId: wsId, slug: 'github', by: 'acc_owner', at: NOW + 5000 }), false)
     assert.equal(getConnection(store, wsId, 'github'), null)
-    assert.equal(eventsOf(store, 'connector.disconnected').length, 1)
+    assert.equal(eventsOf(store, 'connector.disconnected').length, 2)
     assert.deepEqual(eventsOf(store, 'connector.disconnected')[0]!.payload['slug'], 'github')
+  })
+})
+
+test('授权：可以绑定到 workspace 里的某条连接', async () => {
+  await withStore(async (store) => {
+    const wsId = seedWorkspace(store)
+    const owner = upsertConnection(store, {
+      workspaceId: wsId, slug: 'github', backend: 'openconnector', status: 'connected',
+      connectedBy: 'acc_owner', at: NOW,
+    })
+    const other = upsertConnection(store, {
+      workspaceId: wsId, slug: 'github', backend: 'openconnector', status: 'connected',
+      connectedBy: 'acc_other', at: NOW + 1,
+    })
+    const grant = setGrant(store, {
+      workspaceId: wsId, botId: 'bot_analyst', slug: 'github', access: 'read',
+      connectionId: other.id, grantedBy: 'acc_owner', at: NOW + 2,
+    })
+    assert.equal(grant.connectionId, other.id)
+    assert.notEqual(grant.connectionId, owner.id)
+    assert.throws(() => setGrant(store, {
+      workspaceId: wsId, botId: 'bot_other', slug: 'github', access: 'read',
+      connectionId: 'conn_missing', grantedBy: 'acc_owner', at: NOW + 3,
+    }), /not a github connection/)
   })
 })
 

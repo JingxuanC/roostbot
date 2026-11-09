@@ -95,6 +95,12 @@ export function actionsText(value) {
 
 // ---- 授权 ------------------------------------------------------------------
 
+export function canConnectConnectors(role) {
+  const value = asText(role)
+  // 任意成员都可以连接自己的账号；角色未知时先放出控件，由服务端兜底。
+  return value === '' || value === 'owner' || value === 'admin' || value === 'viewer'
+}
+
 export function canManageConnectors(role) {
   const value = asText(role)
   // 角色未知时先放出控件，让服务端 403 给出权威结果（与定时任务页一致）。
@@ -193,6 +199,8 @@ export function connectorGrantPayload(input = {}) {
   const access = asText(input.access)
   if (workspaceId === '' || botId === '' || (access !== 'read' && access !== 'write')) return null
   const payload = { workspaceId, botId, access }
+  const connectionId = asText(input.connectionId)
+  if (connectionId !== '') payload.connectionId = connectionId
   const normalized = normalizeActionList(input.actions)
   if (normalized.ok && normalized.actions.length > 0) payload.actions = normalized.actions
   return payload

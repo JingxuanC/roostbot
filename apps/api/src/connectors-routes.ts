@@ -43,10 +43,12 @@ import {
 } from '../../../packages/store/src/approvals.ts'
 import {
   StoreError,
+  connectionAliasFor,
   deleteConnection,
   findCallByIdem,
   findGrant,
   getConnection,
+  getConnectionById,
   getWorkspaceRole,
   listConnections,
   listGrants,
@@ -73,6 +75,7 @@ interface PendingState {
   workspaceId: string
   accountId: string
   slug: string
+  alias: string
   expiresAt: number
 }
 
@@ -121,12 +124,31 @@ export async function handleListConnectors(
   }
 
   const connections = listConnections(store, workspaceId)
-  const bySlug = new Map(connections.map((connection) => [connection.slug, connection]))
-  const connectors = catalog.map((summary) => connectorCard(summary, bySlug.get(summary.slug)))
+  const mineBySlug = new Map(
+    connections
+      .filter((connection) => connection.accountId === auth.accountId)
+      .map((connection) => [connection.slug, connection]),
+  )
+  const defaultBySlug = new Map(
+    connections
+      .filter((connection) => connection.isDefault)
+      .map((connection) => [connection.slug, connection]),
+  )
+  const card = (summary: ConnectorSummary): Record<string, unknown> => {
+    const mine = mineBySlug.get(summary.slug)
+    const fallback = defaultBySlug.get(summary.slug) ?? connections.find((connection) => connection.slug === summary.slug)
+    const selected = mine ?? fallback
+    return connectorCard(summary, selected, {
+      mine: mine !== undefined,
+      myConnectionId: mine?.id ?? null,
+      connectionCount: connections.filter((connection) => connection.slug === summary.slug).length,
+    })
+  }
+  const connectors = catalog.map(card)
   // 目录里没有、但本地已连接的（例如后端临时不可达）也要让用户看到并断开。
   for (const connection of connections) {
     if (!catalog.some((summary) => summary.slug === connection.slug)) {
-      connectors.push(connectorCard({ slug: connection.slug, title: connection.slug, backend: connection.backend, actions: [] }, connection))
+      connectors.push(card({ slug: connection.slug, title: connection.slug, backend: connection.backend, actions: [] }))
     }
   }
 
@@ -168,23 +190,30 @@ export async function handleConnectorConnect(
   if (workspaceId === null) {
     return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
   }
-  if (!isAdmin(store, workspaceId, auth.accountId)) {
-    return sendError(res, 403, 'forbidden', `workspace ${workspaceId} requires owner/admin role`)
+  if (getWorkspaceRole(store, workspaceId, auth.accountId) === null) {
+    return sendError(res, 403, 'forbidden', `account is not a member of workspace ${workspaceId}`)
   }
 
   // state 必须先于 gateway.authorize 生成并传下去：网关要把 state 拼进最终
   // 回调 URL，否则浏览器完成授权后回不到本服务的 callback。
   const state = randomBytes(24).toString('hex')
+  const alias = connectionAliasFor(workspaceId, auth.accountId, slug)
   pendingStates.set(state, {
     workspaceId,
     accountId: auth.accountId,
     slug,
+    alias,
     expiresAt: ctx.now() + CONNECTOR_STATE_TTL_MS,
   })
 
   let urlValue: string
   try {
-    const authorized = await ctx.connectorBackend.authorize(slug, { workspaceId, state })
+    const authorized = await ctx.connectorBackend.authorize(slug, {
+      workspaceId,
+      state,
+      accountId: auth.accountId,
+      connectionAlias: alias,
+    })
     urlValue = authorized.url
   } catch (err) {
     pendingStates.delete(state)
@@ -224,7 +253,11 @@ export async function handleConnectorCallback(
 
   let backendStatus: string
   try {
-    backendStatus = await ctx.connectorBackend.status(slug)
+    backendStatus = await ctx.connectorBackend.status(slug, {
+      workspaceId: pending.workspaceId,
+      accountId: pending.accountId,
+      connectionAlias: pending.alias,
+    })
   } catch (err) {
     return sendBackendFailure(res, err)
   }
@@ -240,6 +273,7 @@ export async function handleConnectorCallback(
       status: 'connected',
       accountLabel: null,
       connectedBy: pending.accountId,
+      alias: pending.alias,
       at: ctx.now(),
     })
     // v0 没有前端回调页：直接返回 JSON；接入前端后改成 302 到 /connectors。
@@ -268,12 +302,45 @@ export async function handleDeleteConnector(
   if (workspaceId === null) {
     return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
   }
-  if (!isAdmin(store, workspaceId, auth.accountId)) {
-    return sendError(res, 403, 'forbidden', `workspace ${workspaceId} requires owner/admin role`)
+  const role = getWorkspaceRole(store, workspaceId, auth.accountId)
+  if (role === null) {
+    return sendError(res, 403, 'forbidden', `account is not a member of workspace ${workspaceId}`)
   }
 
+  const requestedId = readId(url.searchParams.get('connectionId'))
   try {
-    deleteConnection(store, { workspaceId, slug, by: auth.accountId, at: ctx.now() })
+    if (requestedId !== null) {
+      const connection = getConnectionById(store, workspaceId, requestedId)
+      if (connection === null || connection.slug !== slug) {
+        return sendError(res, 404, 'connector.not_found', 'connection not found')
+      }
+      if (connection.accountId !== auth.accountId && role !== 'owner' && role !== 'admin') {
+        return sendError(res, 403, 'forbidden', 'only the connection owner or workspace admin may disconnect it')
+      }
+      deleteConnection(store, {
+        workspaceId,
+        slug,
+        connectionId: requestedId,
+        by: auth.accountId,
+        at: ctx.now(),
+      })
+    } else {
+      // 普通成员只能断开自己的连接；owner/admin 没有自己的连接时退回默认连接。
+      const mine = getConnection(store, workspaceId, slug, auth.accountId)
+      const target = mine ?? (role === 'owner' || role === 'admin' ? getConnection(store, workspaceId, slug) : null)
+      if (target === null) {
+        res.writeHead(204, { 'cache-control': 'no-store' })
+        res.end()
+        return
+      }
+      deleteConnection(store, {
+        workspaceId,
+        slug,
+        accountId: target.accountId,
+        by: auth.accountId,
+        at: ctx.now(),
+      })
+    }
   } catch (err) {
     return sendConnectorFailure(res, err)
   }
@@ -346,6 +413,12 @@ export async function handlePutConnectorGrant(
   if (actions === INVALID) {
     return sendError(res, 400, 'invalid_body', `actions must be an array of 1..${MAX_ACTION_CHARS}-char strings`)
   }
+  const connectionId = body['connectionId'] === undefined || body['connectionId'] === null
+    ? null
+    : readId(body['connectionId'])
+  if (body['connectionId'] !== undefined && body['connectionId'] !== null && connectionId === null) {
+    return sendError(res, 400, 'invalid_body', 'connectionId must be a non-empty string when present')
+  }
   if (!isAdmin(store, workspaceId, auth.accountId)) {
     return sendError(res, 403, 'forbidden', `workspace ${workspaceId} requires owner/admin role`)
   }
@@ -357,6 +430,7 @@ export async function handlePutConnectorGrant(
       slug,
       access,
       actions,
+      connectionId,
       grantedBy: auth.accountId,
       at: ctx.now(),
     })
@@ -429,19 +503,25 @@ export async function handleInternalConnectorCall(
     })
   }
 
-  // 2) 连接必须 connected。
-  const connection = getConnection(store, workspaceId, slug)
-  if (connection === null || connection.status !== 'connected') return deny('not_connected')
-
   // 3) 授权必须存在，且动作在 allowlist 内。
   const grant = findGrant(store, workspaceId, botId, slug)
   if (grant === null) return deny('no_grant')
+
+  // 2) 连接必须 connected：优先使用 Bot 授权指定的 connection，否则用 workspace 默认连接。
+  const connection = grant.connectionId === null
+    ? getConnection(store, workspaceId, slug)
+    : getConnectionById(store, workspaceId, grant.connectionId)
+  if (connection === null || connection.slug !== slug || connection.status !== 'connected') {
+    return deny('not_connected')
+  }
+
   const backendGrant: ConnectorGrant = {
     workspaceId,
     botId,
     slug,
     access: grant.access,
     ...(grant.actions === null ? {} : { actions: grant.actions }),
+    connectionId: connection.id,
   }
   if (!isActionGranted(backendGrant, action)) return deny('action_not_granted')
 
@@ -478,7 +558,16 @@ export async function handleInternalConnectorCall(
   let result: CallResult
   try {
     result = await ctx.connectorBackend.call(
-      { workspaceId, botId, slug, action, args, ...(idem === null ? {} : { idem }) },
+      {
+        workspaceId,
+        botId,
+        slug,
+        action,
+        args,
+        ...(idem === null ? {} : { idem }),
+        connectionAlias: connection.alias,
+        accountId: connection.accountId,
+      },
       backendGrant,
     )
   } catch (err) {
@@ -516,7 +605,17 @@ export async function handleInternalConnectorCall(
 
 // ---- 序列化 ------------------------------------------------------------------
 
-function connectorCard(summary: ConnectorSummary, connection: Connection | undefined): Record<string, unknown> {
+interface ConnectorCardOptions {
+  mine?: boolean
+  myConnectionId?: string | null
+  connectionCount?: number
+}
+
+function connectorCard(
+  summary: ConnectorSummary,
+  connection: Connection | undefined,
+  options: ConnectorCardOptions = {},
+): Record<string, unknown> {
   return {
     slug: summary.slug,
     title: summary.title,
@@ -525,6 +624,13 @@ function connectorCard(summary: ConnectorSummary, connection: Connection | undef
     connected: connection?.status === 'connected',
     status: connection?.status ?? null,
     accountLabel: connection?.accountLabel ?? null,
+    connectionId: connection?.id ?? null,
+    connectionOwner: connection?.accountId ?? null,
+    alias: connection?.alias ?? null,
+    isDefault: connection?.isDefault ?? false,
+    isMine: options.mine ?? false,
+    myConnectionId: options.myConnectionId ?? null,
+    connectionCount: options.connectionCount ?? 0,
   }
 }
 
@@ -536,7 +642,10 @@ function connectionJson(connection: Connection): Record<string, unknown> {
     backend: connection.backend,
     status: connection.status,
     accountLabel: connection.accountLabel,
+    accountId: connection.accountId,
     connectedBy: connection.connectedBy,
+    alias: connection.alias,
+    isDefault: connection.isDefault,
     createdAt: connection.createdAt,
   }
 }
@@ -549,6 +658,7 @@ function grantJson(grant: ConnectorGrantRow): Record<string, unknown> {
     slug: grant.slug,
     access: grant.access,
     actions: grant.actions,
+    connectionId: grant.connectionId,
     grantedBy: grant.grantedBy,
     createdAt: grant.createdAt,
   }

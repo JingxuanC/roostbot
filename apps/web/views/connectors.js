@@ -12,6 +12,7 @@
 import { isAuthError } from '../lib/api-client.js'
 import { el } from '../lib/dom.js'
 import {
+  canConnectConnectors,
   canManageConnectors,
   connectorErrorText,
   isConnectorForbidden,
@@ -40,7 +41,8 @@ async function fetchConnectors(ctx, workspaceId) {
     const rows = Array.isArray(data?.connectors)
       ? data.connectors.filter((item) => item && typeof item === 'object')
       : []
-    return { auth: null, slot: { mode: 'ready', rows, error: null } }
+    const connections = Array.isArray(data?.connections) ? data.connections.filter((item) => item && typeof item === 'object') : []
+    return { auth: null, slot: { mode: 'ready', rows, connections, error: null } }
   } catch (error) {
     if (isAuthError(error)) return { auth: error, slot: { mode: 'error', rows: [], error } }
     if (isConnectorForbidden(error)) return { auth: null, slot: { mode: 'forbidden', rows: [], error } }
@@ -80,7 +82,7 @@ export async function mountConnectorsPage(root, ctx) {
     workspaceId,
     // 角色只用于「显示管理控件」；拿不到时先放出控件，由服务端 403 兜底。
     role: '',
-    connectors: { mode: 'loading', rows: [], error: null },
+    connectors: { mode: 'loading', rows: [], connections: [], error: null },
     bots: [],
   }
 
@@ -191,7 +193,7 @@ function render(root, ctx, state) {
     return
   }
 
-  const manage = canManageConnectors(state.role)
+  const manage = canConnectConnectors(state.role)
   const list = el('ul', { class: 'connector-grid' })
   for (const connector of connectors) {
     list.append(connectorCard(ctx, state, connector, remount, manage))
@@ -201,10 +203,10 @@ function render(root, ctx, state) {
     header,
     ui.section('连接器目录', [list], {
       description: manage
-        ? '连接与断开需要 owner/admin；授权在页面下方的「按 Bot 授权」里单独管理。'
-        : '连接与断开需要 owner/admin；当前账号可以查看目录与连接状态。',
+        ? '每个成员连接自己的账号；Bot 默认使用 workspace 默认连接，也可以在上方「按 Bot 授权」里指定连接。'
+        : '当前账号可以查看目录与连接状态。',
     }),
   ]
-  parts.push(connectorGrantsSection(ctx, { ...state, connectors }))
+  parts.push(connectorGrantsSection(ctx, { ...state, connectors, connections: slot.connections || [] }))
   root.replaceChildren(el('div', { class: 'stack' }, parts))
 }

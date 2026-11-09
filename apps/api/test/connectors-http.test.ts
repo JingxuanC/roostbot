@@ -92,6 +92,7 @@ test('server 默认按环境变量使用 HTTP 网关（目录/授权/回调）',
   })
   assert.equal(created.status, 201)
   const workspaceId = created.json.workspace.id as string
+  const harnessAccountId = created.json.workspace.ownerId ?? created.json.workspace.createdBy ?? created.json.workspace.accountId
 
   const listed = await harness.call('GET', `/api/connectors?workspaceId=${workspaceId}`, { token })
   assert.equal(listed.status, 200)
@@ -123,6 +124,14 @@ test('server 默认按环境变量使用 HTTP 网关（目录/授权/回调）',
   assert.ok(gatewayCalls.some((call) => call.startsWith('GET /status?')))
   const authorize = gateway.requests.find((request) => request.path === '/authorize')
   assert.equal(authorize?.body.slug, 'github')
+  assert.equal(typeof authorize?.body.accountId, 'string')
+  assert.ok(authorize?.body.accountId.length > 0)
+  assert.match(String(authorize?.body.connectionName), /^roost_[a-f0-9]{24}$/)
+  const statusCall = gateway.requests.find((request) => request.path.startsWith('/status?'))
+  assert.ok(statusCall)
+  assert.equal(statusCall.headers['authorization'], 'Bearer tok_api_secret')
+  assert.match(statusCall.path, /connectionName=roost_/)
+  assert.match(statusCall.path, /accountId=/)
   // HTTP 适配器只在配置了 token 时发 Bearer；所有网关请求都应带上。
   for (const request of gateway.requests) {
     assert.equal(request.headers['authorization'], 'Bearer tok_api_secret')

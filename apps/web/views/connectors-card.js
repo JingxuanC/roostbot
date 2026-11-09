@@ -45,6 +45,8 @@ export function connectorCard(ctx, page, connector, remount, manage) {
   const account = typeof connector.accountLabel === 'string' ? connector.accountLabel.trim() : ''
   const actions = connectorActions(connector)
   const connected = isConnectorConnected(connector)
+  const isMine = connector.isMine === true
+  const connectionCount = Number.isInteger(connector.connectionCount) ? connector.connectionCount : 0
 
   const item = el('li', { class: 'connector-card-item' })
   const card = el('article', { class: 'connector-card' })
@@ -56,6 +58,8 @@ export function connectorCard(ctx, page, connector, remount, manage) {
 
   const meta = [`slug ${slug || '（缺失）'}`, backend]
   if (account !== '') meta.push(`账户 ${account}`)
+  if (connected && !isMine) meta.push('workspace 默认连接')
+  if (connectionCount > 1) meta.push(`${connectionCount} 个连接`)
   card.append(el('p', { class: 'connector-card-meta muted', text: meta.join(' · ') }))
   card.append(el('p', { class: 'connector-card-actions', text: `动作：${actionsText(actions)}` }))
 
@@ -68,13 +72,13 @@ export function connectorCard(ctx, page, connector, remount, manage) {
     actionsHost.append(
       el('span', {
         class: 'field-hint',
-        text: connected ? '仅 owner/admin 可断开。' : '仅 owner/admin 可发起连接。',
+        text: '当前账号只能查看连接状态。',
       })
     )
     return item
   }
 
-  if (connected) {
+  if (connected && isMine) {
     const disconnect = ui.button('断开', {
       variant: 'ghost',
       size: 'sm',
@@ -85,7 +89,7 @@ export function connectorCard(ctx, page, connector, remount, manage) {
     return item
   }
 
-  const connect = ui.button(connectButtonLabel(connector.status), { variant: 'primary', size: 'sm' })
+  const connect = ui.button(connected ? '连接我的账号' : connectButtonLabel(connector.status), { variant: 'primary', size: 'sm' })
   const complete = ui.button('我已完成授权', { variant: 'ghost', size: 'sm' })
   complete.hidden = true
   complete.addEventListener('click', remount)

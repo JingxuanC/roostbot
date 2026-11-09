@@ -68,6 +68,7 @@ export function connectorGrantsSection(ctx, page) {
   }
 
   const bots = Array.isArray(page.bots) ? page.bots : []
+  const connections = Array.isArray(page.connections) ? page.connections : []
   const options = botOptions(bots)
   if (options.length === 0) {
     section.append(
@@ -152,6 +153,21 @@ export function connectorGrantsSection(ctx, page) {
       options: GRANT_ACCESS_OPTIONS,
       value: grant && (grant.access === 'read' || grant.access === 'write') ? grant.access : 'read',
     })
+    const connectorConnections = connections.filter((connection) => connection && connection.slug === slug)
+    const selectedConnectionId = grant && typeof grant.connectionId === 'string' ? grant.connectionId : ''
+    const connectionSelect = connectorConnections.length === 0
+      ? null
+      : ui.select({
+          id: `connector-grant-connection-${slug}`,
+          options: [
+            { value: '', label: 'Workspace 默认连接' },
+            ...connectorConnections.map((connection) => ({
+              value: connection.id,
+              label: `${connection.accountLabel || connection.accountId}${connection.isDefault ? '（默认）' : ''}`,
+            })),
+          ],
+          value: selectedConnectionId,
+        })
     const checks = known.length > 0
       ? ui.checkboxList({
           legend: '动作（不勾选 = 该权限下全部动作）',
@@ -179,6 +195,7 @@ export function connectorGrantsSection(ctx, page) {
       ui.badge(slug, 'accent'),
     ])
     form.append(head, summary, access.node)
+    if (connectionSelect) form.append(ui.field('Bot 使用的连接', connectionSelect, { id: `connector-grant-connection-${slug}`, hint: '不指定时使用 workspace 默认连接。' }))
     if (checks) form.append(checks.node)
     else form.append(el('p', { class: 'field-hint', text: '这个连接器还没有公开动作清单；可以在下面手填动作名。' }))
     form.append(
@@ -210,6 +227,7 @@ export function connectorGrantsSection(ctx, page) {
         botId,
         access: result.access,
         actions: result.actions,
+        connectionId: connectionSelect ? connectionSelect.value : '',
       })
       if (payload === null) {
         ui.setError(error, '授权请求不完整，请刷新页面后重试。')

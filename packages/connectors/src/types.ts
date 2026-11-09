@@ -20,6 +20,8 @@ export interface ConnectorGrant {
   access: ConnectorAccess
   /** 为空表示该 access 下的全部动作。 */
   actions?: string[]
+  /** 指定使用哪条 named connection；为空表示 workspace 默认连接。 */
+  connectionId?: string
 }
 
 export interface ConnectorCall {
@@ -30,6 +32,10 @@ export interface ConnectorCall {
   args: unknown
   /** 幂等键：有副作用的动作必填，防止重复发信/重复下单。 */
   idem?: string
+  /** 网关 named connection；由控制面按 workspace/account 生成。 */
+  connectionAlias?: string
+  /** 授权该连接的用户账号；用于审计/网关隔离。 */
+  accountId?: string
 }
 
 export type CallResult =
@@ -40,11 +46,17 @@ export type CallResult =
 export interface ConnectorAuthorizeOptions {
   workspaceId?: string
   state?: string
+  /** 发起授权的账号；网关用它创建 per-user named connection。 */
+  accountId?: string
+  /** 控制面生成的稳定 named connection 名称。 */
+  connectionAlias?: string
 }
 
 /** 查询连接状态的附加上下文；可选，兼容只传 slug 的旧调用方。 */
 export interface ConnectorStatusOptions {
   workspaceId?: string
+  accountId?: string
+  connectionAlias?: string
 }
 
 export interface GatewayBackend {
