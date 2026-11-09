@@ -140,7 +140,7 @@ roost daemon start
 {"mcpServers":{"roost":{"command":"roost","args":["mcp","serve"]}}}
 ```
 
-也可以在 Web 设置页「本地电脑」里直接选择电脑 / 项目 / Bot / Agent 绑定。
+也可以在 Web 设置页「电脑与绑定」里直接选择电脑 / 项目 / Bot / Agent 绑定。
 
 之后房间里的这个 Bot 会把轮次派给本地 `roostd`，在本机目录启动 Agent，
 结果回到房间。本地路径只保存在 `~/.roost`，不上传云端。
