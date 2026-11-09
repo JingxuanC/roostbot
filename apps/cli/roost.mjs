@@ -12,11 +12,12 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync, chmodSync, renameSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, openSync, closeSync, readFileSync, realpathSync, writeFileSync, chmodSync, renameSync, unlinkSync } from 'node:fs'
 import { homedir, hostname, platform, arch, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
+const CLI_VERSION = '0.1.0'
 const DEFAULT_SERVER = 'http://127.0.0.1:8787'
 const CONFIG_VERSION = 1
 const DEFAULT_AGENT_COMMANDS = {
@@ -815,6 +816,7 @@ Env: ROOST_API, ROOST_HOME, ROOST_SESSION_TOKEN
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  if (argv.includes('--version') || argv.includes('-v')) { console.log(`roost ${CLI_VERSION}`); return }
   const { positional, flags } = parseArgs(argv)
   const [command, sub] = positional
   if (command === undefined || command === 'help' || flags.help) { usage(); return }
@@ -854,6 +856,15 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isMainModule() {
+  if (!process.argv[1]) return false
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href
+  }
+}
+
+if (isMainModule()) {
   await main()
 }

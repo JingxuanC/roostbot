@@ -1,0 +1,30 @@
+name: release-cli
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - name: Build portable CLI release
+        run: node scripts/package-cli.mjs
+      - name: Upload CLI assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: roost-cli
+          path: |
+            dist/cli/**
+            dist/roost-cli-*.tar.gz
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/roost-cli-*.tar.gz
+            dist/cli/**/checksums.txt

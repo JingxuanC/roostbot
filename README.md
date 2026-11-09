@@ -121,7 +121,19 @@ ROOST_CP_PORT=8787
 
 ## 本地电脑（Computer / roostd）
 
-把本地电脑接入 workspace，让某个 Bot 在本机运行：
+安装 CLI（需要 Node ≥ 22.18）：
+
+```sh
+curl -fsSL https://www.roostbots.com/downloads/cli/v0.1.0/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://www.roostbots.com/downloads/cli/v0.1.0/install.ps1 | iex
+```
+
+然后把本地电脑接入 workspace，让某个 Bot 在本机运行：
 
 ```sh
 # 在 Web 设置页生成 CLI 令牌
