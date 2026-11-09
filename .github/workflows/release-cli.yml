@@ -21,10 +21,19 @@ jobs:
           path: |
             dist/cli/**
             dist/roost-cli-*.tar.gz
+            dist/roost-cli-*.tgz
+      - name: Publish npm package
+        if: startsWith(github.ref, 'refs/tags/') && env.NPM_TOKEN != ''
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > ~/.npmrc
+          npm publish dist/npm/package --access public
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/roost-cli-*.tar.gz
+            dist/roost-cli-*.tgz
             dist/cli/**/checksums.txt

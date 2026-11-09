@@ -15,7 +15,8 @@
     "release": "node scripts/release.mjs",
     "e2e": "sh scripts/e2e-cloud.sh",
     "site": "node scripts/serve-site.mjs",
-    "package:cli": "node scripts/package-cli.mjs"
+    "package:cli": "node scripts/package-cli.mjs",
+    "package:npm": "node scripts/package-cli.mjs"
   },
   "license": "Apache-2.0",
   "type": "module",

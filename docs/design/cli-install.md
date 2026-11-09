@@ -22,13 +22,39 @@ dist/roost-cli-v<version>.tar.gz
 node scripts/package-cli.mjs
 ```
 
+产物同时包含 npm 包：
+
+```text
+dist/roost-cli-0.1.0.tgz   # npm install -g roost-cli
+```
+
 当前发布地址：
 
 ```text
 https://www.roostbots.com/downloads/cli/v0.1.0/
 ```
 
-安装：
+### npm（推荐）
+
+```bash
+npm install -g roost-cli
+roost --version
+```
+
+如果 npm registry 还没发布，下载 tarball 后本地安装：
+
+```bash
+curl -fLO https://www.roostbots.com/downloads/cli/v0.1.0/roost-cli-0.1.0.tgz
+npm install -g ./roost-cli-0.1.0.tgz
+```
+
+npm 12 直接安装远程 tarball 需要：
+
+```bash
+npm install -g --allow-remote=all <url>
+```
+
+### 不依赖 npm 的便携安装器
 
 ```bash
 curl -fsSL https://www.roostbots.com/downloads/cli/v0.1.0/install.sh | sh

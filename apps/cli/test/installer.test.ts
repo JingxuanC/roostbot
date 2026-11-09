@@ -15,6 +15,7 @@ test('package-cli creates a checksummed installer and the wrapper runs', () => {
   const sums = readFileSync(join(assets, 'checksums.txt'), 'utf8')
   assert.match(sums, /  roost\.mjs\n/)
   assert.match(sums, /  install\.sh\n/)
+  assert.ok(readFileSync(join(assets, `roost-cli-${pkg.version}.tgz`)).byteLength > 0)
 
   const dir = mkdtempSync(join(tmpdir(), 'roost-installer-'))
   try {

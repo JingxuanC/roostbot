@@ -124,6 +124,21 @@ ROOST_CP_PORT=8787
 安装 CLI（需要 Node ≥ 22.18）：
 
 ```sh
+npm install -g roost-cli
+```
+
+如果 npm registry 还没发布，可以下载 tarball 后本地安装：
+
+```sh
+curl -fLO https://www.roostbots.com/downloads/cli/v0.1.0/roost-cli-0.1.0.tgz
+npm install -g ./roost-cli-0.1.0.tgz
+```
+
+npm 12 直接安装远程 tarball 需要 `--allow-remote=all`。
+
+不用 npm 的便携安装器：
+
+```sh
 curl -fsSL https://www.roostbots.com/downloads/cli/v0.1.0/install.sh | sh
 ```
 
