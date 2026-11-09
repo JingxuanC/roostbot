@@ -5,7 +5,7 @@
 //   roost setup [--token ...] [--name "MacBook Pro"] [--no-daemon]
 //   roost computer list
 //   roost bind <workspaceId> --bot <botId> --agent claude-code --path ./project
-//   roost daemon start|stop|status|logs|run
+//   roost daemon start [--concurrency N]|stop|status|logs|run
 //   roost status
 //
 // 本地 binding 的 workdir 只存在 ~/.roost/config.json，不上传云端。
@@ -187,23 +187,60 @@ async function computerList(flags) {
   }
 }
 
+function projectIdFor(path) {
+  return `proj_${createHash('sha256').update(path).digest('hex').slice(0, 12)}`
+}
+
+function projectAdd(flags, positional) {
+  const raw = positional[0]
+  if (raw === undefined) throw new Error('usage: roost project add <path> [--label <name>]')
+  const path = resolve(raw)
+  if (!existsSync(path)) throw new Error(`project path does not exist: ${path}`)
+  const config = readConfig()
+  const id = projectIdFor(path)
+  const label = String(flags.label || path.split('/').filter(Boolean).pop() || 'project').slice(0, 80)
+  config.projects = { ...(config.projects || {}), [id]: { id, label, path } }
+  writeConfig(config)
+  console.log(`project ${id}: ${label} (${path})`)
+}
+
+function projectsList(flags) {
+  const config = readConfig()
+  const projects = Object.values(config.projects || {})
+  if (flags.json) { console.log(JSON.stringify(projects, null, 2)); return }
+  for (const project of projects) console.log(`${project.id}\t${project.label}\t${project.path}`)
+}
+
+function projectForBinding(config, bindingId) {
+  const local = config.bindings && config.bindings[bindingId]
+  if (local && local.projectId && config.projects && config.projects[local.projectId]) return config.projects[local.projectId]
+  if (local) return local
+  return null
+}
+
 async function bind(flags, positional) {
   const workspaceId = positional[0]
   const botId = String(flags.bot || '')
   const agent = String(flags.agent || 'claude-code')
-  const dir = resolve(String(flags.path || process.cwd()))
-  if (!workspaceId || !botId) throw new Error('usage: roost bind <workspaceId> --bot <botId> --agent <kind> --path <dir>')
   const config = readConfig()
+  let project = null
+  if (typeof flags.project === 'string' && flags.project !== '') {
+    project = config.projects && config.projects[flags.project]
+    if (!project) throw new Error(`unknown project ${flags.project}; run roost project add <path> first`)
+  }
+  const dir = project ? project.path : resolve(String(flags.path || process.cwd()))
+  if (!workspaceId || !botId) throw new Error('usage: roost bind <workspaceId> --bot <botId> --agent <kind> [--path <dir> | --project <id>]')
   const computer = await registerComputer(flags, config, config.computer)
-  const label = String(flags.label || dir.split('/').filter(Boolean).pop() || 'project').slice(0, 80)
+  const label = String(flags.label || (project && project.label) || dir.split('/').filter(Boolean).pop() || 'project').slice(0, 80)
   const result = await request(config, flags, 'POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/computer-bindings`, {
     computerId: computer.id,
     botId,
     agentKind: agent,
+    ...(project ? { projectId: project.id } : {}),
     workdirLabel: label,
   }, tokenOf(flags, config))
   const binding = result.binding
-  config.bindings = { ...(config.bindings || {}), [binding.id]: { workspaceId, botId, agentKind: agent, workdir: dir } }
+  config.bindings = { ...(config.bindings || {}), [binding.id]: { workspaceId, botId, agentKind: agent, ...(project ? { projectId: project.id } : {}), workdir: dir } }
   writeConfig(config)
   console.log(`bound ${binding.id}: ${botId} -> ${dir}`)
 }
@@ -412,12 +449,15 @@ async function postHeartbeat(config, flags, body, signal) {
 }
 
 async function runJob(config, flags, job) {
-  const local = config.bindings && config.bindings[job.bindingId]
+  const local = projectForBinding(config, job.bindingId)
+  const payloadProjectId = job.payload?.binding?.projectId
+  const project = payloadProjectId && config.projects ? config.projects[payloadProjectId] : null
   let result
-  if (!local) {
+  if (!local && !project) {
     result = { kind: 'failed', code: 'binding_not_local', message: `binding ${job.bindingId} is not configured on this computer` }
   } else {
-    const agentKind = job.payload?.binding?.agentKind || local.agentKind || 'claude-code'
+    const workdir = local?.workdir || local?.path || project?.path
+    const agentKind = job.payload?.binding?.agentKind || local?.agentKind || 'claude-code'
     let command
     try { command = agentCommand(config, agentKind) } catch (error) {
       result = { kind: 'failed', code: 'agent_unconfigured', message: error instanceof Error ? error.message : String(error) }
@@ -431,10 +471,14 @@ async function runJob(config, flags, job) {
           } catch { /* final result is still authoritative */ }
         })
       }
-      const ran = await runAgent(command, String(job.payload?.prompt || ''), local.workdir, 240_000, postDelta)
+      if (typeof workdir !== 'string' || workdir === '') {
+        result = { kind: 'failed', code: 'project_missing', message: 'no local workdir for this binding' }
+      } else {
+      const ran = await runAgent(command, String(job.payload?.prompt || ''), workdir, 240_000, postDelta)
       await deltaChain
       if (ran.code === 0 && ran.stdout.trim() !== '') result = { kind: 'posted', text: ran.stdout.trim() }
       else result = { kind: 'failed', code: 'agent_exit', message: (ran.stderr || ran.stdout || `agent exited ${ran.code}`).trim().slice(0, 2000) }
+      }
     }
   }
   try {
@@ -445,53 +489,262 @@ async function runJob(config, flags, job) {
   }
 }
 
+const MCP_PROTOCOL_VERSION = '2024-11-05'
+
+function mcpTools() {
+  return [
+    {
+      name: 'roost_list_computers',
+      description: 'List computers registered to the signed-in Roost account, with online status and capabilities.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'roost_computer_status',
+      description: 'Show the configured local computer, its agent capabilities and its active bindings.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'roost_projects',
+      description: 'List local projects registered with `roost project add`. Returns ids and labels; absolute paths stay local.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'roost_bind_bot',
+      description: 'Bind a Bot in a workspace to this computer and a registered local project. The workdir is resolved locally by roostd.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          botId: { type: 'string' },
+          agentKind: { type: 'string', enum: ['claude-code', 'codex', 'grok-build', 'dsh'] },
+          projectId: { type: 'string' },
+          workdirLabel: { type: 'string' },
+        },
+        required: ['workspaceId', 'botId', 'agentKind', 'projectId'],
+      },
+    },
+    {
+      name: 'roost_unbind_bot',
+      description: 'Remove an active computer binding by binding id.',
+      inputSchema: { type: 'object', properties: { bindingId: { type: 'string' } }, required: ['bindingId'] },
+    },
+    {
+      name: 'roost_list_agents',
+      description: 'List local Agent CLIs detected on this computer with versions.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'roost_list_bindings',
+      description: 'List active computer bindings in a workspace.',
+      inputSchema: { type: 'object', properties: { workspaceId: { type: 'string' } }, required: ['workspaceId'] },
+    },
+    {
+      name: 'roost_list_jobs',
+      description: 'List recent local execution jobs for this computer, optionally filtered by state.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          state: { type: 'string', enum: ['queued', 'claimed', 'running', 'done', 'failed', 'cancelled', 'expired'] },
+          limit: { type: 'number' },
+        },
+      },
+    },
+    {
+      name: 'roost_job_status',
+      description: 'Read one local execution job by id.',
+      inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'] },
+    },
+    {
+      name: 'roost_list_rooms',
+      description: 'List rooms in a workspace so an agent can choose where to work.',
+      inputSchema: { type: 'object', properties: { workspaceId: { type: 'string' } }, required: ['workspaceId'] },
+    },
+    {
+      name: 'roost_check_workspace',
+      description: 'Check workspace membership, room count and Bot count before starting work.',
+      inputSchema: { type: 'object', properties: { workspaceId: { type: 'string' } }, required: ['workspaceId'] },
+    },
+  ]
+}
+
+async function mcpCallTool(config, name, args) {
+  const token = tokenOf({}, config)
+  const computer = config.computer || null
+  const defaultComputerId = computer && typeof computer.id === 'string' ? computer.id : ''
+  if (name === 'roost_projects') {
+    return Object.values(config.projects || {}).map((project) => ({ id: project.id, label: project.label }))
+  }
+  if (name === 'roost_list_computers') {
+    return await request(config, {}, 'GET', '/api/computers', undefined, token)
+  }
+  if (name === 'roost_computer_status') {
+    if (!defaultComputerId) throw new Error('no computer registered; run roost setup')
+    const [computers, bindings] = await Promise.all([
+      request(config, {}, 'GET', '/api/computers', undefined, token),
+      request(config, {}, 'GET', `/api/computers/${encodeURIComponent(defaultComputerId)}/jobs/history?limit=5`, undefined, computer.token),
+    ])
+    return {
+      computer: (computers.computers || []).find((item) => item.id === defaultComputerId) || null,
+      recentJobs: bindings.jobs || [],
+    }
+  }
+  if (name === 'roost_bind_bot') {
+    if (!defaultComputerId) throw new Error('no computer registered; run roost setup')
+    return await request(config, {}, 'POST', `/api/workspaces/${encodeURIComponent(String(args.workspaceId))}/computer-bindings`, {
+      computerId: defaultComputerId,
+      botId: String(args.botId),
+      agentKind: String(args.agentKind),
+      projectId: String(args.projectId),
+      ...(typeof args.workdirLabel === 'string' ? { workdirLabel: args.workdirLabel } : {}),
+    }, token)
+  }
+  if (name === 'roost_unbind_bot') {
+    return await request(config, {}, 'DELETE', `/api/computer-bindings/${encodeURIComponent(String(args.bindingId))}`, undefined, token)
+  }
+  if (name === 'roost_list_agents') {
+    return discoverAgents(config)
+  }
+  if (name === 'roost_list_bindings') {
+    return await request(config, {}, 'GET', `/api/workspaces/${encodeURIComponent(String(args.workspaceId))}/computer-bindings`, undefined, token)
+  }
+  if (name === 'roost_list_jobs') {
+    if (!computer) throw new Error('no computer registered; run roost setup')
+    const query = new URLSearchParams()
+    if (typeof args.state === 'string') query.set('state', args.state)
+    if (typeof args.limit === 'number') query.set('limit', String(args.limit))
+    return await request(config, {}, 'GET', `/api/computers/${encodeURIComponent(computer.id)}/jobs/history?${query.toString()}`, undefined, computer.token)
+  }
+  if (name === 'roost_job_status') {
+    if (!computer) throw new Error('no computer registered; run roost setup')
+    return await request(config, {}, 'GET', `/api/computers/${encodeURIComponent(computer.id)}/jobs/${encodeURIComponent(String(args.jobId))}`, undefined, computer.token)
+  }
+  if (name === 'roost_list_rooms') {
+    return await request(config, {}, 'GET', `/api/rooms?workspaceId=${encodeURIComponent(String(args.workspaceId))}`, undefined, token)
+  }
+  if (name === 'roost_check_workspace') {
+    const workspaceId = String(args.workspaceId)
+    const [workspaces, rooms, bots] = await Promise.all([
+      request(config, {}, 'GET', '/api/workspaces', undefined, token),
+      request(config, {}, 'GET', `/api/rooms?workspaceId=${encodeURIComponent(workspaceId)}`, undefined, token),
+      request(config, {}, 'GET', `/api/bots?workspaceId=${encodeURIComponent(workspaceId)}`, undefined, token),
+    ])
+    const workspace = (workspaces.workspaces || []).find((item) => item.id === workspaceId) || null
+    return { workspace, roomCount: (rooms.rooms || []).length, botCount: (bots.bots || []).length }
+  }
+  throw new Error(`unknown tool ${name}`)
+}
+
+function mcpServe() {
+  const config = readConfig()
+  let buffer = ''
+  const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
+  const reply = (id, result) => send({ jsonrpc: '2.0', id, result })
+  const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } })
+  const handle = async (message) => {
+    const id = message.id
+    if (message.method === 'initialize') {
+      reply(id, {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: 'roost', version: '0.1.0' },
+      })
+      return
+    }
+    if (message.method === 'notifications/initialized' || message.method === 'notifications/cancelled') return
+    if (message.method === 'ping') { reply(id, {}); return }
+    if (message.method === 'tools/list') { reply(id, { tools: mcpTools() }); return }
+    if (message.method === 'tools/call') {
+      const params = message.params || {}
+      const name = typeof params.name === 'string' ? params.name : ''
+      try {
+        const result = await mcpCallTool(config, name, params.arguments || {})
+        reply(id, { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] })
+      } catch (error) {
+        reply(id, { content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }], isError: true })
+      }
+      return
+    }
+    if (id !== undefined) fail(id, -32601, `method not found: ${message.method}`)
+  }
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (chunk) => {
+    buffer += chunk
+    let index
+    while ((index = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, index).trim()
+      buffer = buffer.slice(index + 1)
+      if (line === '') continue
+      let message
+      try { message = JSON.parse(line) } catch { continue }
+      void handle(message)
+    }
+  })
+  process.stdin.resume()
+}
+
+async function mcpCommand(flags, positional) {
+  if ((positional[0] || 'serve') !== 'serve') throw new Error('usage: roost mcp serve')
+  mcpServe()
+}
+
 async function daemonRun(flags) {
   let config = readConfig()
   if (!config.computer || typeof config.computer.token !== 'string') throw new Error('computer not registered; run roost setup')
   const base = serverUrl(flags, config)
   config.serverUrl = base
   const log = (message) => console.log(`${new Date().toISOString()} ${message}`)
-  log(`roostd started for ${config.computer.id} (${base})`)
+  const concurrency = Math.max(1, Math.min(8, Number(flags.concurrency || config.concurrency || 1) || 1))
   const agents = discoverAgents(config)
+  log(`roostd started for ${config.computer.id} (${base}) lanes=${concurrency}`)
   log(`local agents: ${agents.map((agent) => `${agent.kind}${agent.installed ? '' : '(missing)'}`).join(', ')}`)
-  let heartbeatAt = 0
   let stopped = false
   const abort = new AbortController()
   const stop = () => { stopped = true; abort.abort(); log('stopping') }
   process.on('SIGTERM', stop)
   process.on('SIGINT', stop)
-  while (!stopped) {
-    // Pick up a binding added while the daemon was already installed.
-    config = { ...readConfig(), serverUrl: base }
-    if (Object.keys(config.bindings || {}).length === 0) {
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000))
-      continue
+
+  const heartbeat = (async () => {
+    while (!stopped) {
+      const current = { ...readConfig(), serverUrl: base }
+      const projects = Object.values(current.projects || {}).map((project) => ({ id: project.id, label: project.label }))
+      await postHeartbeat(current, flags, { version: '0.1.0', capabilities: { agents, projects } }, abort.signal)
+      for (let i = 0; i < 25 && !stopped; i += 1) await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000))
     }
-    if (heartbeatAt === 0 || Date.now() - heartbeatAt > 25_000) {
-      heartbeatAt = Date.now()
-      await postHeartbeat(config, flags, { version: '0.1.0', capabilities: { agents } }, abort.signal)
-    }
-    try {
-      const result = await request(config, flags, 'GET', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs?wait=20`, undefined, config.computer.token, abort.signal)
-      const job = result && result.job
-      if (job) {
-        log(`job ${job.id} ${job.roomId}`)
-        const claimed = await request(config, flags, 'POST', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs/${encodeURIComponent(job.id)}/claim`, undefined, config.computer.token, abort.signal)
-        const active = claimed.job || job
-        await runJob(config, flags, active)
+  })()
+
+  const worker = async () => {
+    while (!stopped) {
+      const current = { ...readConfig(), serverUrl: base }
+      if (Object.keys(current.bindings || {}).length === 0 && Object.keys(current.projects || {}).length === 0) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000))
+        continue
       }
-    } catch (error) {
-      if (stopped) break
-      log(`poll failed: ${error instanceof Error ? error.message : String(error)}`)
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000))
+      try {
+        const result = await request(current, flags, 'GET', `/api/computers/${encodeURIComponent(current.computer.id)}/jobs?wait=20`, undefined, current.computer.token, abort.signal)
+        const job = result && result.job
+        if (!job) continue
+        log(`job ${job.id} ${job.roomId}`)
+        const claimed = await request(current, flags, 'POST', `/api/computers/${encodeURIComponent(current.computer.id)}/jobs/${encodeURIComponent(job.id)}/claim`, undefined, current.computer.token, abort.signal)
+        await runJob(current, flags, claimed.job || job)
+      } catch (error) {
+        if (stopped) break
+        log(`poll failed: ${error instanceof Error ? error.message : String(error)}`)
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000))
+      }
     }
   }
+
+  await Promise.all([heartbeat, ...Array.from({ length: concurrency }, () => worker())])
   log('roostd stopped')
 }
 
 async function daemonStart(flags) {
   const config = readConfig()
   if (!config.computer || typeof config.computer.token !== 'string') throw new Error('computer not registered; run roost setup')
+  if (flags.concurrency !== undefined) {
+    config.concurrency = Math.max(1, Math.min(8, Number(flags.concurrency) || 1))
+    writeConfig(config)
+  }
   const existing = daemonPid()
   if (isPidAlive(existing)) { console.log(`daemon already running (pid ${existing})`); return }
   mkdirSync(roostHome(), { recursive: true, mode: 0o700 })
@@ -538,12 +791,16 @@ function usage() {
   roost login --token <sessionToken> [--server URL]   # token: browser localStorage roost.sessionToken
   roost setup [--token <sessionToken>] [--name <name>] [--no-daemon] [--autostart]
   roost computer list [--json]
-  roost bind <workspaceId> --bot <botId> --agent <kind> --path <dir> [--label <name>]
+  roost project add <path> [--label <name>]
+  roost projects [--json]
+  roost bind <workspaceId> --bot <botId> --agent <kind> [--path <dir> | --project <id>] [--label <name>]
   roost bindings [--json]
   roost agent discover [--json]
   roost agent set <kind> --command "claude --print"
+  roost mcp serve
+  roost project add <path> [--label <name>]
   roost daemon autostart enable|disable|status
-  roost daemon start|stop|status|logs|run
+  roost daemon start [--concurrency N]|stop|status|logs|run
   roost status
 
 Env: ROOST_API, ROOST_HOME, ROOST_SESSION_TOKEN
@@ -569,6 +826,11 @@ export async function main(argv = process.argv.slice(2)) {
     if (command === 'bind') return await bind(flags, positional.slice(1))
     if (command === 'bindings') return await bindingsList(flags)
     if (command === 'agent') return agentsCommand(flags, positional.slice(1))
+    if (command === 'mcp') return await mcpCommand(flags, positional.slice(1))
+    if (command === 'project') {
+      if (sub === 'add') return projectAdd(flags, positional.slice(2))
+      return projectsList(flags)
+    }
     if (command === 'daemon') {
       if (sub === 'start') return await daemonStart(flags)
       if (sub === 'stop') return await daemonStop()

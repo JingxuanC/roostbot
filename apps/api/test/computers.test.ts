@@ -30,10 +30,11 @@ test('a local computer can register, bind a Bot, claim a room job and post the r
 
     const binding = await harness.call('POST', `/api/workspaces/${workspaceId}/computer-bindings`, {
       token,
-      body: { computerId, botId, agentKind: 'claude-code', workdirLabel: 'project-a' },
+      body: { computerId, botId, agentKind: 'claude-code', projectId: 'proj_demo1', workdirLabel: 'project-a' },
     })
     assert.equal(binding.status, 201, binding.text)
     const bindingId = binding.json.binding.id as string
+    assert.equal(binding.json.binding.projectId, 'proj_demo1')
 
     const message = await harness.call('POST', `/api/rooms/${roomId}/messages`, {
       token,
@@ -86,6 +87,13 @@ test('a local computer can register, bind a Bot, claim a room job and post the r
     const lastJobId = (await harness.call('GET', `/api/computers/${computerId}/jobs`, { token: computerToken })).json.job?.id
     void lastJobId
 
+
+    const history = await harness.call('GET', `/api/computers/${computerId}/jobs/history?limit=10`, { token: computerToken })
+    assert.equal(history.status, 200, history.text)
+    assert.ok(history.json.jobs.some((item: { state: string }) => item.state === 'done'))
+    const detail = await harness.call('GET', `/api/computers/${computerId}/jobs/${history.json.jobs[0].id}`, { token: computerToken })
+    assert.equal(detail.status, 200, detail.text)
+    assert.equal(detail.json.job.id, history.json.jobs[0].id)
 
     const heartbeat = await harness.call('POST', `/api/computers/${computerId}/heartbeat`, {
       token: computerToken,

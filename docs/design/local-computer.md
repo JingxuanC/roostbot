@@ -438,3 +438,40 @@ P0 边界：
 - Web 端创建 binding 的表单（需要解决“本地 workdir 不能上传”的交互）
 - 安装包 / 自动更新
 - 多本地 Agent 的并发 execution lane
+
+## 17. P1 第二轮（2026-11-09）
+
+已补：
+
+- CLI `roost project add <path> [--label]`：把本地目录注册为 project
+- computer heartbeat 上报 `capabilities.projects`（只发 id + label，不发路径）
+- Web 设置页可直接把 Bot 绑定到 Computer + Project + Agent
+- 新增 `computer_bindings.project_id`（migration 0026）
+- Web 创建的 binding 在 daemon 里按 projectId 找本地路径
+- `roost project add` / `roost projects`
+- 多 lane：`roost daemon start --concurrency 2`
+- MCP：`roost mcp serve` 提供：
+  - `roost_list_computers`
+  - `roost_computer_status`
+  - `roost_projects`
+  - `roost_bind_bot`
+  - `roost_unbind_bot`
+  - `roost_list_agents`
+  - `roost_list_bindings`
+  - `roost_list_jobs`
+  - `roost_job_status`
+  - `roost_list_rooms`
+  - `roost_check_workspace`
+- 新增 `GET /api/computers/:id/jobs/history` 和 `GET /api/computers/:id/jobs/:jobId`（computer token）
+
+MCP 配置：
+
+```json
+{
+  "mcpServers": {
+    "roost": { "command": "roost", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+这样本地 Agent 可以自己查电脑、查 binding、绑定 Bot、查 job、检查 workspace。

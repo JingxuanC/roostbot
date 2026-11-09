@@ -483,6 +483,7 @@ export {
   hashComputerToken,
   heartbeatComputer,
   listComputerBindings,
+  listComputerJobs,
   listComputers,
   listQueuedComputerJobs,
   markComputerJobRunning,

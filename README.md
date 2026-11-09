@@ -127,11 +127,14 @@ ROOST_CP_PORT=8787
 # 在 Web 设置页生成 CLI 令牌
 roost login --token <cli-token> --server https://roostbots.com
 roost setup
-roost bind <workspace-id> --bot <bot-id> --agent claude-code --path ./project
+roost project add ./project --label project-a
+roost bind <workspace-id> --bot <bot-id> --agent claude-code --project <project-id>
 roost agent discover
 roost daemon autostart enable
 roost daemon start
 ```
+
+也可以在 Web 设置页「本地电脑」里直接选择电脑 / 项目 / Bot / Agent 绑定。
 
 之后房间里的这个 Bot 会把轮次派给本地 `roostd`，在本机目录启动 Agent，
 结果回到房间。本地路径只保存在 `~/.roost`，不上传云端。

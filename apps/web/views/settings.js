@@ -142,48 +142,161 @@ export async function mountSettingsPage(root, ctx) {
 function computersSection(ctx, workspaceId) {
   const box = el('div', { class: 'stack' })
   const status = ui.statusLine('')
-  const section = ui.section('已连接的电脑', [status, box], {
-    description: '在本地运行 `roost setup` 后，这台电脑会出现在这里；绑定 Bot 用 `roost bind`。',
+  const section = ui.section('电脑与绑定', [status, box], {
+    description: '在电脑上运行 `roost setup`、`roost project add` 后，可以在这里把 Bot 绑定到本机项目。',
   })
+  let data = { computers: [], bindings: [], bots: [] }
+  let selectedComputerId = ''
+  let selectedProjectId = ''
+
   void load()
   return section
+
+  function projectsOf(computer) {
+    const projects = computer && computer.capabilities && Array.isArray(computer.capabilities.projects)
+      ? computer.capabilities.projects
+      : []
+    return projects.filter((project) => project && typeof project.id === 'string' && project.id !== '')
+  }
+
+  function select(options, value, onChange) {
+    const node = el('select', { class: 'computer-form-select' })
+    for (const option of options) {
+      node.append(el('option', { value: option.value, text: option.label, selected: option.value === value }))
+    }
+    node.value = value
+    if (onChange) node.addEventListener('change', () => onChange(node.value))
+    return node
+  }
+
+  function botName(botId) {
+    const bot = data.bots.find((item) => item.id === botId)
+    return bot && bot.name ? bot.name : botId
+  }
+
+  function render() {
+    box.replaceChildren()
+    if (data.computers.length === 0) {
+      box.append(ui.emptyState({
+        title: '还没有电脑',
+        body: '在终端运行：roost login --token <CLI 令牌>，然后 roost setup 和 roost project add <项目目录>。',
+      }))
+      return
+    }
+
+    for (const computer of data.computers) {
+      const row = el('div', { class: 'computer-row' })
+      const title = el('div', { class: 'computer-row-main' })
+      title.append(el('strong', { text: computer.name || computer.id }))
+      title.append(el('span', { class: `computer-kind${computer.status === 'offline' ? ' is-offline' : ''}`, text: computer.status || 'unknown' }))
+      title.append(el('span', { class: 'computer-meta muted', text: `${computer.os || ''} ${computer.arch || ''}`.trim() }))
+      row.append(title)
+      const own = data.bindings.filter((binding) => binding.computerId === computer.id)
+      if (own.length > 0) {
+        const list = el('div', { class: 'computer-bindings' })
+        for (const binding of own) {
+          list.append(el('span', {
+            class: 'computer-binding',
+            text: `${botName(binding.botId)} · ${binding.agentKind || 'agent'} · ${binding.workdirLabel || 'project'}`,
+          }))
+        }
+        row.append(list)
+      }
+      box.append(row)
+    }
+
+    if (data.bots.length === 0) {
+      box.append(el('p', { class: 'muted', text: '还没有 Bot，先创建一个 Bot 再绑定。' }))
+      return
+    }
+    const online = data.computers.filter((computer) => computer.status !== 'offline' && computer.status !== 'revoked')
+    if (online.length === 0) {
+      box.append(el('p', { class: 'muted', text: '电脑当前离线；启动 roost daemon 后再绑定。' }))
+      return
+    }
+
+    if (!selectedComputerId || !online.some((computer) => computer.id === selectedComputerId)) {
+      selectedComputerId = online[0].id
+    }
+    const computer = online.find((item) => item.id === selectedComputerId) || online[0]
+    const projects = projectsOf(computer)
+    if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
+      selectedProjectId = projects[0]?.id || ''
+    }
+    if (projects.length === 0) {
+      box.append(el('p', {
+        class: 'muted',
+        text: `这台电脑还没有注册项目。运行：roost project add <目录>，然后保持 daemon 在线。`,
+      }))
+    }
+
+    const form = el('form', { class: 'computer-bind-form' })
+    const computerNode = select(online.map((item) => ({ value: item.id, label: item.name || item.id })), computer.id, (value) => {
+      selectedComputerId = value
+      selectedProjectId = ''
+      render()
+    })
+    const projectNode = select(projects.map((project) => ({ value: project.id, label: project.label || project.id })), selectedProjectId, (value) => {
+      selectedProjectId = value
+    })
+    const botNode = select(data.bots.map((bot) => ({ value: bot.id, label: bot.name || bot.id })), data.bots[0].id)
+    const agentNode = select([
+      { value: 'claude-code', label: 'Claude Code' },
+      { value: 'codex', label: 'Codex' },
+      { value: 'grok-build', label: 'Grok Build' },
+      { value: 'dsh', label: 'DSH' },
+    ], 'claude-code')
+    const submit = ui.button('绑定 Bot 到这台电脑', { variant: 'primary', type: 'submit', disabled: projects.length === 0 })
+
+    const fields = el('div', { class: 'computer-form-fields' })
+    for (const [label, node] of [['电脑', computerNode], ['项目', projectNode], ['Bot', botNode], ['Agent', agentNode]]) {
+      const field = el('label', { class: 'computer-form-field' })
+      field.append(el('span', { text: label }))
+      field.append(node)
+      fields.append(field)
+    }
+    form.append(fields, submit)
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      if (projects.length === 0) return
+      const project = projects.find((item) => item.id === selectedProjectId)
+      ui.setBusy(submit, true, '绑定中…')
+      ui.setStatus(status, '')
+      try {
+        await ctx.api.post(`/api/workspaces/${encodeURIComponent(workspaceId)}/computer-bindings`, {
+          computerId: computer.id,
+          botId: botNode.value,
+          agentKind: agentNode.value,
+          projectId: selectedProjectId,
+          workdirLabel: project?.label || 'project',
+        })
+        ui.setStatus(status, '已绑定。下一条发给这个 Bot 的消息会派到本机。')
+        await load()
+      } catch (error) {
+        if (isAuthError(error)) { ctx.requirePair(); return }
+        ui.setStatus(status, `绑定失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+      } finally {
+        ui.setBusy(submit, false)
+      }
+    })
+    box.append(form)
+  }
 
   async function load() {
     box.replaceChildren(ui.loading('正在载入电脑…'))
     ui.setStatus(status, '')
     try {
-      const [computersData, bindingsData] = await Promise.all([
+      const [computersData, bindingsData, bots] = await Promise.all([
         ctx.api.get('/api/computers'),
         ctx.api.get(`/api/workspaces/${encodeURIComponent(workspaceId)}/computer-bindings`),
+        Promise.resolve(typeof ctx.loadBots === 'function' ? ctx.loadBots() : []),
       ])
-      const computers = Array.isArray(computersData?.computers) ? computersData.computers : []
-      const bindings = Array.isArray(bindingsData?.bindings) ? bindingsData.bindings : []
-      box.replaceChildren()
-      if (computers.length === 0) {
-        box.append(ui.emptyState({
-          title: '还没有电脑',
-          body: '在终端运行：roost login --token <CLI 令牌>，然后 roost setup。',
-        }))
-        return
+      data = {
+        computers: Array.isArray(computersData?.computers) ? computersData.computers : [],
+        bindings: Array.isArray(bindingsData?.bindings) ? bindingsData.bindings : [],
+        bots: Array.isArray(bots) ? bots : [],
       }
-      for (const computer of computers) {
-        const row = el('div', { class: 'computer-row' })
-        const title = el('div', { class: 'computer-row-main' })
-        title.append(el('strong', { text: computer.name || computer.id }))
-        title.append(el('span', { class: 'computer-kind', text: computer.status || 'unknown' }))
-        row.append(title)
-        row.append(el('span', { class: 'computer-meta muted', text: `${computer.os || ''} ${computer.arch || ''}`.trim() }))
-        const own = bindings.filter((binding) => binding.computerId === computer.id)
-        if (own.length > 0) {
-          const list = el('div', { class: 'computer-bindings' })
-          for (const binding of own) {
-            list.append(el('span', { class: 'computer-binding', text: `${binding.agentKind || 'agent'} · ${binding.workdirLabel || 'project'}` }))
-          }
-          row.append(list)
-        }
-        box.append(row)
-      }
-      if (bindings.length === 0) box.append(el('p', { class: 'muted', text: '还没有 Bot 绑定到本机；运行 `roost bind`。' }))
+      render()
     } catch (error) {
       if (isAuthError(error)) { ctx.requirePair(); return }
       box.replaceChildren(ui.errorState({
@@ -223,7 +336,7 @@ function cliSection(ctx) {
       }
     },
   })
-  return ui.section('本地电脑', [button, status, output], {
+  return ui.section('CLI 接入', [button, status, output], {
     description: '安装 roost CLI 后，把本机作为执行节点接入 workspace。令牌只显示一次，可随时在设备列表吊销。',
   })
 }

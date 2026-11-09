@@ -37,6 +37,7 @@ export interface ComputerBinding {
   computerId: string
   botId: string
   agentKind: string
+  projectId?: string
   workdirLabel?: string
   permission: Record<string, unknown>
   status: ComputerBindingStatus
@@ -83,6 +84,7 @@ interface BindingRow {
   computer_id: string
   bot_id: string
   agent_kind: string
+  project_id: string | null
   workdir_label: string | null
   permission_json: string
   status: string
@@ -173,6 +175,7 @@ function rowToBinding(row: unknown): ComputerBinding {
     computerId: r.computer_id,
     botId: r.bot_id,
     agentKind: r.agent_kind,
+    ...(r.project_id === null ? {} : { projectId: r.project_id }),
     ...(r.workdir_label === null ? {} : { workdirLabel: r.workdir_label }),
     permission: readJsonObject(r.permission_json),
     status: asBindingStatus(r.status),
@@ -323,6 +326,7 @@ export interface CreateComputerBindingInput {
   computerId: string
   botId: string
   agentKind: string
+  projectId?: string
   workdirLabel?: string
   permission?: Record<string, unknown>
   now?: number
@@ -334,14 +338,15 @@ export function createComputerBinding(store: Store, input: CreateComputerBinding
   const id = newRoostId('cb', now)
   try {
     store.db.prepare(
-      `INSERT INTO computer_bindings (id, workspace_id, computer_id, bot_id, agent_kind, workdir_label, permission_json, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+      `INSERT INTO computer_bindings (id, workspace_id, computer_id, bot_id, agent_kind, project_id, workdir_label, permission_json, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
     ).run(
       id,
       input.workspaceId,
       input.computerId,
       input.botId,
       input.agentKind,
+      input.projectId ?? null,
       input.workdirLabel ?? null,
       JSON.stringify(jsonObject(input.permission, {})),
       now,
@@ -434,6 +439,21 @@ export function listQueuedComputerJobs(store: Store, computerId: string, limit =
     "SELECT * FROM computer_jobs WHERE computer_id = ? AND state = 'queued' ORDER BY created_at ASC LIMIT ?",
   ).all(computerId, limit)
   return rows.map(rowToJob)
+}
+
+export function listComputerJobs(
+  store: Store,
+  computerId: string,
+  filter: { state?: ComputerJobState; limit?: number } = {},
+): ComputerJob[] {
+  assertOpen(store)
+  const clauses = ['computer_id = ?']
+  const values: unknown[] = [computerId]
+  if (filter.state !== undefined) { clauses.push('state = ?'); values.push(filter.state) }
+  values.push(Math.max(1, Math.min(100, filter.limit ?? 20)))
+  return store.db.prepare(
+    `SELECT * FROM computer_jobs WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ?`,
+  ).all(...values).map(rowToJob)
 }
 
 export function claimComputerJob(store: Store, input: { jobId: string; computerId: string; leaseMs?: number; now?: number }): ComputerJob | null {

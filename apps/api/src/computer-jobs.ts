@@ -57,6 +57,7 @@ function payloadFor(
     binding: {
       id: binding.id,
       agentKind: binding.agentKind,
+      ...(binding.projectId === undefined ? {} : { projectId: binding.projectId }),
       ...(binding.workdirLabel === undefined ? {} : { workdirLabel: binding.workdirLabel }),
       permission: binding.permission,
     },

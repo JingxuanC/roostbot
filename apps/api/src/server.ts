@@ -210,6 +210,8 @@ import {
   handleComputerClaimJob,
   handleComputerHeartbeat,
   handleComputerJobDelta,
+  handleComputerJobHistory,
+  handleGetComputerJob,
   handleComputerJobResult,
   handleComputerJobs,
   handleCreateComputer,
@@ -3469,6 +3471,16 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
   }
   if (/^\/api\/computers\/[^/]+\/jobs$/.test(path)) {
     if (method === 'GET') { await handleComputerJobs(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/history$/.test(path)) {
+    if (method === 'GET') { await handleComputerJobHistory(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+$/.test(path)) {
+    if (method === 'GET') { await handleGetComputerJob(computerCtx, req, res, url); return }
     notFound(req, res, method, path)
     return
   }

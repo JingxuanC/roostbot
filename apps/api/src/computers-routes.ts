@@ -21,7 +21,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isAgentRuntimeKind } from '../../../packages/agent-runtime/src/index.ts'
 import { getBot, getWorkspaceRole } from '../../../packages/store/src/index.ts'
 import { appendRoomSignal } from '../../../packages/store/src/room-log.ts'
-import { getComputerJob } from '../../../packages/store/src/computers.ts'
 import {
   createComputer,
   createComputerBinding,
@@ -33,6 +32,8 @@ import {
   hashComputerToken,
   heartbeatComputer,
   listComputerBindings,
+  listComputerJobs,
+  getComputerJob,
   listComputers,
   revokeComputer,
   revokeComputerBinding,
@@ -207,6 +208,32 @@ export async function handleComputerClaimJob(ctx: ComputersRouteContext, req: In
   sendJson(res, 200, { job })
 }
 
+export async function handleComputerJobHistory(ctx: ComputersRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const computer = authenticateComputer(ctx, req, res)
+  if (computer === null || ctx.rawStore === undefined) return
+  const match = /^\/api\/computers\/([^/]+)\/jobs\/history$/.exec(url.pathname)
+  if (match === null) return sendError(res, 404, 'not_found', 'malformed job history path')
+  if (decodeURIComponent(match[1]!) !== computer.id) return sendError(res, 403, 'computer.forbidden', 'computer token does not match path')
+  const state = url.searchParams.get('state') || undefined
+  const limit = Number(url.searchParams.get('limit') || '20')
+  const jobs = listComputerJobs(ctx.rawStore, computer.id, {
+    ...(state ? { state: state as never } : {}),
+    limit: Number.isFinite(limit) ? limit : 20,
+  })
+  sendJson(res, 200, { jobs })
+}
+
+export async function handleGetComputerJob(ctx: ComputersRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const computer = authenticateComputer(ctx, req, res)
+  if (computer === null || ctx.rawStore === undefined) return
+  const match = /^\/api\/computers\/([^/]+)\/jobs\/([^/]+)$/.exec(url.pathname)
+  if (match === null) return sendError(res, 404, 'not_found', 'malformed job path')
+  if (decodeURIComponent(match[1]!) !== computer.id) return sendError(res, 403, 'computer.forbidden', 'computer token does not match path')
+  const job = getComputerJob(ctx.rawStore, decodeURIComponent(match[2]!))
+  if (job === null || job.computerId !== computer.id) return sendError(res, 404, 'job.not_found', 'unknown job')
+  sendJson(res, 200, { job })
+}
+
 export async function handleComputerJobDelta(ctx: ComputersRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const computer = authenticateComputer(ctx, req, res)
   if (computer === null || ctx.rawStore === undefined) return
@@ -302,6 +329,9 @@ export async function handleCreateWorkspaceComputerBinding(ctx: ComputersRouteCo
       computerId,
       botId,
       agentKind,
+      ...(typeof body['projectId'] === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(body['projectId'])
+        ? { projectId: body['projectId'] }
+        : {}),
       ...(typeof body['workdirLabel'] === 'string' ? { workdirLabel: body['workdirLabel'].slice(0, 200) } : {}),
       ...(isPlainObject(body['permission']) ? { permission: body['permission'] } : {}),
       now: ctx.now(),
