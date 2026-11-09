@@ -59,12 +59,19 @@ export interface ConnectorStatusOptions {
   connectionAlias?: string
 }
 
+export interface ConnectorStatusDetails {
+  status: ConnectionStatus
+  accountLabel?: string
+}
+
 export interface GatewayBackend {
   id: GatewayBackendId
   listConnectors(): Promise<ConnectorSummary[]>
   authorize(slug: string, options?: ConnectorAuthorizeOptions): Promise<{ url: string }>
   call(call: ConnectorCall, grant: ConnectorGrant): Promise<CallResult>
   status(slug: string, options?: ConnectorStatusOptions): Promise<ConnectionStatus>
+  /** 可选：同时返回展示用账号名；不支持的后端可只实现 status。 */
+  statusDetails?(slug: string, options?: ConnectorStatusOptions): Promise<ConnectorStatusDetails>
 }
 
 /** 未授权的连接器不进上下文：工具名也不出现。 */

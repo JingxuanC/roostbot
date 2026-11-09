@@ -116,7 +116,7 @@ test('OpenConnector bridge forwards named connections and proxies OAuth callback
     const status = await fetch(`${bridge.url}/status?slug=github&connectionName=roost_abc`, {
       headers: { authorization: 'Bearer bridge_secret' },
     })
-    assert.deepEqual(await status.json(), { status: 'connected' })
+    assert.equal((await status.json()).status, 'connected')
 
     const called = await fetch(`${bridge.url}/call`, {
       method: 'POST',

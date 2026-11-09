@@ -30,6 +30,7 @@ import type {
   ConnectorAuthorizeOptions,
   ConnectorCall,
   ConnectorGrant,
+  ConnectorStatusDetails,
   ConnectorStatusOptions,
   ConnectorSummary,
   GatewayBackend,
@@ -107,6 +108,10 @@ export class HttpGatewayBackend implements GatewayBackend {
   }
 
   async status(slug: string, options: ConnectorStatusOptions = {}): Promise<ConnectionStatus> {
+    return (await this.statusDetails(slug, options)).status
+  }
+
+  async statusDetails(slug: string, options: ConnectorStatusOptions = {}): Promise<ConnectorStatusDetails> {
     const query = new URLSearchParams({ slug })
     if (options.workspaceId !== undefined) query.set('workspaceId', options.workspaceId)
     if (options.accountId !== undefined) query.set('accountId', options.accountId)
@@ -122,7 +127,10 @@ export class HttpGatewayBackend implements GatewayBackend {
     ) {
       throw new GatewayRequestError('protocol', 'gateway /status returned an unknown status')
     }
-    return status as ConnectionStatus
+    const accountLabel = isRecord(value) && typeof value['accountLabel'] === 'string' && value['accountLabel'].trim() !== ''
+      ? value['accountLabel'].trim().slice(0, 200)
+      : undefined
+    return { status: status as ConnectionStatus, ...(accountLabel === undefined ? {} : { accountLabel }) }
   }
 
   async call(call: ConnectorCall, _grant: ConnectorGrant): Promise<CallResult> {

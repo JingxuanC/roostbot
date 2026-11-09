@@ -261,12 +261,20 @@ export async function handleConnectorCallback(
   }
 
   let backendStatus: string
+  let accountLabel: string | null = null
   try {
-    backendStatus = await ctx.connectorBackend.status(slug, {
+    const options = {
       workspaceId: pending.workspaceId,
       accountId: pending.accountId,
       connectionAlias: pending.alias,
-    })
+    }
+    if (typeof ctx.connectorBackend.statusDetails === 'function') {
+      const detail = await ctx.connectorBackend.statusDetails(slug, options)
+      backendStatus = detail.status
+      accountLabel = detail.accountLabel ?? null
+    } else {
+      backendStatus = await ctx.connectorBackend.status(slug, options)
+    }
   } catch (err) {
     return sendBackendFailure(res, err)
   }
@@ -280,7 +288,7 @@ export async function handleConnectorCallback(
       slug,
       backend: ctx.connectorBackend.id,
       status: 'connected',
-      accountLabel: null,
+      accountLabel,
       connectedBy: pending.accountId,
       alias: pending.alias,
       at: ctx.now(),

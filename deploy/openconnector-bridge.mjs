@@ -98,14 +98,18 @@ async function loadCatalog() {
 }
 
 async function statusFor(slug, connectionName = '') {
-  if (NO_AUTH.has(slug)) return 'connected'
+  if (NO_AUTH.has(slug)) return { status: 'connected' }
   const connections = await gateway('/v1/connections', { token: ADMIN })
   const match = (Array.isArray(connections) ? connections : []).find((item) =>
     item && item.service === slug && (connectionName === '' || item.alias === connectionName || item.connectionName === connectionName))
-  if (!match) return 'revoked'
-  if (match.status === 'active') return 'connected'
-  if (match.status === 'expired') return 'expired'
-  return 'revoked'
+  if (!match) return { status: 'revoked' }
+  const status = match.status === 'active' ? 'connected' : match.status === 'expired' ? 'expired' : 'revoked'
+  return {
+    status,
+    ...(typeof match.accountLabel === 'string' && match.accountLabel.trim() !== ''
+      ? { accountLabel: match.accountLabel.trim().slice(0, 200) }
+      : {})
+  }
 }
 
 async function findNamedConnection(slug, connectionName) {
@@ -209,7 +213,7 @@ const server = createServer(async (req, res) => {
       const slug = (url.searchParams.get('slug') ?? '').trim()
       const connectionName = (url.searchParams.get('connectionName') ?? '').trim()
       if (slug === '') return json(res, 400, { error: 'slug is required' })
-      return json(res, 200, { status: await statusFor(slug, connectionName) })
+      return json(res, 200, await statusFor(slug, connectionName))
     }
 
     if (url.pathname === '/call' && req.method === 'POST') {
