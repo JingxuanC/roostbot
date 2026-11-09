@@ -296,8 +296,8 @@ POST /call
 bridge 转发 OpenConnector：
 
 ```text
-POST /v1/connections/github/connect
-  { returnUri, connectionName }
+POST /api/oauth/connection-requests   # admin token；不是 /v1/connections/:service/connect
+  { service, connectionName, returnUri }
 
 POST /v1/actions/github.list_issues
   x-oo-connector-alias: roost_abc123
@@ -305,6 +305,9 @@ POST /v1/actions/github.list_issues
 GET /v1/connections
   按 connectionName 过滤
 ```
+
+注意：OpenConnector 的 runtime `/v1/connections/:service/connect` 不接受 `connectionName`；必须走
+admin 的 `/api/oauth/connection-requests`，否则会报 `Unrecognized key: "connectionName"`。
 
 ### OAuth callback
 
