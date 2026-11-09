@@ -138,6 +138,96 @@ export async function mountSettingsPage(root, ctx) {
  * 通知开关（ui.md §3.6，TODO 5.5.6）：只在 change 事件里请求权限（用户手势）。
  * 权限被拒绝时如实说明，不把开关留在「开」。
  */
+/** 只读的本地 Computer 列表；绑定动作在 CLI 里完成（workdir 只存在本机）。 */
+function computersSection(ctx, workspaceId) {
+  const box = el('div', { class: 'stack' })
+  const status = ui.statusLine('')
+  const section = ui.section('已连接的电脑', [status, box], {
+    description: '在本地运行 `roost setup` 后，这台电脑会出现在这里；绑定 Bot 用 `roost bind`。',
+  })
+  void load()
+  return section
+
+  async function load() {
+    box.replaceChildren(ui.loading('正在载入电脑…'))
+    ui.setStatus(status, '')
+    try {
+      const [computersData, bindingsData] = await Promise.all([
+        ctx.api.get('/api/computers'),
+        ctx.api.get(`/api/workspaces/${encodeURIComponent(workspaceId)}/computer-bindings`),
+      ])
+      const computers = Array.isArray(computersData?.computers) ? computersData.computers : []
+      const bindings = Array.isArray(bindingsData?.bindings) ? bindingsData.bindings : []
+      box.replaceChildren()
+      if (computers.length === 0) {
+        box.append(ui.emptyState({
+          title: '还没有电脑',
+          body: '在终端运行：roost login --token <CLI 令牌>，然后 roost setup。',
+        }))
+        return
+      }
+      for (const computer of computers) {
+        const row = el('div', { class: 'computer-row' })
+        const title = el('div', { class: 'computer-row-main' })
+        title.append(el('strong', { text: computer.name || computer.id }))
+        title.append(el('span', { class: 'computer-kind', text: computer.status || 'unknown' }))
+        row.append(title)
+        row.append(el('span', { class: 'computer-meta muted', text: `${computer.os || ''} ${computer.arch || ''}`.trim() }))
+        const own = bindings.filter((binding) => binding.computerId === computer.id)
+        if (own.length > 0) {
+          const list = el('div', { class: 'computer-bindings' })
+          for (const binding of own) {
+            list.append(el('span', { class: 'computer-binding', text: `${binding.agentKind || 'agent'} · ${binding.workdirLabel || 'project'}` }))
+          }
+          row.append(list)
+        }
+        box.append(row)
+      }
+      if (bindings.length === 0) box.append(el('p', { class: 'muted', text: '还没有 Bot 绑定到本机；运行 `roost bind`。' }))
+    } catch (error) {
+      if (isAuthError(error)) { ctx.requirePair(); return }
+      box.replaceChildren(ui.errorState({
+        error,
+        message: `电脑列表载入失败：${error instanceof Error ? error.message : String(error)}`,
+        onRetry: () => void load(),
+      }))
+    }
+  }
+}
+
+/** CLI token：让本地电脑通过 `roost login` 接入，不需要从浏览器手抄 cookie。 */
+function cliSection(ctx) {
+  const status = ui.statusLine('')
+  const output = el('pre', { class: 'cli-token-output', hidden: true })
+  const button = ui.button('生成 CLI 令牌', {
+    variant: 'primary',
+    onClick: async () => {
+      ui.setBusy(button, true, '生成中…')
+      ui.setStatus(status, '')
+      try {
+        const data = await ctx.api.post('/api/cli/tokens', { label: 'roost CLI' })
+        const token = data && typeof data.token === 'string' ? data.token : ''
+        if (token === '') throw new Error('服务端没有返回 token')
+        const origin = (() => {
+          try { return location.origin } catch { return 'https://roostbots.com' }
+        })()
+        output.textContent = `roost login --token ${token} --server ${origin}\nroost setup`
+        output.hidden = false
+        ui.setStatus(status, '令牌只显示一次。复制后运行上面的命令。')
+        try { await navigator.clipboard?.writeText(output.textContent) } catch {}
+      } catch (error) {
+        if (isAuthError(error)) { ctx.requirePair(); return }
+        ui.setStatus(status, `生成失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+      } finally {
+        ui.setBusy(button, false)
+      }
+    },
+  })
+  return ui.section('本地电脑', [button, status, output], {
+    description: '安装 roost CLI 后，把本机作为执行节点接入 workspace。令牌只显示一次，可随时在设备列表吊销。',
+  })
+}
+
 function notificationSection() {
   const supported = supportsNotifications()
   const permission = notificationPermission()
@@ -227,7 +317,7 @@ function settingsView(ctx, root, state) {
   board.append(membersSection(pageCtx, state.members, remount))
   board.append(devicesSection(pageCtx, state.devices, remount))
   for (const node of grantsSections(ctx, root, state)) board.append(node)
-  return el('div', { class: 'stack' }, [header, settingsHub(), notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
+  return el('div', { class: 'stack' }, [header, settingsHub(), cliSection(ctx), computersSection(ctx, state.workspaceId), notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
 }
 
 // ---------------------------------------------------------------------------

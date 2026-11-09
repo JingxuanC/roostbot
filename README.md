@@ -119,6 +119,23 @@ ROOST_CP_PORT=8787
 每个 workspace 一个 PVC + 一个长活 Pod；Pod 的 readinessProbe 检查
 `/workspace/.roost/ready`。`stop` 删除 Pod、保留 PVC。
 
+## 本地电脑（Computer / roostd）
+
+把本地电脑接入 workspace，让某个 Bot 在本机运行：
+
+```sh
+# 在 Web 设置页生成 CLI 令牌
+roost login --token <cli-token> --server https://roostbots.com
+roost setup
+roost bind <workspace-id> --bot <bot-id> --agent claude-code --path ./project
+roost daemon start
+```
+
+之后房间里的这个 Bot 会把轮次派给本地 `roostd`，在本机目录启动 Agent，
+结果回到房间。本地路径只保存在 `~/.roost`，不上传云端。
+
+设计：[local-computer.md](docs/design/local-computer.md)
+
 ## 支持的 Runtime
 
 | Runtime | 接入方式 | 模型来源 | 状态 |

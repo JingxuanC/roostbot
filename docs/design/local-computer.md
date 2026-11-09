@@ -381,3 +381,40 @@ CLI + local service / daemon
 6. 重启 daemon，未完成 job 恢复或明确失败
 7. 吊销 computer，token 立即失效
 ```
+
+## 15. P0 实现状态（2026-11-09）
+
+已落地：
+
+```text
+migrations/0025_computer_nodes.sql
+packages/store/src/computers.ts
+apps/api/src/computers-routes.ts
+apps/api/src/cli-token-routes.ts
+apps/api/src/computer-jobs.ts
+apps/cli/roost.mjs
+apps/api/test/computers.test.ts
+apps/cli/test/roost.test.ts
+```
+
+已实现：
+
+- 注册 computer，返回一次性 computer token
+- heartbeat
+- `GET /api/computers/:id/jobs?wait=25` 长轮询
+- claim / events（流式 delta）/ result
+- workspace member 创建 / 列表 / 吊销 computer binding
+- cloud room-agent assignments 过滤本地绑定的 Bot
+- `roost` CLI：login / setup / computer list / bind / daemon start|stop|status|logs|run
+- `roostd`：本地 Agent 进程、stdout delta、最终结果、失败结果
+- Settings 页生成 CLI token，并展示已连接电脑
+- 一个本地 Agent 默认命令：Claude Code；其它 Agent 可通过 `~/.roost/config.json` 的 `agentCommands` 配置
+
+P0 边界：
+
+- 还没有 OS 级安装包/自动更新
+- 还没有 Web 端创建 binding 的表单（用 `roost bind`）
+- 没有 autostart 注册命令（可手工加 launchd/systemd）
+- 没有离线重试 UI；job lease 过期会回到 queued
+- 本地流式 delta 是 stdout 分块；最终结果仍是权威消息
+- 暂不支持云端 Agent 调用本地 MCP（P2）

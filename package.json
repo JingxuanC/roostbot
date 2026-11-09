@@ -2,7 +2,7 @@
   "name": "roostbot",
   "private": true,
   "version": "0.1.0",
-  "description": "Roost Bot — multi-agent rooms with heterogeneous Agent runtimes (DSH, Claude Code, Codex, Grok Build) on a Docker workspace.",
+  "description": "Roost Bot \u2014 multi-agent rooms with heterogeneous Agent runtimes (DSH, Claude Code, Codex, Grok Build) on a Docker workspace.",
   "packageManager": "pnpm@11.28.5",
   "engines": {
     "node": ">=22.18.0"
@@ -17,5 +17,8 @@
     "site": "node scripts/serve-site.mjs"
   },
   "license": "Apache-2.0",
-  "type": "module"
+  "type": "module",
+  "bin": {
+    "roost": "apps/cli/roost.mjs"
+  }
 }

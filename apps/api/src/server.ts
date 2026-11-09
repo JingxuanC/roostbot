@@ -205,6 +205,20 @@ import { answerChoiceCard, decorateParts, parseCard, postCard, projectApprovalDe
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.ts'
 import { handleNativeAdvance, handleNativeAssignments } from './native-relay-routes.ts'
+import { handleCreateCliToken } from './cli-token-routes.ts'
+import {
+  handleComputerClaimJob,
+  handleComputerHeartbeat,
+  handleComputerJobDelta,
+  handleComputerJobResult,
+  handleComputerJobs,
+  handleCreateComputer,
+  handleCreateWorkspaceComputerBinding,
+  handleDeleteComputer,
+  handleDeleteComputerBinding,
+  handleListComputers,
+  handleListWorkspaceComputerBindings,
+} from './computers-routes.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
 import { readWorkspaceRuntime, startWorkspaceRuntime, stopWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
@@ -3427,6 +3441,61 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     } catch (error) {
       sendError(res, 502, 'runtime.start_failed', error instanceof Error ? error.message : String(error))
     }
+    return
+  }
+
+  const computerCtx = { store: ctx.store, rawStore: ctx.rawStore, now: ctx.now }
+  if (path === '/api/cli/tokens') {
+    if (method !== 'POST') { notFound(req, res, method, path); return }
+    await handleCreateCliToken({ store: ctx.store, now: ctx.now }, req, res)
+    return
+  }
+
+  if (path === '/api/computers') {
+    if (method === 'GET') { await handleListComputers(computerCtx, req, res); return }
+    if (method === 'POST') { await handleCreateComputer(computerCtx, req, res); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+$/.test(path)) {
+    if (method === 'DELETE') { await handleDeleteComputer(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/heartbeat$/.test(path)) {
+    if (method === 'POST') { await handleComputerHeartbeat(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs$/.test(path)) {
+    if (method === 'GET') { await handleComputerJobs(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/events$/.test(path)) {
+    if (method === 'POST') { await handleComputerJobDelta(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/claim$/.test(path)) {
+    if (method === 'POST') { await handleComputerClaimJob(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/result$/.test(path)) {
+    if (method === 'POST') { await handleComputerJobResult(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/workspaces\/[^/]+\/computer-bindings$/.test(path)) {
+    if (method === 'GET') { await handleListWorkspaceComputerBindings(computerCtx, req, res, url); return }
+    if (method === 'POST') { await handleCreateWorkspaceComputerBinding(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computer-bindings\/[^/]+$/.test(path)) {
+    if (method === 'DELETE') { await handleDeleteComputerBinding(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
     return
   }
 

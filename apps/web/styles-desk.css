@@ -2781,3 +2781,55 @@ td.num,
   font-size: 8px;
   letter-spacing: 0.04em;
 }
+
+#settings-view .cli-token-output {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 12px;
+  border: var(--desk-line);
+  background: var(--roost-paper);
+  color: var(--roost-ink);
+  font-family: var(--roost-font-mono);
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+#settings-view .computer-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: var(--desk-line);
+}
+
+#settings-view .computer-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#settings-view .computer-kind {
+  padding: 1px 5px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 2px;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 9px;
+}
+
+#settings-view .computer-bindings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#settings-view .computer-binding {
+  padding: 2px 6px;
+  border: 1px solid var(--roost-rule);
+  border-radius: 2px;
+  color: var(--roost-muted);
+  font-family: var(--roost-font-mono);
+  font-size: 9px;
+}

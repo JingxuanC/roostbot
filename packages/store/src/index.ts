@@ -462,3 +462,43 @@ export type {
 } from './token-credits.ts'
 export { MAIN_BOT_NAME, MAIN_BOT_ROLE, MAIN_BOT_MODEL, ensureMainBot } from './onboarding.ts'
 export type { EnsureMainBotInput, EnsureMainBotResult } from './onboarding.ts'
+
+// ---- Local Computer / roostd（0025_computer_nodes.sql）----------------------
+export {
+  COMPUTER_BINDING_STATUSES,
+  COMPUTER_JOB_STATES,
+  COMPUTER_STATUSES,
+  claimComputerJob,
+  createComputer,
+  createComputerBinding,
+  createComputerJob,
+  createComputerToken,
+  expireComputerJobs,
+  findComputerByTokenHash,
+  finishComputerJob,
+  generateComputerToken,
+  getComputer,
+  getComputerBinding,
+  getComputerJob,
+  hashComputerToken,
+  listComputerBindings,
+  listComputers,
+  listQueuedComputerJobs,
+  markComputerJobRunning,
+  revokeComputer,
+  revokeComputerBinding,
+  touchComputer,
+} from './computers.ts'
+export type {
+  Computer,
+  ComputerBinding,
+  ComputerBindingStatus,
+  ComputerJob,
+  ComputerJobState,
+  ComputerStatus,
+  CreateComputerBindingInput,
+  CreateComputerInput,
+  CreateComputerJobInput,
+  CreateComputerTokenInput,
+  ListComputerBindingsFilter,
+} from './computers.ts'

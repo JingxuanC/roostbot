@@ -7,6 +7,7 @@ import { activeRound, getRound, getStopping, latestRound, setStopping } from '..
 import { getRoom } from '../../../packages/store/src/rooms.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 import { applyAdvance, assignmentsForRound } from './round-orchestrator.ts'
+import { computerBoundBotIds } from './computer-jobs.ts'
 import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { RuntimeRequestAuth } from './runtime-auth.ts'
 
@@ -63,7 +64,9 @@ export async function handleInternalAssignments(
   if (auth === null) return
   if (!ensureRuntimeWorkspace(auth, roomWorkspace(ctx, roomId), res)) return
   try {
-    send(res, 200, { assignments: assignmentsForRound(ctx.store, roomId) })
+    const workspaceId = roomWorkspace(ctx, roomId)
+    const localBots = workspaceId === null ? new Set<string>() : computerBoundBotIds(ctx.store, workspaceId)
+    send(res, 200, { assignments: assignmentsForRound(ctx.store, roomId).filter((assignment) => !localBots.has(assignment.botId)) })
   } catch (error) {
     fail(res, 404, 'room.not_found', error instanceof Error ? error.message : String(error))
   }
