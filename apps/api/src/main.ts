@@ -19,6 +19,7 @@ import { daytonaRuntimeManager } from './runtime-manager-daytona.ts'
 import { kubernetesRuntimeManager } from './runtime-manager-kubernetes.ts'
 import { createSmtpMailerFromEnv } from './smtp-mailer.ts'
 import { createSleeperRegistry } from './idle-sleepers.ts'
+import { createProviderConsoleClient, providerConsoleConfigFromEnv } from './provider-console-client.ts'
 
 function readPort(): number {
   const raw = process.env['PORT']
@@ -211,6 +212,11 @@ async function main(): Promise<void> {
     })
   }
 
+  // 算力提供方控制台（Daytona 自托管 fork 的 /provider/*）：默认关闭；
+  // ROOST_PROVIDER_CONSOLE=1 或显式 ROOST_PROVIDER_CONSOLE_URL 时才接进来。
+  const providerConsoleConfig = providerConsoleConfigFromEnv(process.env)
+  const providerConsole = providerConsoleConfig === null ? null : createProviderConsoleClient(providerConsoleConfig)
+
   const smtpMailer = createSmtpMailerFromEnv()
   let started: StartedServer
   try {
@@ -220,6 +226,7 @@ async function main(): Promise<void> {
       host,
       ...(sqlite === undefined ? {} : { rawStore: sqlite }),
       ...(runtimeManager === undefined ? {} : { runtimeManager }),
+      ...(providerConsole === null ? {} : { providerConsole }),
       ...(smtpMailer === null ? {} : { authMailer: smtpMailer }),
       ...(dshProxyPort === undefined ? {} : { dshProxyPort }),
       ...(sleepers === undefined

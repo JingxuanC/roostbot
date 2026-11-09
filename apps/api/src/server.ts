@@ -126,6 +126,8 @@ import {
   handleListQuotas,
   handlePatchQuota,
 } from './budget-routes.ts'
+import { handleProviderConsole } from './provider-console-routes.ts'
+import type { ProviderConsoleClient } from './provider-console-client.ts'
 import {
   handleDeleteMemory,
   handleExportMemories,
@@ -309,6 +311,8 @@ export interface ServerOptions {
   rawStore?: Store
   /** 工作区沙箱管理器；不配置时 /start 返回 runtime.not_configured。 */
   runtimeManager?: RuntimeManager
+  /** Daytona provider console（自托管 fork /provider/*）只读客户端；不配置时 /api/provider/* 返回 501。 */
+  providerConsole?: ProviderConsoleClient
   /** 面板端口转发的可注入钩子（测试用）；默认走 panel-forward.ts 的 openshell submit。 */
   panelForward?: PanelForwardHooks
   /** 发信口（测试注入）；不传时验证/重置 token 写 stdout。 */
@@ -408,6 +412,8 @@ interface HandlerContext extends AuthContext {
   connectorBackend: GatewayBackend
   /** 公网写操作 Origin 白名单（ROOST_ALLOWED_ORIGINS），启动时标准化。 */
   allowedOrigins: readonly string[]
+  /** Daytona provider console 只读客户端（/api/provider/*）；未配置时相关路由返回 501。 */
+  providerConsole?: ProviderConsoleClient
 }
 
 type Clock = () => number
@@ -2989,6 +2995,12 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // 算力提供方经济数据（Daytona 自托管 fork 的 /provider/*）：节点、用量、收益、结算、告警。
+  if (path.startsWith('/api/provider/')) {
+    await handleProviderConsole(ctx, req, res, url)
+    return
+  }
+
   // 记忆：内部写入 / 检索 / 读取记录，用户列表 / 删除 / 导出（memory.md §4–§9）。
   if (path === '/api/internal/memories') {
     if (method !== 'POST') {
@@ -3842,6 +3854,7 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     allowedOrigins: parseAllowedOrigins(process.env.ROOST_ALLOWED_ORIGINS),
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
+    ...(options.providerConsole === undefined ? {} : { providerConsole: options.providerConsole }),
     panelForward,
     ...(options.rawStore === undefined
       ? {}
