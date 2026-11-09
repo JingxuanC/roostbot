@@ -264,6 +264,26 @@ export function touchComputer(store: Store, id: string, at = Date.now()): Comput
   return getComputer(store, id)
 }
 
+export interface HeartbeatComputerInput {
+  at?: number
+  version?: string
+  capabilities?: Record<string, unknown>
+}
+
+/** Heartbeat: always marks connected; capability observations are last-writer-wins. */
+export function heartbeatComputer(store: Store, id: string, input: HeartbeatComputerInput = {}): Computer | null {
+  assertOpen(store)
+  const at = input.at ?? Date.now()
+  const current = getComputer(store, id)
+  if (current === null) return null
+  const capabilities = input.capabilities === undefined ? current.capabilities : jsonObject(input.capabilities, current.capabilities)
+  const version = input.version === undefined ? current.version : input.version
+  store.db.prepare(
+    "UPDATE computers SET status = 'connected', last_seen_at = ?, version = ?, capabilities_json = ? WHERE id = ? AND revoked_at IS NULL",
+  ).run(at, version ?? null, JSON.stringify(capabilities), id)
+  return getComputer(store, id)
+}
+
 export function revokeComputer(store: Store, id: string, at = Date.now()): Computer | null {
   assertOpen(store)
   store.db.prepare("UPDATE computers SET status = 'revoked', revoked_at = ? WHERE id = ?").run(at, id)

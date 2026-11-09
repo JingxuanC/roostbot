@@ -87,9 +87,18 @@ test('a local computer can register, bind a Bot, claim a room job and post the r
     void lastJobId
 
 
-    const heartbeat = await harness.call('POST', `/api/computers/${computerId}/heartbeat`, { token: computerToken })
+    const heartbeat = await harness.call('POST', `/api/computers/${computerId}/heartbeat`, {
+      token: computerToken,
+      body: { version: '9.9.9', capabilities: { agents: [{ kind: 'claude-code', installed: true }] } },
+    })
     assert.equal(heartbeat.status, 200, heartbeat.text)
     assert.equal(heartbeat.json.computer.status, 'connected')
+    assert.equal(heartbeat.json.computer.version, '9.9.9')
+    assert.deepEqual(heartbeat.json.computer.capabilities.agents[0].kind, 'claude-code')
+
+    harness.clock.advance(120_000)
+    const stale = await harness.call('GET', '/api/computers', { token })
+    assert.equal(stale.json.computers[0].status, 'offline')
 
     const listed = await harness.call('GET', '/api/workspaces/' + workspaceId + '/computer-bindings', { token })
     assert.equal(listed.status, 200)

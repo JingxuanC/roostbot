@@ -84,3 +84,20 @@ test('roost CLI registers a computer, binds a Bot and roostd posts a local Agent
     rmSync(project, { recursive: true, force: true })
   }
 })
+
+test('roost CLI can discover agents and report autostart status', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'roost-cli-p1-'))
+  try {
+    const env = { ROOST_HOME: home }
+    const discover = await runCli(['agent', 'discover', '--json'], env)
+    assert.equal(discover.code, 0, discover.stderr)
+    const agents = JSON.parse(discover.stdout)
+    assert.ok(Array.isArray(agents))
+    assert.ok(agents.some((agent: { kind: string }) => agent.kind === 'claude-code'))
+    const autostart = await runCli(['daemon', 'autostart', 'status'], env)
+    assert.equal(autostart.code, 0, autostart.stderr)
+    assert.match(autostart.stdout, /installed|not installed/)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

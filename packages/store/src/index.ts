@@ -481,6 +481,7 @@ export {
   getComputerBinding,
   getComputerJob,
   hashComputerToken,
+  heartbeatComputer,
   listComputerBindings,
   listComputers,
   listQueuedComputerJobs,
@@ -500,5 +501,6 @@ export type {
   CreateComputerInput,
   CreateComputerJobInput,
   CreateComputerTokenInput,
+  HeartbeatComputerInput,
   ListComputerBindingsFilter,
 } from './computers.ts'

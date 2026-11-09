@@ -128,6 +128,8 @@ ROOST_CP_PORT=8787
 roost login --token <cli-token> --server https://roostbots.com
 roost setup
 roost bind <workspace-id> --bot <bot-id> --agent claude-code --path ./project
+roost agent discover
+roost daemon autostart enable
 roost daemon start
 ```
 

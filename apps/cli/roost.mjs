@@ -10,7 +10,7 @@
 //
 // 本地 binding 的 workdir 只存在 ~/.roost/config.json，不上传云端。
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync, chmodSync, renameSync, unlinkSync } from 'node:fs'
 import { homedir, hostname, platform, arch, userInfo } from 'node:os'
@@ -80,7 +80,7 @@ function tokenOf(flags, config) {
   return String(flags.token || process.env.ROOST_SESSION_TOKEN || config.sessionToken || '').trim()
 }
 
-async function request(config, flags, method, path, body, token) {
+async function request(config, flags, method, path, body, token, signal) {
   const base = serverUrl(flags, config)
   const headers = {}
   if (token) headers.authorization = `Bearer ${token}`
@@ -89,6 +89,7 @@ async function request(config, flags, method, path, body, token) {
     method,
     headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(signal === undefined ? {} : { signal }),
   })
   const text = await response.text().catch(() => '')
   let json = null
@@ -172,6 +173,7 @@ async function setup(flags) {
   writeConfig(config)
   await registerComputer(flags, config, config.computer)
   if (flags['no-daemon'] !== true) await daemonStart(flags)
+  if (flags.autostart === true) autostartCommand(flags, ['enable'])
 }
 
 async function computerList(flags) {
@@ -220,6 +222,148 @@ function agentCommand(config, agentKind) {
   return command
 }
 
+function findExecutable(binary) {
+  if (binary.includes('/') || binary.includes('\\')) {
+    const absolute = resolve(binary)
+    return existsSync(absolute) ? absolute : null
+  }
+  const finder = platform() === 'win32' ? 'where' : 'which'
+  const found = spawnSync(finder, [binary], { encoding: 'utf8', timeout: 3000 })
+  if (found.status !== 0) return null
+  const first = String(found.stdout || '').split(/\r?\n/).find((line) => line.trim() !== '')
+  return first === undefined ? null : first.trim()
+}
+
+function discoverAgents(config) {
+  const result = []
+  for (const kind of Object.keys(DEFAULT_AGENT_COMMANDS)) {
+    let entry
+    try { entry = agentCommand(config, kind) } catch { continue }
+    const binary = findExecutable(entry[0])
+    let version = ''
+    if (binary !== null) {
+      const probe = spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 4000 })
+      version = String(probe.stdout || probe.stderr || '').trim().split(/\r?\n/)[0]?.slice(0, 120) ?? ''
+    }
+    result.push({ kind, command: entry, binary: binary || entry[0], installed: binary !== null, version })
+  }
+  return result
+}
+
+function shellWords(text) {
+  const words = []
+  let current = ''
+  let quote = ''
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (quote !== '') {
+      if (ch === quote) quote = ''
+      else if (ch === '\\' && quote === '"' && i + 1 < text.length) current += text[++i]
+      else current += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue }
+    if (/\s/.test(ch)) { if (current !== '') { words.push(current); current = '' }; continue }
+    current += ch
+  }
+  if (current !== '') words.push(current)
+  return words
+}
+
+function agentsCommand(flags, positional) {
+  const config = readConfig()
+  const sub = positional[0]
+  if (sub === 'set') {
+    const kind = positional[1]
+    const command = typeof flags.command === 'string' ? shellWords(flags.command) : []
+    if (kind === undefined || command.length === 0) throw new Error('usage: roost agent set <kind> --command "claude --print"')
+    config.agentCommands = { ...(config.agentCommands || {}), [kind]: command }
+    writeConfig(config)
+    console.log(`${kind}: ${command.join(' ')}`)
+    return
+  }
+  const agents = discoverAgents(config)
+  if (flags.json) { console.log(JSON.stringify(agents, null, 2)); return }
+  for (const agent of agents) {
+    console.log(`${agent.installed ? 'ok ' : '-- '}${agent.kind}\t${agent.installed ? agent.binary : 'not found'}\t${agent.version || ''}`)
+  }
+}
+
+function plistEscape(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function autostartInfo() {
+  const node = process.execPath
+  const cli = resolve(process.argv[1])
+  const home = roostHome()
+  if (platform() === 'darwin') {
+    const path = join(homedir(), 'Library', 'LaunchAgents', 'com.roost.daemon.plist')
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.roost.daemon</string>
+  <key>ProgramArguments</key><array><string>${plistEscape(node)}</string><string>${plistEscape(cli)}</string><string>daemon</string><string>run</string></array>
+  <key>EnvironmentVariables</key><dict><key>ROOST_HOME</key><string>${plistEscape(home)}</string></dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${plistEscape(join(home, 'daemon.log'))}</string>
+  <key>StandardErrorPath</key><string>${plistEscape(join(home, 'daemon.log'))}</string>
+</dict></plist>
+`
+    return { platform: 'launchd', path, content: plist, enable: ['launchctl', ['load', '-w', path]], disable: ['launchctl', ['unload', '-w', path]] }
+  }
+  if (platform() === 'linux') {
+    const path = join(homedir(), '.config', 'systemd', 'user', 'roost.service')
+    const content = `[Unit]
+Description=Roost local computer daemon
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${node} ${cli} daemon run
+Environment=ROOST_HOME=${home}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`
+    return { platform: 'systemd', path, content, enable: ['systemctl', ['--user', 'enable', '--now', 'roost.service']], disable: ['systemctl', ['--user', 'disable', '--now', 'roost.service']] }
+  }
+  const path = join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'roost.cmd')
+  const content = `@echo off
+set ROOST_HOME=${home}
+"${node}" "${cli}" daemon run
+`
+  return { platform: 'windows-startup', path, content, enable: null, disable: null }
+}
+
+function autostartCommand(flags, positional) {
+  const action = positional[0] || 'status'
+  const info = autostartInfo()
+  if (action === 'status') {
+    console.log(`${info.platform}\t${existsSync(info.path) ? 'installed' : 'not installed'}\t${info.path}`)
+    return
+  }
+  if (action === 'enable') {
+    mkdirSync(dirname(info.path), { recursive: true, mode: 0o700 })
+    writeFileSync(info.path, info.content, { mode: 0o600 })
+    if (info.enable) {
+      const result = spawnSync(info.enable[0], info.enable[1], { encoding: 'utf8', timeout: 15000 })
+      if (result.status !== 0) throw new Error(`autostart enable failed: ${(result.stderr || result.stdout || '').trim()}`)
+    }
+    console.log(`autostart enabled: ${info.platform} ${info.path}`)
+    return
+  }
+  if (action === 'disable') {
+    if (info.disable) spawnSync(info.disable[0], info.disable[1], { encoding: 'utf8', timeout: 15000 })
+    if (existsSync(info.path)) unlinkSync(info.path)
+    console.log('autostart disabled')
+    return
+  }
+  throw new Error('usage: roost daemon autostart enable|disable|status')
+}
+
 function runAgent(command, prompt, cwd, timeoutMs = 240_000, onStdout = () => {}) {
   return new Promise((resolvePromise) => {
     let child
@@ -258,10 +402,10 @@ function runAgent(command, prompt, cwd, timeoutMs = 240_000, onStdout = () => {}
   })
 }
 
-async function postHeartbeat(config, flags) {
+async function postHeartbeat(config, flags, body, signal) {
   if (!config.computer) return
   try {
-    await request(config, flags, 'POST', `/api/computers/${encodeURIComponent(config.computer.id)}/heartbeat`, undefined, config.computer.token)
+    await request(config, flags, 'POST', `/api/computers/${encodeURIComponent(config.computer.id)}/heartbeat`, body, config.computer.token, signal)
   } catch (error) {
     console.error(`[roostd] heartbeat failed: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -308,9 +452,12 @@ async function daemonRun(flags) {
   config.serverUrl = base
   const log = (message) => console.log(`${new Date().toISOString()} ${message}`)
   log(`roostd started for ${config.computer.id} (${base})`)
+  const agents = discoverAgents(config)
+  log(`local agents: ${agents.map((agent) => `${agent.kind}${agent.installed ? '' : '(missing)'}`).join(', ')}`)
   let heartbeatAt = 0
   let stopped = false
-  const stop = () => { stopped = true; log('stopping') }
+  const abort = new AbortController()
+  const stop = () => { stopped = true; abort.abort(); log('stopping') }
   process.on('SIGTERM', stop)
   process.on('SIGINT', stop)
   while (!stopped) {
@@ -320,17 +467,21 @@ async function daemonRun(flags) {
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000))
       continue
     }
-    if (Date.now() - heartbeatAt > 25_000) { heartbeatAt = Date.now(); await postHeartbeat(config, flags) }
+    if (heartbeatAt === 0 || Date.now() - heartbeatAt > 25_000) {
+      heartbeatAt = Date.now()
+      await postHeartbeat(config, flags, { version: '0.1.0', capabilities: { agents } }, abort.signal)
+    }
     try {
-      const result = await request(config, flags, 'GET', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs?wait=20`, undefined, config.computer.token)
+      const result = await request(config, flags, 'GET', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs?wait=20`, undefined, config.computer.token, abort.signal)
       const job = result && result.job
       if (job) {
         log(`job ${job.id} ${job.roomId}`)
-        const claimed = await request(config, flags, 'POST', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs/${encodeURIComponent(job.id)}/claim`, undefined, config.computer.token)
+        const claimed = await request(config, flags, 'POST', `/api/computers/${encodeURIComponent(config.computer.id)}/jobs/${encodeURIComponent(job.id)}/claim`, undefined, config.computer.token, abort.signal)
         const active = claimed.job || job
         await runJob(config, flags, active)
       }
     } catch (error) {
+      if (stopped) break
       log(`poll failed: ${error instanceof Error ? error.message : String(error)}`)
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000))
     }
@@ -385,10 +536,13 @@ function usage() {
   console.log(`roost - local computer agent connector
 
   roost login --token <sessionToken> [--server URL]   # token: browser localStorage roost.sessionToken
-  roost setup [--token <sessionToken>] [--name <name>] [--no-daemon]
+  roost setup [--token <sessionToken>] [--name <name>] [--no-daemon] [--autostart]
   roost computer list [--json]
   roost bind <workspaceId> --bot <botId> --agent <kind> --path <dir> [--label <name>]
   roost bindings [--json]
+  roost agent discover [--json]
+  roost agent set <kind> --command "claude --print"
+  roost daemon autostart enable|disable|status
   roost daemon start|stop|status|logs|run
   roost status
 
@@ -414,12 +568,14 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (command === 'bind') return await bind(flags, positional.slice(1))
     if (command === 'bindings') return await bindingsList(flags)
+    if (command === 'agent') return agentsCommand(flags, positional.slice(1))
     if (command === 'daemon') {
       if (sub === 'start') return await daemonStart(flags)
       if (sub === 'stop') return await daemonStop()
       if (sub === 'status') return await daemonStatus()
       if (sub === 'logs') return daemonLogs(flags)
       if (sub === 'run') return await daemonRun(flags)
+      if (sub === 'autostart') return autostartCommand(flags, positional.slice(2))
       throw new Error(`unknown daemon command ${sub || ''}`)
     }
     throw new Error(`unknown command ${command}`)

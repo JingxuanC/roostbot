@@ -31,11 +31,11 @@ import {
   getComputer,
   getComputerBinding,
   hashComputerToken,
+  heartbeatComputer,
   listComputerBindings,
   listComputers,
   revokeComputer,
   revokeComputerBinding,
-  touchComputer,
 } from '../../../packages/store/src/computers.ts'
 import type { Computer } from '../../../packages/store/src/computers.ts'
 import type { SlotResult } from '../../../packages/contract/src/index.ts'
@@ -97,7 +97,14 @@ function pathId(pathname: string, pattern: RegExp): string | null {
 export async function handleListComputers(ctx: ComputersRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const session = await authenticateUser(ctx, req, res)
   if (session === null || ctx.rawStore === undefined) return
-  sendJson(res, 200, { computers: listComputers(ctx.rawStore, session.accountId) })
+  const now = ctx.now()
+  const computers = listComputers(ctx.rawStore, session.accountId).map((computer) => ({
+    ...computer,
+    status: computer.status === 'connected' && computer.lastSeenAt !== undefined && now - computer.lastSeenAt > 90_000
+      ? 'offline'
+      : computer.status,
+  }))
+  sendJson(res, 200, { computers })
 }
 
 export async function handleCreateComputer(ctx: ComputersRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -153,7 +160,22 @@ export async function handleComputerHeartbeat(ctx: ComputersRouteContext, req: I
   if (computer === null || ctx.rawStore === undefined) return
   const id = pathId(url.pathname, /^\/api\/computers\/([^/]+)\/heartbeat$/)
   if (id === null || id !== computer.id) return sendError(res, 403, 'computer.forbidden', 'computer token does not match path')
-  const updated = touchComputer(ctx.rawStore, computer.id, ctx.now())
+  let version
+  let capabilities
+  try {
+    const parsed = await readJsonBody(req)
+    if (parsed.ok && isPlainObject(parsed.value)) {
+      if (typeof parsed.value['version'] === 'string') version = parsed.value['version'].slice(0, 40)
+      if (isPlainObject(parsed.value['capabilities'])) capabilities = parsed.value['capabilities']
+    }
+  } catch {
+    // Heartbeats may be empty; capability reporting is optional.
+  }
+  const updated = heartbeatComputer(ctx.rawStore, computer.id, {
+    at: ctx.now(),
+    ...(version === undefined ? {} : { version }),
+    ...(capabilities === undefined ? {} : { capabilities }),
+  })
   sendJson(res, 200, { computer: updated })
 }
 

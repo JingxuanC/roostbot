@@ -418,3 +418,23 @@ P0 边界：
 - 没有离线重试 UI；job lease 过期会回到 queued
 - 本地流式 delta 是 stdout 分块；最终结果仍是权威消息
 - 暂不支持云端 Agent 调用本地 MCP（P2）
+
+
+## 16. P1 增量（2026-11-09）
+
+本轮补上：
+
+- `roost agent discover [--json]`：探测本机 claude/codex/grok/dsh
+- `roost agent set <kind> --command "..."`：按 Agent 配置本地命令
+- daemon heartbeat 上报版本和 Agent 能力
+- `GET /api/computers` 对超过 90 秒没心跳的 connected 电脑返回 `offline`
+- `roost daemon autostart enable|disable|status`：
+  macOS launchd / Linux systemd user / Windows Startup
+- daemon 停止时 abort 当前长轮询，不再等 20 秒
+- Settings 页「已连接的电脑」显示在线状态和 binding
+
+仍未做：
+
+- Web 端创建 binding 的表单（需要解决“本地 workdir 不能上传”的交互）
+- 安装包 / 自动更新
+- 多本地 Agent 的并发 execution lane
