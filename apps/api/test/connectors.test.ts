@@ -35,7 +35,7 @@ interface Fixture {
   wsId: string
   clock: { now: () => number; advance: (ms: number) => void }
   backendCalls: { count: number; calls: Array<{ connectionAlias?: string; accountId?: string }> }
-  call: (method: string, path: string, options?: { body?: unknown; token?: string; runtimeToken?: string }) => Promise<ApiResult>
+  call: (method: string, path: string, options?: { body?: unknown; token?: string; runtimeToken?: string; accept?: string }) => Promise<ApiResult>
 }
 
 function fakeBackend(backendCalls: { count: number; calls: Array<{ connectionAlias?: string; accountId?: string }> }): GatewayBackend {
@@ -104,17 +104,18 @@ async function withApi(
     async function call(
       method: string,
       path: string,
-      callOptions: { body?: unknown; token?: string; runtimeToken?: string } = {},
+      callOptions: { body?: unknown; token?: string; runtimeToken?: string; accept?: string } = {},
     ): Promise<ApiResult> {
       const headers: Record<string, string> = {}
       if (callOptions.token !== undefined) headers['authorization'] = `Bearer ${callOptions.token}`
       if (callOptions.runtimeToken !== undefined) headers['x-runtime-token'] = callOptions.runtimeToken
+      if (callOptions.accept !== undefined) headers['accept'] = callOptions.accept
       let body: string | undefined
       if (callOptions.body !== undefined) {
         headers['content-type'] = 'application/json'
         body = JSON.stringify(callOptions.body)
       }
-      const init: RequestInit = { method, headers }
+      const init: RequestInit = { method, headers, redirect: 'manual' }
       if (body !== undefined) init.body = body
       const response = await fetch(`${baseUrl}${path}`, init)
       const text = await response.text()
@@ -266,6 +267,20 @@ test('回调兼容 OpenConnector 的 status=success', async () => {
     assert.equal(callback.status, 200, JSON.stringify(callback.json))
     assert.equal(callback.json.connected, true)
     assert.equal(fx.store.db.prepare('SELECT COUNT(*) AS n FROM connections WHERE workspace_id = ?').get(fx.wsId).n, 1)
+  })
+})
+
+test('浏览器回调 302 回连接器页，API 客户端仍拿 JSON', async () => {
+  await withApi(async (fx) => {
+    const started = await fx.call('POST', '/api/connectors/github/connect', { body: { workspaceId: fx.wsId }, token: TOKEN })
+    assert.equal(started.status, 201)
+    const callback = await fx.call(
+      'GET',
+      `/api/connectors/callback/github?state=${started.json.state}&status=success&service=github`,
+      { accept: 'text/html,application/xhtml+xml' },
+    )
+    assert.equal(callback.status, 302)
+    assert.equal(callback.headers.get('location'), '/#/connectors?connected=github')
   })
 })
 

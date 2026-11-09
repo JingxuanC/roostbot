@@ -293,7 +293,10 @@ export async function handleConnectorCallback(
       alias: pending.alias,
       at: ctx.now(),
     })
-    // v0 没有前端回调页：直接返回 JSON；接入前端后改成 302 到 /connectors。
+    // 浏览器导航回到连接器页；API/测试客户端（Accept 不是 text/html）仍返回 JSON。
+    if (wantsHtml(req)) {
+      return redirectToConnectors(res, { connected: slug })
+    }
     sendJson(res, 200, { connected: true, connection: connectionJson(connection) })
   } catch (err) {
     return sendConnectorFailure(res, err)
@@ -621,6 +624,20 @@ export async function handleInternalConnectorCall(
 }
 
 // ---- 序列化 ------------------------------------------------------------------
+
+function wantsHtml(req: IncomingMessage): boolean {
+  const accept = req.headers['accept']
+  return typeof accept === 'string' && accept.includes('text/html')
+}
+
+function redirectToConnectors(res: ServerResponse, params: Record<string, string>): void {
+  const query = new URLSearchParams(params).toString()
+  res.writeHead(302, {
+    location: `/#/connectors${query === '' ? '' : `?${query}`}`,
+    'cache-control': 'no-store',
+  })
+  res.end()
+}
 
 interface ConnectorCardOptions {
   mine?: boolean
