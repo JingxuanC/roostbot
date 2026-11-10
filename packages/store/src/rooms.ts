@@ -116,14 +116,21 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
     },
   })
 
+  // 幂等重放必须回放已经落库的正文、parts 和 routine，不能回放这次请求里的新内容。
+  const payload = event.payload
+  const storedText = typeof payload['text'] === 'string' ? payload['text'] : text
+  const storedParts = Array.isArray(payload['parts']) ? (payload['parts'] as MessagePart[]) : []
+  const storedRoutine = payload['routine']
   return {
     seq: event.seq,
     at: event.at,
-    actor,
+    actor: event.actor ?? actor,
     roomId,
-    text,
-    ...(parts.length === 0 ? {} : { parts }),
-    ...(req.routine === undefined ? {} : { routine: req.routine }),
+    text: storedText,
+    ...(storedParts.length === 0 ? {} : { parts: storedParts }),
+    ...(storedRoutine !== undefined && storedRoutine !== null && typeof storedRoutine === 'object'
+      ? { routine: storedRoutine as NonNullable<RoomMessage['routine']> }
+      : {}),
   }
 }
 

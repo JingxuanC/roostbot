@@ -1,6 +1,6 @@
 # Spike 0002：在远端服务器上真跑 OpenShell
 
-> 日期：2026-11-03。机器：`47.90.253.85`（阿里云 Alibaba Cloud Linux 4，4 核 7.3GB，Docker 26.1.3，x86_64）。
+> 日期：2026-11-03。机器：`<REMOTE_HOST>`（云主机 Linux，4 核，Docker 26 与独立的 Docker 28）。登录方式和主机地址不写在仓库里。
 > 目的：验证 `docs/design/sandboxing.md` 的选型，并把 `packages/sandbox` 的 CLI 假设对齐真实二进制。
 
 ## 结论（先看这个）
@@ -325,7 +325,7 @@ sandbox suspend`），所以 runner 回退到 `stop`/`start`：工作区保留�
 
 ## 方案 A 端到端：用户沙箱 + room-agent + 多轮 + stop/start（2026-11-04）
 
-远端实测（`47.90.253.85`，Docker 28 + OpenShell 0.1.6）：
+远端实测（`<REMOTE_HOST>`，Docker 28 + OpenShell 0.1.6）：
 
 ```
 沙箱：user-5f840b13   ← 每用户一个，固定名字
@@ -384,11 +384,4 @@ $ openshell sandbox list                    → Ready
 - **沙箱隔离在远端已真实验证**（默认拒绝 + 白名单 + 非 root），不再是纸面；
 - 唯一硬约束：**docker 驱动要求 Docker ≥ 28**，写进 `sandboxing.md` 与部署文档；
 - **worker 的回合已经是沙箱里的 DSH 回合**（模型用 mock，路径是真的）；
-- 远端留着可用的 gateway（mTLS + docker28 socket）与独立 dockerd，下一次调试不用从零开始：
-
-```sh
-ssh root@47.90.253.85
-openshell status                     # Authenticated
-openshell sandbox list               # 当前为空
-docker -H unix:///var/run/docker28/docker.sock ps   # 独立 dockerd 28
-```
+- 测完就要停掉独立 dockerd 和 gateway，不要把第二个 root socket 留在跑着其它业务的机器上。主机地址和登录方式不记在这份文档里。

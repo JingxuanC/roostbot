@@ -53,7 +53,11 @@ NODE_BIN="${NODE_BIN:-node}"
 DSH_SHUTDOWN_TIMEOUT="${DSH_SHUTDOWN_TIMEOUT:-20}"
 SIDECAR_SHUTDOWN_TIMEOUT="${SIDECAR_SHUTDOWN_TIMEOUT:-5}"
 
-export UPSTREAM RUNTIME_TOKEN BASE_PATH PORT DSH_DATA_DIR DSH_HOME
+# RUNTIME_TOKEN is not exported. Only the sidecar process receives it; DSH and
+# anything DSH starts must not inherit the token (see sidecar/proxy.mjs).
+export UPSTREAM BASE_PATH PORT DSH_DATA_DIR DSH_HOME
+SIDECAR_TOKEN=$RUNTIME_TOKEN
+unset RUNTIME_TOKEN
 
 # --- preflight ---------------------------------------------------------------
 command -v "$NODE_BIN" >/dev/null 2>&1 || die "node not found: $NODE_BIN"
@@ -176,7 +180,7 @@ watch_sidecar() {
 
 # --- start the sidecar -------------------------------------------------------
 log "starting sidecar on 127.0.0.1:${PORT}${BASE_PATH} -> ${UPSTREAM}"
-"$NODE_BIN" "$SIDECAR_SCRIPT" &
+RUNTIME_TOKEN="$SIDECAR_TOKEN" "$NODE_BIN" "$SIDECAR_SCRIPT" &
 SIDECAR_PID=$!
 
 if ! wait_for_sidecar; then

@@ -1,7 +1,9 @@
 // room-agent：长活 SDK + 每房间一个 session（方案 A 的核心行为）。
 
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -102,6 +104,33 @@ test('两条消息走同一个 session，回复带 idem（多轮）', async () =
   } finally {
     await agent.stop()
     await cp.close()
+  }
+})
+
+test('两个共享游标文件的 agent 不会对同一条历史消息各调一次模型', async () => {
+  const cp = await fakeControlPlane([
+    { seq: 1, actor: { kind: 'user', id: 'acc_1' }, text: '只该回一次' },
+  ])
+  const dir = mkdtempSync(join(tmpdir(), 'roost-cursors-'))
+  const stateFile = join(dir, 'cursors.json')
+  const agents = await Promise.all([0, 1].map(() => startRoomAgent({
+    apiBase: cp.base,
+    runtimeToken: 'rt',
+    botId: 'selector',
+    dshBin: join(HERE, 'fake-dsh.mjs'),
+    pollMs: 20,
+    stateFile,
+    log: () => {},
+  })))
+  try {
+    const deadline = Date.now() + 4000
+    while (Date.now() < deadline && cp.said.length < 1) await new Promise((r) => setTimeout(r, 20))
+    await new Promise((r) => setTimeout(r, 400))
+    assert.equal(cp.said.length, 1)
+  } finally {
+    await Promise.all(agents.map((agent) => agent.stop()))
+    await cp.close()
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 

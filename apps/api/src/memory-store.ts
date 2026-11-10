@@ -69,7 +69,7 @@ export function createMemoryStore(): StorePort {
     const text = input.text.trim()
     if (text === '' && (input.parts === undefined || input.parts.length === 0)) throw new Error('message text is empty')
     if (input.idem !== undefined) {
-      const seen = idemSeen.get(`${room.id}:${input.idem}`)
+      const seen = idemSeen.get(`${room.id}:${input.actor.kind}:${input.actor.id}:${input.idem}`)
       if (seen !== undefined) return { ...seen }
     }
     const message: RoomMessageRecord = {
@@ -82,7 +82,9 @@ export function createMemoryStore(): StorePort {
     }
     nextSeq += 1
     messages.get(room.id)?.push(message)
-    if (input.idem !== undefined) idemSeen.set(`${room.id}:${input.idem}`, message)
+    if (input.idem !== undefined) {
+      idemSeen.set(`${room.id}:${input.actor.kind}:${input.actor.id}:${input.idem}`, message)
+    }
     publishRoomWake({ roomId: room.id, seq: message.seq, kind: 'chat.message' })
     return { ...message }
   }

@@ -5,7 +5,7 @@
 // 设计见 docs/design/sandboxing.md §3。
 
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,6 +29,12 @@ interface RunResult {
   stderr: string
   timedOut: boolean
   durationMs: number
+}
+
+/** ROOST_* 是运行时接线（文档里的已知妥协）。其它像凭据的键拒绝放进 argv。 */
+function isCredentialEnv(key: string): boolean {
+  if (key.startsWith('ROOST_')) return false
+  return /(api[_-]?key|_key$|secret|password|credential|token)/i.test(key)
 }
 
 export function runCommand(binary: string, args: string[], options: { timeoutMs?: number; stdin?: string } = {}): Promise<RunResult> {
@@ -101,7 +107,14 @@ export class OpenShellBackend implements SandboxBackend {
         `openshell sandbox name must match [a-z0-9][a-z0-9-]{0,18} (got "${input.name}", ${input.name.length} chars)`
       )
     }
-    const dir = this.policyDir ?? (await mkdtemp(join(tmpdir(), 'roost-policy-')))
+    for (const key of Object.keys(input.env ?? {})) {
+      if (isCredentialEnv(key)) {
+        throw new SandboxError('invalid_env', `env ${key} looks like a credential; inject it with a provider, not the CLI`)
+      }
+    }
+    const createdDir = this.policyDir === undefined ? await mkdtemp(join(tmpdir(), 'roost-policy-')) : undefined
+    const dir = createdDir ?? this.policyDir!
+    try {
     const policyPath = join(dir, `${input.name}.policy.yaml`)
     await writeFile(policyPath, input.policyYaml, { mode: 0o600 })
 
@@ -133,6 +146,9 @@ export class OpenShellBackend implements SandboxBackend {
     // CLI 成功时不保证打印 id；用 name 作为句柄，exec/stop 都按 name 找。
     const printed = result.stdout.trim().split(/\s+/).find((token) => token.startsWith('sb_') || token.startsWith('sandbox_'))
     return { id: printed ?? input.name, name: input.name, backend: this.id }
+    } finally {
+      if (createdDir !== undefined) await rm(createdDir, { recursive: true, force: true })
+    }
   }
 
   async exec(handle: SandboxHandle, argv: string[], options: ExecOptions = {}): Promise<ExecResult> {

@@ -18,6 +18,8 @@ import type { Store } from '../../../packages/store/src/types.ts'
 import { ensureQuota } from '../../../packages/store/src/budget.ts'
 import { createWorkspace } from '../../../packages/store/src/workspaces.ts'
 import { createRoom, sendMessage } from '../../../packages/store/src/rooms.ts'
+import { createBot } from '../../../packages/store/src/bots.ts'
+import { createRoutine, enqueueRoutineNow } from '../../../packages/store/src/routines.ts'
 import {
   issueRuntimeToken,
   revokeRuntimeToken,
@@ -391,6 +393,117 @@ test('attachments：workspace token 往别的 workspace 登记产物 → 403；�
           body: 'hello',
         })
         assert.equal(ok.status, 201)
+      },
+      { attachmentsDir: dir },
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('workspace token：事件流、delta、notify 不能跨 workspace', async () => {
+  await withSqliteApi(async ({ base, rawStore, clock, ids }) => {
+    const token = issue(rawStore, ids.wsA, clock)
+    const forged = await call(base, 'GET', `/api/internal/events?after=0&workspaceId=${ids.wsB}`, {
+      runtimeToken: token.token,
+    })
+    assert.equal(forged.status, 403)
+    assert.equal(forged.json.error.code, 'forbidden_workspace')
+
+    const own = await call(base, 'GET', '/api/internal/events?after=0', { runtimeToken: token.token })
+    assert.equal(own.status, 200)
+    const events = own.json.events as Array<{ roomId: string; payload?: { text?: string } }>
+    assert.ok(events.length > 0)
+    assert.ok(events.every((event) => event.roomId === ids.roomA))
+    assert.ok(!events.some((event) => event.payload?.text === 'hello B'))
+
+    const delta = await call(base, 'POST', `/api/internal/rooms/${ids.roomB}/deltas`, {
+      runtimeToken: token.token,
+      body: { botId: 'selector', delta: '越界' },
+    })
+    assert.equal(delta.status, 403)
+    assert.equal(delta.json.error.code, 'forbidden_workspace')
+
+    const notify = await call(base, 'POST', '/api/internal/notify', {
+      runtimeToken: token.token,
+      body: { roomId: ids.roomB, seq: 0 },
+    })
+    assert.equal(notify.status, 403)
+    assert.equal(notify.json.error.code, 'forbidden_workspace')
+  })
+})
+
+test('workspace token：不能给别的 workspace 的 routine run 写结果', async () => {
+  await withSqliteApi(async ({ base, rawStore, clock, ids }) => {
+    const bot = createBot(rawStore, {
+      workspaceId: ids.wsB,
+      name: '乙的助手',
+      model: 'deepseek-chat',
+      createdBy: 'acc_b',
+    })
+    const routine = createRoutine(rawStore, {
+      workspaceId: ids.wsB,
+      botId: bot.id,
+      name: '早报',
+      cron: '0 8 * * *',
+      prompt: '汇总',
+      roomId: ids.roomB,
+      at: clock.now(),
+    })
+    const run = enqueueRoutineNow(rawStore, routine.id, clock.now())
+    const token = issue(rawStore, ids.wsA, clock)
+    const denied = await call(base, 'POST', `/api/internal/routine-runs/${run.id}/result`, {
+      runtimeToken: token.token,
+      body: { text: '不该写进乙' },
+    })
+    assert.equal(denied.status, 403)
+    assert.equal(denied.json.error.code, 'forbidden')
+
+    const allowed = issue(rawStore, ids.wsB, clock)
+    const ok = await call(base, 'POST', `/api/internal/routine-runs/${run.id}/result`, {
+      runtimeToken: allowed.token,
+      body: { text: '早报正文' },
+    })
+    assert.equal(ok.status, 200, ok.text)
+    assert.equal(ok.json.run.status, 'posted')
+  })
+})
+
+test('消息签名不会给别的 workspace 的产物发读取地址', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roost-runtime-token-sign-'))
+  try {
+    await withSqliteApi(
+      async ({ base, rawStore, ids }) => {
+        const uploaded = await fetch(`${base}/api/internal/artifacts`, {
+          method: 'POST',
+          headers: { 'x-runtime-token': GLOBAL, ...artifactHeaders(ids.wsB, ids.messageB) },
+          body: 'secret-bytes',
+        })
+        assert.equal(uploaded.status, 201, await uploaded.clone().text())
+        const artifactId = ((await uploaded.json()) as { artifact: { id: string } }).artifact.id
+        sendMessage(rawStore, {
+          roomId: ids.roomA,
+          text: '引用了别的 workspace',
+          actor: { kind: 'user', id: 'acc_a' },
+          parts: [{ type: 'image', artifactId }],
+          at: NOW,
+        })
+        const listed = await call(
+          base,
+          'GET',
+          `/api/internal/events?after=0&workspaceId=${encodeURIComponent(ids.wsA)}`,
+          { runtimeToken: GLOBAL },
+        )
+        assert.equal(listed.status, 200, listed.text)
+        const events = listed.json.events as Array<{
+          payload?: { text?: string }
+          message?: { parts?: Array<{ type: string; artifactId?: string; url?: string }> }
+        }>
+        const event = events.find((item) => item.payload?.text === '引用了别的 workspace')
+        assert.ok(event)
+        const part = event.message?.parts?.find((item) => item.type === 'image')
+        assert.equal(part?.artifactId, artifactId)
+        assert.equal(part?.url, undefined)
       },
       { attachmentsDir: dir },
     )

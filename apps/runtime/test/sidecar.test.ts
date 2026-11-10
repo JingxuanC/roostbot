@@ -176,6 +176,31 @@ test('POST <base>/api/x without a token is rejected by the sidecar', async () =>
   assert.equal(seen.length, before, 'rejected request must not reach upstream')
 })
 
+test('a non-empty Cookie does not bypass the runtime token', async () => {
+  const before = seen.length
+  const cookieOnly = await call(`${BASE}/api/x`, {
+    method: 'POST',
+    headers: { cookie: 'x=1', 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert.equal(cookieOnly.response.status, 401)
+  assert.equal(cookieOnly.json.error, 'runtime-token-required')
+  assert.equal(seen.length, before, 'cookie-only request must not reach upstream')
+
+  const wrongBearer = await call(`${BASE}/api/x`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer wrong-token',
+      cookie: 'a=b',
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  })
+  assert.equal(wrongBearer.response.status, 401)
+  assert.equal(wrongBearer.json.error, 'runtime-token-required')
+  assert.equal(seen.length, before, 'wrong bearer plus cookie must not reach upstream')
+})
+
 test('POST <base>/api/x with a token is proxied and the upstream 401 is returned verbatim', async () => {
   const { response, text } = await call(`${BASE}/api/x`, {
     method: 'POST',

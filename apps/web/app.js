@@ -18,6 +18,7 @@ import { $, avatar, botAvatar, el } from './lib/dom.js'
 import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
+import { resolveApiBase } from './lib/api-base.js'
 import { csrfHeaders, csrfTokenFromCookie, isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
 import {
   clearSessionToken,
@@ -97,7 +98,7 @@ const PEER_SUMMARY_CHARS = 40
 /** 控制面地址：`?api=` 可指定；默认同源（控制面自己伺服本页）。 */
 const API_BASE = (() => {
   try {
-    return (new URLSearchParams(location.search).get('api') || '').trim().replace(/\/+$/, '')
+    return resolveApiBase(new URLSearchParams(location.search).get('api'), location.origin)
   } catch {
     return ''
   }
@@ -2707,7 +2708,7 @@ function stopStream() {
   LIVE.reconnectAttempt = 0
 }
 
-function openStream() {
+async function openStream() {
   if (!STREAM_ENABLED || !LIVE.active || !LIVE.roomId) return
   clearReconnectTimer()
   if (LIVE.stream) {
@@ -2716,9 +2717,24 @@ function openStream() {
   }
   // 首次打开是 connecting；重连期间保持 reconnecting，直到 open 才隐藏离线提示。
   if (LIVE.streamState === 'idle') LIVE.streamState = 'connecting'
+  const roomId = LIVE.roomId
   const streamQuery = new URLSearchParams({ after: String(LIVE.lastSeq) })
-  if (LIVE.token !== '') streamQuery.set('access_token', LIVE.token)
-  const path = `/api/rooms/${encodeURIComponent(LIVE.roomId)}/stream?${streamQuery.toString()}`
+  if (LIVE.token !== '') {
+    try {
+      const minted = await api.post(`/api/rooms/${encodeURIComponent(roomId)}/stream-ticket`, {})
+      if (LIVE.roomId !== roomId || !LIVE.active) return
+      if (minted === null || typeof minted.ticket !== 'string' || minted.ticket === '') {
+        scheduleReconnect()
+        return
+      }
+      streamQuery.set('ticket', minted.ticket)
+    } catch {
+      scheduleReconnect()
+      return
+    }
+  }
+  if (LIVE.roomId !== roomId || !LIVE.active) return
+  const path = `/api/rooms/${encodeURIComponent(roomId)}/stream?${streamQuery.toString()}`
   let stream
   try {
     stream = new EventSource(API_BASE ? `${API_BASE}${path}` : path)

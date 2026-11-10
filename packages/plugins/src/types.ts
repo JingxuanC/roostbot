@@ -97,7 +97,9 @@ export function preflight(input: PreflightInput): PreflightResult {
   return { ok: problems.length === 0, problems }
 }
 
-/** 云上禁止 link: 依赖：那是本机特权。 */
+const CLOUD_PACKAGE_SPEC = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+
+/** 云上只接受 registry 包名 @ semver。本地路径、git 和任意 URL 都拒绝。 */
 export function isCloudInstallable(spec: string): boolean {
-  return !/^link:/i.test(spec.trim()) && !/^file:/i.test(spec.trim())
+  return CLOUD_PACKAGE_SPEC.test(spec.trim())
 }

@@ -17,6 +17,8 @@ export type SandboxErrorCode =
   | 'timeout'
   | 'unsupported'
   | 'invalid_exec'
+  | 'invalid_policy'
+  | 'invalid_env'
 
 export class SandboxError extends Error {
   code: SandboxErrorCode

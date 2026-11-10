@@ -18,7 +18,7 @@ export interface ConnectorGrant {
   botId: string
   slug: string
   access: ConnectorAccess
-  /** 为空表示该 access 下的全部动作。 */
+  /** 省略或空数组 = 不授权。`['*']` 才是该 access 下的全部动作。 */
   actions?: string[]
   /** 指定使用哪条 named connection；为空表示 workspace 默认连接。 */
   connectionId?: string
@@ -74,17 +74,36 @@ export interface GatewayBackend {
   statusDetails?(slug: string, options?: ConnectorStatusOptions): Promise<ConnectorStatusDetails>
 }
 
-/** 未授权的连接器不进上下文：工具名也不出现。 */
+/**
+ * 动作白名单。空列表或没写列表一律拒绝；要放行该 access 下的全部动作必须显式写 `*`。
+ * 库里的 NULL（旧的「全部」）由路由层转换成 `['*']`，不在这里当成默认放开。
+ */
 export function isActionGranted(grant: ConnectorGrant | undefined, action: string): boolean {
   if (grant === undefined) return false
-  if (grant.actions === undefined || grant.actions.length === 0) return true
-  return grant.actions.includes(action)
+  const actions = grant.actions
+  if (actions === undefined || actions.length === 0) return false
+  if (actions.includes('*')) return true
+  return actions.includes(action)
 }
 
-/** 有副作用的动作必须显式批准，且必须带幂等键。 */
+/** 写权限默认要审批。只有明确的只读动作可以豁免。 */
+const READ_ONLY_ACTIONS = new Set([
+  'get',
+  'list',
+  'read',
+  'search',
+  'fetch',
+  'status',
+  'list_issues',
+  'get_issue',
+  'list_files',
+  'get_file',
+  'list_repos',
+])
+
 export function requiresApprovalForWrite(access: ConnectorAccess, action: string): boolean {
-  const outward = /send|create|update|delete|pay|charge|post|push|merge|upload/i
-  return access === 'write' && outward.test(action)
+  if (access !== 'write') return false
+  return !READ_ONLY_ACTIONS.has(action)
 }
 
 export const CONNECTOR_TOOL_PREFIX = 'connector__'

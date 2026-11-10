@@ -69,16 +69,21 @@ test('策略渲染成 OpenShell YAML：与官方 schema 字段一致', () => {
   // 网络：映射式，endpoints + binaries
   assert.match(yaml, /^network_policies:$/m)
   assert.match(yaml, /^    endpoints:$/m)
-  assert.match(yaml, /^      - host: api\.qnaigc\.com$/m)
+  assert.match(yaml, /^      - host: "api\.qnaigc\.com"$/m)
   assert.match(yaml, /^        port: 443$/m)
-  // GET+POST 属于 read-write 预设
+  // GET+POST 不是完整的 read-write 预设，必须写成显式规则。
   assert.match(yaml, /^        protocol: rest$/m)
-  assert.match(yaml, /^        access: read-write$/m)
+  assert.match(yaml, /method: "GET"/)
+  assert.match(yaml, /method: "POST"/)
+  assert.match(yaml, /path: "\*\*"/)
+  assert.doesNotMatch(yaml, /access: read-write/)
+  assert.match(yaml, /^landlock:$/m)
+  assert.match(yaml, /^  compatibility: hard_requirement$/m)
   assert.match(yaml, /^    binaries:$/m)
-  assert.match(yaml, /^      - path: \/opt\/app\/engine\/report_engine$/m)
+  assert.match(yaml, /^      - path: "\/opt\/app\/engine\/report_engine"$/m)
   // 凭据只写 provider 名，不写凭据值
   assert.match(yaml, /^        credential_binding:$/m)
-  assert.match(yaml, /^          provider: model-gateway$/m)
+  assert.match(yaml, /^          provider: "model-gateway"$/m)
   assert.doesNotMatch(yaml, /sk-|api[_-]?key/i)
   // 渲染结果与判定一致
   assert.equal(isEgressAllowed(policy, { binary: '/usr/bin/git', host: 'github.com', method: 'POST' }), false)
@@ -183,6 +188,44 @@ test('passthrough 明确不承诺隔离，并真的能本机执行', async () =>
   const result = await backend.exec(handle, [process.execPath, '-e', 'process.stdout.write("local-ok")'])
   assert.equal(result.code, 0)
   assert.equal(result.stdout, 'local-ok')
+})
+
+test('凭据样式的 env 不进 argv，临时策略目录用完即删', async () => {
+  const fake = fakeOpenshell()
+  const { readdirSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  try {
+    const backend = new OpenShellBackend({ binary: join(fake.dir, 'openshell') })
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith('roost-policy-')))
+    await assert.rejects(
+      () => backend.create({
+        name: 'ws-env',
+        policyYaml: 'version: 1\n',
+        env: { OPENAI_API_KEY: 'sk-test-value' },
+      }),
+      (error: unknown) => error instanceof SandboxError && error.code === 'invalid_env',
+    )
+    await backend.create({
+      name: 'ws-env',
+      policyYaml: 'version: 1\n',
+      env: { ROOST_RUN: 'run_1' },
+    })
+    const after = readdirSync(tmpdir()).filter((name) => name.startsWith('roost-policy-') && !before.has(name))
+    assert.deepEqual(after, [])
+    const calls = readFileSync(fake.log, 'utf8')
+    assert.doesNotMatch(calls, /OPENAI_API_KEY/)
+    assert.doesNotMatch(calls, /sk-test-value/)
+  } finally {
+    fake.cleanup()
+  }
+})
+
+test('../ 名字不能把策略文件写到 policyDir 外面', async () => {
+  const backend = new OpenShellBackend({ binary: '/nonexistent/openshell', policyDir: '/tmp' })
+  await assert.rejects(
+    () => backend.create({ name: '../escaped', policyYaml: 'version: 1\n' }),
+    (error: unknown) => error instanceof SandboxError && error.code === 'invalid_name',
+  )
 })
 
 test('策略安全判定与后端默认值一致', () => {

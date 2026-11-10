@@ -128,8 +128,15 @@ test('SSE 在 15s 兜底之前就把新消息推下来（内存 store 走总线�
       body: JSON.stringify({ workspaceId: workspace.id, name: '房间' }),
     })).json()) as { room: { id: string } }).room
 
+    const minted = await fetch(`${started.url}/api/rooms/${room.id}/stream-ticket`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: '{}',
+    })
+    assert.equal(minted.status, 200)
+    const { ticket } = (await minted.json()) as { ticket: string }
     const controller = new AbortController()
-    const response = await fetch(`${started.url}/api/rooms/${room.id}/stream?access_token=${token}`, {
+    const response = await fetch(`${started.url}/api/rooms/${room.id}/stream?ticket=${ticket}`, {
       signal: controller.signal,
       headers: { accept: 'text/event-stream' },
     })

@@ -13,6 +13,7 @@
 // 就建立在“Origin 与反代给出的 Host 完全一致”之上。控制面不得直接暴露公网，否则客户端
 // 可以同时伪造 Origin、Host 与 X-Forwarded-* 绕过校验。
 import { createHash, randomBytes, randomInt } from 'node:crypto'
+import { isStoreError } from '../../../packages/store/src/errors.ts'
 import http from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
@@ -249,6 +250,9 @@ import type { MessageAttachment } from '../../../packages/store/src/attachments.
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 8787
 
+/** SSE 查询串里的票：一次性，最多 60 秒，并且绑定房间。 */
+export const STREAM_TICKET_TTL_MS = 60 * 1000
+
 /** 配对码 5 分钟、单次（auth.md §2）。 */
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
 /** 同一个码错 5 次即锁 10 分钟（auth.md §3）。 */
@@ -383,10 +387,21 @@ export interface AuthContext {
   rawStore?: Store
 }
 
+interface StreamTicket {
+  tokenHash: string
+  accountId: string
+  roomId: string
+  expiresAt: number
+}
+
 interface HandlerContext extends AuthContext {
   startedAt: number
-  /** 全局失败时间戳，用于 429；放在闭包里，每个 server 一份。 */
-  claimFailures: number[]
+  /** 按来源地址分桶的配对失败时间戳。一个来源打满不会锁住别人。 */
+  claimFailuresBySource: Map<string, number[]>
+  /** 只用于告警的全局失败时间戳，超过阈值不拒绝请求。 */
+  claimFailureAlerts: number[]
+  /** 短时 SSE 票。只活在这个进程里，过期或用过就删。 */
+  streamTickets: Map<string, StreamTicket>
   /**
    * 本进程签发过会话的账号（memory 模式下无法查 sessions 表，用它做 bootstrap 判定）。
    * SQLite 模式以 hasActiveSessionsForAccount 为准，这个集合只是同进程的补充。
@@ -849,23 +864,38 @@ function enforceRateLimit(
   return false
 }
 
-function pruneFailures(ctx: HandlerContext, now: number): void {
-  while (ctx.claimFailures.length > 0 && now - ctx.claimFailures[0]! > CLAIM_FAILURE_WINDOW_MS) {
-    ctx.claimFailures.shift()
-  }
+function pruneStamps(stamps: number[], now: number): void {
+  while (stamps.length > 0 && now - stamps[0]! > CLAIM_FAILURE_WINDOW_MS) stamps.shift()
 }
 
-/** 返回 0 表示未触发；否则是建议的 retry-after 毫秒数。 */
-function globalWindowRemaining(ctx: HandlerContext, now: number): number {
-  pruneFailures(ctx, now)
-  if (ctx.claimFailures.length < CLAIM_FAILURE_MAX) return 0
-  const oldest = ctx.claimFailures[0]!
+/** 返回 0 表示这个来源还能试；否则是建议的 retry-after 毫秒数。 */
+export function claimRetryAfterMs(
+  buckets: Map<string, number[]>,
+  key: string,
+  now: number,
+): number {
+  const stamps = buckets.get(key)
+  if (stamps === undefined) return 0
+  pruneStamps(stamps, now)
+  if (stamps.length < CLAIM_FAILURE_MAX) return 0
+  const oldest = stamps[0]!
   return Math.max(1000, CLAIM_FAILURE_WINDOW_MS - (now - oldest))
 }
 
-function recordFailure(ctx: HandlerContext, now: number): void {
-  ctx.claimFailures.push(now)
-  pruneFailures(ctx, now)
+export function recordClaimFailure(buckets: Map<string, number[]>, key: string, now: number): void {
+  const stamps = buckets.get(key) ?? []
+  stamps.push(now)
+  pruneStamps(stamps, now)
+  buckets.set(key, stamps)
+}
+
+function noteClaimFailure(ctx: HandlerContext, source: string, now: number): void {
+  recordClaimFailure(ctx.claimFailuresBySource, source, now)
+  pruneStamps(ctx.claimFailureAlerts, now)
+  ctx.claimFailureAlerts.push(now)
+  if (ctx.claimFailureAlerts.length === CLAIM_FAILURE_MAX) {
+    console.error('roost api: pairing claim failures exceeded the global alert threshold')
+  }
 }
 
 type PairingAuthorizeResult =
@@ -1042,8 +1072,9 @@ async function handleClaimPairingCode(
 
   const claimedAt = ctx.now()
 
-  // 第一层：全局失败窗口。按 server 实例计数，不按 IP —— 回环下没有可信的客户端标识。
-  const windowRemaining = globalWindowRemaining(ctx, claimedAt)
+  // 按来源地址限流。全局计数只打日志，避免一个人把所有人锁在外面。
+  const source = req.socket.remoteAddress ?? 'unknown'
+  const windowRemaining = claimRetryAfterMs(ctx.claimFailuresBySource, source, claimedAt)
   if (windowRemaining > 0) {
     sendError(res, 429, 'too_many_attempts', 'too many failed claims; wait before retrying', {
       'retry-after': retryAfterSeconds(windowRemaining)
@@ -1059,7 +1090,7 @@ async function handleClaimPairingCode(
   })
 
   if (!result.ok) {
-    recordFailure(ctx, claimedAt)
+    noteClaimFailure(ctx, source, claimedAt)
     switch (result.reason) {
       case 'locked':
         sendError(res, 429, 'pairing_code_locked', 'too many failed attempts for this code; request a new one', {
@@ -1329,7 +1360,7 @@ const MESSAGE_IMAGE_TTL_SECONDS = 120
 async function messagesJson(
   ctx: HandlerContext,
   messages: RoomMessageRecord[],
-  roomId?: string,
+  roomId?: string | Array<string | null>,
 ): Promise<Record<string, unknown>[]> {
   if (ctx.rawStore === undefined || messages.length === 0) {
     return messages.map((message) => messageJson(message))
@@ -1347,12 +1378,14 @@ async function messagesJson(
     console.error('roost api: failed to load message attachments', error)
     grouped = new Map()
   }
-  const jsons = messages.map((message) => {
+  const roomIds = Array.isArray(roomId) ? roomId : messages.map(() => roomId ?? null)
+  const jsons = messages.map((message, index) => {
     const json = messageJson(message, grouped.get(message.seq) ?? [])
-    if (roomId === undefined || ctx.rawStore === undefined || !Array.isArray(json.parts)) return json
-    return { ...json, parts: decorateParts(ctx.rawStore, roomId, json.parts as never) }
+    const messageRoom = roomIds[index] ?? null
+    if (messageRoom === null || ctx.rawStore === undefined || !Array.isArray(json.parts)) return json
+    return { ...json, parts: decorateParts(ctx.rawStore, messageRoom, json.parts as never) }
   })
-  await signMessageImages(ctx, jsons)
+  await signMessageImages(ctx, jsons, roomIds)
   return jsons
 }
 
@@ -1360,29 +1393,53 @@ async function messagesJson(
  * 成员校验通过之后才签名。陌生人拿不到这条响应，也就拿不到 token。
  * 签名失败时保留原来的成员路径，不把整条消息打成 500。
  */
-async function signMessageImages(ctx: HandlerContext, jsons: Record<string, unknown>[]): Promise<void> {
+async function signMessageImages(
+  ctx: HandlerContext,
+  jsons: Record<string, unknown>[],
+  roomIds: Array<string | null>,
+): Promise<void> {
   const content = ctx.attachments?.content
-  if (content === undefined) return
-  const signed = new Map<string, string>()
-  const urlFor = async (artifactId: string): Promise<string | null> => {
-    const cached = signed.get(artifactId)
+  if (content === undefined || ctx.rawStore === undefined) return
+  const workspaceByRoom = new Map<string, string | null>()
+  const workspaceFor = async (roomId: string | null): Promise<string | null> => {
+    if (roomId === null || roomId === '') return null
+    const cached = workspaceByRoom.get(roomId)
     if (cached !== undefined) return cached
+    const workspaceId = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    workspaceByRoom.set(roomId, workspaceId)
+    return workspaceId
+  }
+  // 缓存按「房间 workspace + 产物」分开。别的 workspace 的产物即使 id 已知也不签名。
+  const signed = new Map<string, string | null>()
+  const urlFor = async (artifactId: string, roomId: string | null): Promise<string | null> => {
+    const workspaceId = await workspaceFor(roomId)
+    const key = `${workspaceId ?? ''}\0${artifactId}`
+    const cached = signed.get(key)
+    if (cached !== undefined) return cached
+    const artifact = getArtifact(ctx.rawStore!, artifactId)
+    if (artifact === null || workspaceId === null || artifact.workspaceId !== workspaceId) {
+      signed.set(key, null)
+      return null
+    }
     try {
       const url = await content.signRead(artifactId, MESSAGE_IMAGE_TTL_SECONDS)
-      signed.set(artifactId, url)
+      signed.set(key, url)
       return url
     } catch (error) {
       console.error('roost api: failed to sign message image', error)
+      signed.set(key, null)
       return null
     }
   }
-  for (const json of jsons) {
+  for (let index = 0; index < jsons.length; index += 1) {
+    const json = jsons[index]!
+    const roomId = roomIds[index] ?? null
     if (Array.isArray(json.attachments)) {
       for (const item of json.attachments) {
         if (item === null || typeof item !== 'object') continue
         const artifactId = (item as { artifactId?: unknown }).artifactId
         if (typeof artifactId !== 'string' || artifactId === '') continue
-        const url = await urlFor(artifactId)
+        const url = await urlFor(artifactId, roomId)
         if (url !== null) (item as { url: string }).url = url
       }
     }
@@ -1395,7 +1452,7 @@ async function signMessageImages(ctx: HandlerContext, jsons: Record<string, unkn
       }
       const image = part as { type?: unknown; artifactId?: unknown }
       if (image.type === 'image' && typeof image.artifactId === 'string' && image.artifactId !== '') {
-        const url = await urlFor(image.artifactId)
+        const url = await urlFor(image.artifactId, roomId)
         next.push(url === null ? part : { ...image, url })
       } else {
         next.push(part)
@@ -1460,14 +1517,14 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
         ctx.store.readMessagesInternal({ roomId, afterSeq }),
       )
       if (res.writableEnded || req.destroyed) return
-      sendJson(res, 200, { messages: await messagesJson(ctx, messages) })
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages, roomId) })
       return
     }
     // 首看/向前翻页走裁剪投影（rooms.md §3：保留 60、首看 12）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLogInternal({ roomId, ...query })
-    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages, roomId), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1577,6 +1634,14 @@ function messageRecordFromRoom(message: { seq: number; at: string; actor: { kind
 
 function sendStoreFailure(res: ServerResponse, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
+  if (isStoreError(err) && err.code === 'IDEM_CONFLICT') {
+    sendError(res, 409, 'idem_conflict', 'idem is already used for a different event')
+    return
+  }
+  if (isStoreError(err) && (err.code === 'INVALID_EVENT' || err.code === 'INVALID_MESSAGE')) {
+    sendError(res, 400, 'invalid_body', 'request failed validation')
+    return
+  }
   if (/unknown room/i.test(message)) {
     sendError(res, 404, 'room_not_found', message)
     return
@@ -1800,6 +1865,57 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
   }
 }
 
+async function liveSession(
+  ctx: RoomRouteContext,
+  tokenHash: string,
+): Promise<{ ok: true; accountId: string } | { ok: false; code: string; message: string }> {
+  const session = await ctx.store.findSessionByToken(tokenHash)
+  if (session === null) return { ok: false, code: 'unauthenticated', message: 'unknown session token' }
+  if (session.revokedAt !== undefined) return { ok: false, code: 'session_revoked', message: 'session revoked' }
+  if (session.expiresAt <= ctx.now()) return { ok: false, code: 'session_expired', message: 'session expired' }
+  return { ok: true, accountId: session.accountId }
+}
+
+/** 签发一次性 SSE 票。浏览器 EventSource 不能带 Authorization，也不能读 HttpOnly cookie。 */
+async function handleStreamTicket(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  const roomId = roomIdFromSuffix(url.pathname, 'stream-ticket')
+  if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+  try {
+    await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, afterSeq: 0, limit: 1 })
+  } catch (err) {
+    sendStoreFailure(res, err)
+    return
+  }
+  const ticket = randomBytes(32).toString('hex')
+  const expiresAt = ctx.now() + STREAM_TICKET_TTL_MS
+  pruneStreamTickets(ctx, auth.session.accountId)
+  ctx.streamTickets.set(ticket, {
+    tokenHash: auth.session.tokenHash,
+    accountId: auth.session.accountId,
+    roomId,
+    expiresAt,
+  })
+  sendJson(res, 200, { ticket, expiresAt })
+}
+
+const STREAM_TICKETS_PER_ACCOUNT = 32
+
+/** 丢掉过期票，并限制每个账号同时持有的未使用票，避免无限签发把进程堆满。 */
+function pruneStreamTickets(ctx: RoomRouteContext, accountId: string): void {
+  const now = ctx.now()
+  for (const [key, value] of ctx.streamTickets) {
+    if (value.expiresAt <= now) ctx.streamTickets.delete(key)
+  }
+  const owned = [...ctx.streamTickets.entries()].filter(([, value]) => value.accountId === accountId)
+  while (owned.length >= STREAM_TICKETS_PER_ACCOUNT) {
+    const oldest = owned.shift()
+    if (oldest === undefined) break
+    ctx.streamTickets.delete(oldest[0])
+  }
+}
+
 function parseArtifactIds(value: unknown): string[] | null {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value) || value.length > 8) return null
@@ -1857,12 +1973,14 @@ function messageRecordFromEvent(event: Event): RoomMessageRecord {
     kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
   const text = typeof event.payload.text === 'string' ? event.payload.text : ''
   const routine = event.payload.routine
+  const parts = Array.isArray(event.payload.parts) ? (event.payload.parts as RoomMessageRecord['parts']) : undefined
   return {
     seq: event.seq,
     at: event.at,
     actorKind,
     actorId: event.actor?.id ?? 'unknown',
     text,
+    ...(parts === undefined || parts.length === 0 ? {} : { parts }),
     ...(routine !== undefined && routine !== null && typeof routine === 'object'
       ? { routine: routine as RoomMessageRecord['routine'] }
       : {}),
@@ -1920,26 +2038,51 @@ async function writeRoomStream(
 
 /**
  * SSE：写进房间日志就推。总线负责立刻唤醒；streamPollMs 只是漏报兜底。
- * 浏览器 EventSource 不能带 Authorization 头，所以这条路由额外接受 ?access_token=。
+ * 鉴权是 Bearer、同源 cookie，或一次性短票 `?ticket=`。长期会话 token 不再放进 URL。
+ * 每一轮 pump 都重新检查会话是否被吊销或过期。
  * `after` 与 Last-Event-ID 取较大者，断线从上次 seq 续。
  */
 async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  const headerToken = /^Bearer[ ]+(\S+)$/.exec((req.headers.authorization ?? '').trim())
-  const queryToken = url.searchParams.get('access_token')
-  // 账号登录使用 HttpOnly cookie；EventSource 不能设 Authorization，也不能读 cookie。
-  // 优先 Bearer/query token（配对会话），没有时回退到同源 cookie。
-  const cookieToken = readCookie(req, 'roost_session')
-  const candidate = headerToken?.[1] ?? (queryToken !== null && queryToken !== '' ? queryToken : cookieToken)
-  if (candidate === null || candidate === undefined || !SESSION_TOKEN_PATTERN.test(candidate)) {
-    return sendError(res, 401, 'unauthenticated', 'stream needs a session token')
+  if ((url.searchParams.get('access_token') ?? '') !== '') {
+    return sendError(res, 401, 'stream_ticket_required', 'use a short-lived stream ticket instead of a session token')
   }
-  const token = candidate
-  const session = await ctx.store.findSessionByToken(hashSessionToken(token))
-  if (session === null) return sendError(res, 401, 'unauthenticated', 'unknown session token')
-  if (session.expiresAt <= ctx.now()) return sendError(res, 401, 'session_expired', 'session expired')
-
   const roomId = roomIdFromPath(url.pathname)
   if (roomId === null) return sendError(res, 404, 'not_found', 'malformed room path')
+
+  const header = req.headers.authorization
+  const hasHeader = typeof header === 'string' && header.trim() !== ''
+  const cookieToken = readCookie(req, 'roost_session')
+  let tokenHash: string
+  let accountId: string
+  if (hasHeader || (cookieToken !== null && cookieToken !== '')) {
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+    tokenHash = auth.session.tokenHash
+    accountId = auth.session.accountId
+  } else {
+    const ticket = url.searchParams.get('ticket') ?? ''
+    const record = ticket === '' ? undefined : ctx.streamTickets.get(ticket)
+    if (ticket === '' || record === undefined || record.expiresAt <= ctx.now()) {
+      if (record !== undefined) ctx.streamTickets.delete(ticket)
+      return sendError(res, 401, 'stream_ticket_invalid', 'stream ticket is missing or expired')
+    }
+    if (record.roomId !== roomId) {
+      return sendError(res, 403, 'stream_ticket_room', 'stream ticket is for a different room')
+    }
+    const fresh = await liveSession(ctx, record.tokenHash)
+    if (!fresh.ok) return sendError(res, 401, fresh.code, fresh.message)
+    ctx.streamTickets.delete(ticket)
+    tokenHash = record.tokenHash
+    accountId = fresh.accountId
+  }
+
+  try {
+    await ctx.store.readMessages({ accountId, roomId, afterSeq: 0, limit: 1 })
+  } catch (err) {
+    sendStoreFailure(res, err)
+    return
+  }
+
   const afterRaw = url.searchParams.get('after')
   let lastSeq = afterRaw === null ? 0 : Number.parseInt(afterRaw, 10)
   if (!Number.isSafeInteger(lastSeq) || lastSeq < 0) lastSeq = 0
@@ -1967,10 +2110,15 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
 
   const pump = async (): Promise<void> => {
     while (!closed) {
+      const fresh = await liveSession(ctx, tokenHash)
+      if (!fresh.ok) {
+        res.write(`event: error\ndata: ${JSON.stringify({ code: fresh.code })}\n\n`)
+        break
+      }
       let wrote = 0
       try {
         const result = await writeRoomStream(ctx, res, {
-          accountId: session.accountId,
+          accountId: fresh.accountId,
           roomId,
           afterSeq: lastSeq,
         })
@@ -2038,8 +2186,12 @@ async function handleInternalEvents(ctx: RoomRouteContext, req: IncomingMessage,
         }),
     )
     if (res.writableEnded || req.destroyed) return
-    const chat = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
-    const chatJson = await messagesJson(ctx, chat)
+    const chatEvents = events.filter((event) => event.kind === 'chat.message')
+    const chat = chatEvents.map(messageRecordFromEvent)
+    const chatRooms = chatEvents.map((event) =>
+      (event.audience ?? '').startsWith('room:') ? (event.audience ?? '').slice('room:'.length) : null,
+    )
+    const chatJson = await messagesJson(ctx, chat, chatRooms)
     let chatIndex = 0
     sendJson(res, 200, {
       events: events.map((event) =>
@@ -2129,6 +2281,16 @@ function sleep(ms: number): Promise<void> {
     const timer = setTimeout(resolve, ms)
     timer.unref?.()
   })
+}
+
+function roomIdFromSuffix(pathname: string, suffix: string): string | null {
+  const match = new RegExp(`^/api/rooms/([^/]+)/${suffix}$`).exec(pathname)
+  if (match === null) return null
+  try {
+    return decodeURIComponent(match[1]!)
+  } catch {
+    return null
+  }
 }
 
 function roomIdFromPath(pathname: string, suffix = '(?:messages|stream|say)'): string | null {
@@ -2619,6 +2781,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/stream-ticket$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleStreamTicket(ctx as RoomRouteContext, req, res, url)
     return
   }
 
@@ -3839,7 +4010,9 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     authRoutes,
     installRoutes,
     startedAt: now(),
-    claimFailures: [],
+    claimFailuresBySource: new Map(),
+    claimFailureAlerts: [],
+    streamTickets: new Map(),
     sessionAccounts: new Set<string>(),
     streamPollMs: options.streamPollMs ?? 15_000,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
