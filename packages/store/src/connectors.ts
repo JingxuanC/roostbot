@@ -12,6 +12,8 @@
 // 事件（domain='connector'）：connected / disconnected / grant.changed / call。
 // 错误码沿用 `CODE: detail` 约定（errors.ts 是封闭枚举，本批不改共享文件）。
 
+import { createHash } from 'node:crypto'
+
 import { StoreError } from './errors.ts'
 import { appendEvent } from './events.ts'
 import {
@@ -60,7 +62,14 @@ export interface Connection {
   status: ConnectorConnectionStatus
   /** 展示用（如邮箱）；不含 token。 */
   accountLabel: string | null
+  /** 授权这个连接的用户账号 id。 */
+  accountId: string
+  /** 兼容旧字段：等于 accountId。 */
   connectedBy: string
+  /** 网关里的 named connection 名称，例如 roost_<hash>。 */
+  alias: string
+  /** 该 workspace+slug 的默认连接；Bot 未指定 connectionId 时使用。 */
+  isDefault: boolean
   createdAt: number
 }
 
@@ -71,6 +80,10 @@ export interface UpsertConnectionInput {
   status: ConnectorConnectionStatus
   accountLabel?: string | null
   connectedBy: string
+  /** 不传时使用 accountId；同一 workspace/slug/account 必须稳定。 */
+  alias?: string
+  /** true 时把同 workspace/slug 的其它连接取消默认。 */
+  isDefault?: boolean
   at?: number
 }
 
@@ -79,6 +92,10 @@ export interface DeleteConnectionInput {
   slug: string
   /** 操作人（写 connector.disconnected 事件的 actor）。 */
   by: string
+  /** 只删除该用户的连接；不传时删除 workspace+slug 的全部连接（兼容旧调用）。 */
+  accountId?: string
+  /** 按连接 id 删除（优先级高于 accountId）。 */
+  connectionId?: string
   at?: number
 }
 
@@ -90,6 +107,8 @@ export interface ConnectorGrantRow {
   access: ConnectorAccessLevel
   /** null 表示该 access 下的全部动作。 */
   actions: string[] | null
+  /** 指定 Bot 使用哪条连接；null/未设置表示使用 workspace 默认连接。 */
+  connectionId: string | null
   grantedBy: string
   createdAt: number
 }
@@ -100,6 +119,7 @@ export interface SetGrantInput {
   slug: string
   access: ConnectorAccessLevel
   actions?: string[] | null
+  connectionId?: string | null
   grantedBy: string
   at?: number
 }
@@ -142,7 +162,9 @@ interface ConnectionDbRow {
   backend: string
   status: string
   account_label: string | null
-  connected_by: string
+  account_id: string
+  alias: string
+  is_default: number | bigint
   created_at: number | bigint
 }
 
@@ -153,6 +175,7 @@ interface GrantDbRow {
   slug: string
   access: string
   actions: string | null
+  connection_id: string | null
   granted_by: string
   created_at: number | bigint
 }
@@ -171,14 +194,32 @@ interface CallDbRow {
 }
 
 const CONNECTION_COLUMNS =
-  'id, workspace_id, slug, backend, status, account_label, connected_by, created_at'
-const GRANT_COLUMNS = 'id, workspace_id, bot_id, slug, access, actions, granted_by, created_at'
+  'id, workspace_id, slug, backend, status, account_label, account_id, alias, is_default, created_at'
+const GRANT_COLUMNS = 'id, workspace_id, bot_id, slug, access, actions, connection_id, granted_by, created_at'
 const CALL_COLUMNS =
   'id, workspace_id, bot_id, slug, action, ok, denied_reason, result_bytes, idem, at'
 
 // ---- 连接 --------------------------------------------------------------------
 
-/** 同一 workspace+slug 覆盖；保留首次 id，更新状态/后端/展示名/连接人/时间。 */
+/** 稳定的网关 named-connection alias；只含安全字符，不暴露用户 id。 */
+export function connectionAliasFor(workspaceId: string, accountId: string, slug: string): string {
+  const digest = createHash('sha256')
+    .update(`${workspaceId}\u0000${accountId}\u0000${slug}`)
+    .digest('hex')
+    .slice(0, 24)
+  return `roost_${digest}`
+}
+
+const CONNECTION_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+
+function readAlias(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !CONNECTION_ALIAS_PATTERN.test(value)) {
+    throw new StoreError('INVALID_INPUT', `${label} must match ${CONNECTION_ALIAS_PATTERN}`)
+  }
+  return value
+}
+
+/** 同一 workspace+slug+account 覆盖；保留首次 id/created_at，更新状态/后端/展示名/alias。 */
 export function upsertConnection(store: Store, input: UpsertConnectionInput): Connection {
   assertOpen(store)
   const req = asRecord(input, 'connection', 'INVALID_INPUT')
@@ -187,34 +228,61 @@ export function upsertConnection(store: Store, input: UpsertConnectionInput): Co
   const backend = readBackend(req.backend)
   const status = readStatus(req.status)
   const accountLabel = readOptionalText(req.accountLabel, 'connection.accountLabel', 200)
-  const connectedBy = asNonEmptyString(req.connectedBy, 'connection.connectedBy', 'INVALID_INPUT')
+  const accountId = asNonEmptyString(req.connectedBy, 'connection.connectedBy', 'INVALID_INPUT')
+  const alias = readAlias(
+    req.alias === undefined || req.alias === null
+      ? connectionAliasFor(workspaceId, accountId, slug)
+      : req.alias,
+    'connection.alias',
+  )
   const at = readAt(req.at)
   assertWorkspaceExists(store, workspaceId)
 
   const id = newRoostId('conn', at)
   store.db.exec('SAVEPOINT roost_upsert_connection')
   try {
+    const count = store.db
+      .prepare('SELECT COUNT(*) AS n FROM connections WHERE workspace_id = ? AND slug = ?')
+      .get(workspaceId, slug) as { n: number | bigint } | undefined
+    const first = count === undefined || Number(count.n) === 0
+    const makeDefault = req.isDefault === true || (req.isDefault === undefined && first)
+    if (makeDefault) {
+      store.db
+        .prepare('UPDATE connections SET is_default = 0 WHERE workspace_id = ? AND slug = ?')
+        .run(workspaceId, slug)
+    }
     store.db
       .prepare(
         `INSERT INTO connections (${CONNECTION_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(workspace_id, slug) DO UPDATE SET
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(workspace_id, slug, account_id) DO UPDATE SET
            backend = excluded.backend,
            status = excluded.status,
            account_label = excluded.account_label,
-           connected_by = excluded.connected_by,
-           created_at = excluded.created_at`,
+           alias = excluded.alias,
+           is_default = CASE WHEN excluded.is_default = 1 THEN 1 ELSE connections.is_default END`,
       )
-      .run(id, workspaceId, slug, backend, status, accountLabel, connectedBy, at)
+      .run(
+        id,
+        workspaceId,
+        slug,
+        backend,
+        status,
+        accountLabel,
+        accountId,
+        alias,
+        makeDefault ? 1 : 0,
+        at,
+      )
 
-    const saved = getConnection(store, workspaceId, slug)
+    const saved = getConnection(store, workspaceId, slug, accountId)
     if (saved === null) {
       throw new StoreError('INVALID_INPUT', `connection ${slug} was upserted but cannot be read back`)
     }
     appendConnectorEvent(store, {
       at,
       kind: 'connector.connected',
-      by: connectedBy,
+      by: accountId,
       actorKind: 'user',
       subjectId: slug,
       idem: `connector:${saved.id}:connected:${at}`,
@@ -225,7 +293,10 @@ export function upsertConnection(store: Store, input: UpsertConnectionInput): Co
         backend,
         status,
         accountLabel,
-        connectedBy,
+        accountId,
+        connectedBy: accountId,
+        alias: saved.alias,
+        isDefault: saved.isDefault,
       },
     })
     store.db.exec('RELEASE roost_upsert_connection')
@@ -239,23 +310,81 @@ export function upsertConnection(store: Store, input: UpsertConnectionInput): Co
   }
 }
 
-export function getConnection(store: Store, workspaceId: string, slug: string): Connection | null {
+/** accountId 省略时返回 workspace 默认连接（没有默认则最早一条）。 */
+export function getConnection(
+  store: Store,
+  workspaceId: string,
+  slug: string,
+  accountId?: string | null,
+): Connection | null {
   assertOpen(store)
   const wsId = asNonEmptyString(workspaceId, 'connection.workspaceId', 'INVALID_INPUT')
   const connectorSlug = readSlug(slug, 'connection.slug')
+  if (accountId !== undefined && accountId !== null) {
+    const account = asNonEmptyString(accountId, 'connection.accountId', 'INVALID_INPUT')
+    const row = store.db
+      .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? AND slug = ? AND account_id = ?`)
+      .get(wsId, connectorSlug, account)
+    return row === undefined || row === null ? null : rowToConnection(row)
+  }
   const row = store.db
-    .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? AND slug = ?`)
+    .prepare(
+      `SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? AND slug = ?
+        ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1`,
+    )
     .get(wsId, connectorSlug)
   return row === undefined || row === null ? null : rowToConnection(row)
 }
 
-export function listConnections(store: Store, workspaceId: string): Connection[] {
+export function getConnectionById(store: Store, workspaceId: string, connectionId: string): Connection | null {
   assertOpen(store)
   const wsId = asNonEmptyString(workspaceId, 'connection.workspaceId', 'INVALID_INPUT')
-  return store.db
-    .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? ORDER BY created_at ASC, slug ASC`)
-    .all(wsId)
-    .map(rowToConnection)
+  const id = asNonEmptyString(connectionId, 'connection.id', 'INVALID_INPUT')
+  const row = store.db
+    .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? AND id = ?`)
+    .get(wsId, id)
+  return row === undefined || row === null ? null : rowToConnection(row)
+}
+
+export function listConnections(store: Store, workspaceId: string, accountId?: string | null): Connection[] {
+  assertOpen(store)
+  const wsId = asNonEmptyString(workspaceId, 'connection.workspaceId', 'INVALID_INPUT')
+  const account = accountId === undefined || accountId === null
+    ? null
+    : asNonEmptyString(accountId, 'connection.accountId', 'INVALID_INPUT')
+  const rows = account === null
+    ? store.db
+        .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? ORDER BY is_default DESC, created_at ASC, slug ASC`)
+        .all(wsId)
+    : store.db
+        .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE workspace_id = ? AND account_id = ? ORDER BY created_at ASC, slug ASC`)
+        .all(wsId, account)
+  return rows.map(rowToConnection)
+}
+
+/** 把一条连接设为 workspace+slug 默认；连接不存在返回 false。 */
+export function setDefaultConnection(
+  store: Store,
+  workspaceId: string,
+  slug: string,
+  connectionId: string,
+): boolean {
+  assertOpen(store)
+  const wsId = asNonEmptyString(workspaceId, 'connection.workspaceId', 'INVALID_INPUT')
+  const connectorSlug = readSlug(slug, 'connection.slug')
+  const id = asNonEmptyString(connectionId, 'connection.id', 'INVALID_INPUT')
+  const current = getConnectionById(store, wsId, id)
+  if (current === null || current.slug !== connectorSlug) return false
+  store.db.exec('SAVEPOINT roost_default_connection')
+  try {
+    store.db.prepare('UPDATE connections SET is_default = 0 WHERE workspace_id = ? AND slug = ?').run(wsId, connectorSlug)
+    store.db.prepare('UPDATE connections SET is_default = 1 WHERE workspace_id = ? AND id = ?').run(wsId, id)
+    store.db.exec('RELEASE roost_default_connection')
+  } catch (err) {
+    rollback(store, 'roost_default_connection')
+    throw new StoreError('INVALID_INPUT', `failed to set default connection: ${errorMessage(err)}`, { cause: err })
+  }
+  return true
 }
 
 /** 删除连接；不存在返回 false（API 保持 204 幂等），不写事件。 */
@@ -266,28 +395,49 @@ export function deleteConnection(store: Store, input: DeleteConnectionInput): bo
   const slug = readSlug(req.slug, 'connectionDelete.slug')
   const by = asNonEmptyString(req.by, 'connectionDelete.by', 'INVALID_INPUT')
   const at = readAt(req.at)
+  const connectionId = req.connectionId === undefined || req.connectionId === null
+    ? null
+    : asNonEmptyString(req.connectionId, 'connectionDelete.connectionId', 'INVALID_INPUT')
+  const accountId = req.accountId === undefined || req.accountId === null
+    ? null
+    : asNonEmptyString(req.accountId, 'connectionDelete.accountId', 'INVALID_INPUT')
 
-  const current = getConnection(store, workspaceId, slug)
-  if (current === null) return false
+  const current = connectionId !== null
+    ? getConnectionById(store, workspaceId, connectionId)
+    : accountId !== null
+      ? getConnection(store, workspaceId, slug, accountId)
+      : getConnection(store, workspaceId, slug)
+  if (current === null || current.slug !== slug) return false
+
+  const rows = connectionId !== null || accountId !== null
+    ? [current]
+    : listConnections(store, workspaceId).filter((connection) => connection.slug === slug)
 
   store.db.exec('SAVEPOINT roost_delete_connection')
   try {
-    store.db.prepare('DELETE FROM connections WHERE workspace_id = ? AND slug = ?').run(workspaceId, slug)
-    appendConnectorEvent(store, {
-      at,
-      kind: 'connector.disconnected',
-      by,
-      actorKind: 'user',
-      subjectId: slug,
-      idem: `connector:${current.id}:disconnected:${at}`,
-      payload: {
-        connectionId: current.id,
-        workspaceId,
-        slug,
-        backend: current.backend,
+    for (const connection of rows) {
+      store.db.prepare('DELETE FROM connections WHERE workspace_id = ? AND id = ?').run(workspaceId, connection.id)
+      appendConnectorEvent(store, {
+        at,
+        kind: 'connector.disconnected',
         by,
-      },
-    })
+        actorKind: 'user',
+        subjectId: slug,
+        idem: `connector:${connection.id}:disconnected:${at}`,
+        payload: {
+          connectionId: connection.id,
+          workspaceId,
+          slug,
+          backend: connection.backend,
+          accountId: connection.accountId,
+          by,
+        },
+      })
+    }
+    const remaining = listConnections(store, workspaceId).filter((connection) => connection.slug === slug)
+    if (remaining.length > 0 && !remaining.some((connection) => connection.isDefault)) {
+      store.db.prepare('UPDATE connections SET is_default = 1 WHERE workspace_id = ? AND id = ?').run(workspaceId, remaining[0]!.id)
+    }
     store.db.exec('RELEASE roost_delete_connection')
   } catch (err) {
     rollback(store, 'roost_delete_connection')
@@ -308,6 +458,15 @@ export function setGrant(store: Store, input: SetGrantInput): ConnectorGrantRow 
   const slug = readSlug(req.slug, 'grant.slug')
   const access = readAccess(req.access)
   const actions = readActions(req.actions)
+  const connectionId = req.connectionId === undefined || req.connectionId === null
+    ? null
+    : asNonEmptyString(req.connectionId, 'grant.connectionId', 'INVALID_INPUT')
+  if (connectionId !== null) {
+    const connection = getConnectionById(store, workspaceId, connectionId)
+    if (connection === null || connection.slug !== slug) {
+      throw new StoreError('INVALID_INPUT', `grant.connectionId ${connectionId} is not a ${slug} connection in this workspace`)
+    }
+  }
   const grantedBy = asNonEmptyString(req.grantedBy, 'grant.grantedBy', 'INVALID_INPUT')
   const at = readAt(req.at)
   assertWorkspaceExists(store, workspaceId)
@@ -318,10 +477,11 @@ export function setGrant(store: Store, input: SetGrantInput): ConnectorGrantRow 
     store.db
       .prepare(
         `INSERT INTO connector_grants (${GRANT_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(workspace_id, bot_id, slug) DO UPDATE SET
            access = excluded.access,
            actions = excluded.actions,
+           connection_id = excluded.connection_id,
            granted_by = excluded.granted_by`,
       )
       .run(
@@ -331,6 +491,7 @@ export function setGrant(store: Store, input: SetGrantInput): ConnectorGrantRow 
         slug,
         access,
         actions === null ? null : JSON.stringify(actions),
+        connectionId,
         grantedBy,
         at,
       )
@@ -353,6 +514,7 @@ export function setGrant(store: Store, input: SetGrantInput): ConnectorGrantRow 
         slug,
         access,
         actions,
+        connectionId,
         grantedBy,
       },
     })
@@ -624,7 +786,10 @@ function rowToConnection(row: unknown): Connection {
     backend: r.backend as ConnectorBackendName,
     status: r.status as ConnectorConnectionStatus,
     accountLabel: r.account_label,
-    connectedBy: r.connected_by,
+    accountId: r.account_id,
+    connectedBy: r.account_id,
+    alias: r.alias,
+    isDefault: Number(r.is_default) === 1,
     createdAt: toNumber(r.created_at),
   }
 }
@@ -638,6 +803,7 @@ function rowToGrant(row: unknown): ConnectorGrantRow {
     slug: r.slug,
     access: r.access as ConnectorAccessLevel,
     actions: decodeActions(r.actions),
+    connectionId: r.connection_id,
     grantedBy: r.granted_by,
     createdAt: toNumber(r.created_at),
   }

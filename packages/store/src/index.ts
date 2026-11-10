@@ -10,7 +10,7 @@ export { newEventId, newWorkspaceId } from './ids.ts'
 
 export { openStore } from './store.ts'
 
-export { appendEvent, readEvents, latestSeq } from './events.ts'
+export { appendEvent, readEvents, readWorkspaceRoomEvents, latestSeq } from './events.ts'
 
 export { claimPairingCode, createPairingCode, PAIRING_MAX_ATTEMPTS } from './pairing.ts'
 
@@ -70,7 +70,9 @@ export {
 export type { CreateSessionInput, Session } from './types.ts'
 
 export { createRoom, getRoom, listRooms, readMessages, sendMessage, REPLY_MODES } from './rooms.ts'
-export type { Room, RoomMessage, SendMessageInput } from './types.ts'
+export { appendRoomSignal, readRoomEvents, roomAudience } from './room-log.ts'
+export type { AppendRoomSignalInput } from './room-log.ts'
+export type { MessagePart, Room, RoomMessage, SendMessageInput } from './types.ts'
 export { deleteRoom, readRoomLogPage } from './rooms.ts'
 export type { RoomLogPage } from './rooms.ts'
 
@@ -88,6 +90,45 @@ export {
   updateBot,
 } from './bots.ts'
 export type { BotLifecycleOptions, BotVersion, CreateBotStoreInput, UpdateBotStoreInput } from './bots.ts'
+
+// ---- Agent Runtime：Room Slot / Binding / Session（0024_agent_runtimes.sql）----
+export {
+  BINDING_KINDS,
+  BINDING_STATES,
+  SESSION_STATUSES,
+  SLOT_STATUSES,
+  closeAgentSession,
+  closeBinding,
+  closeRoomSlot,
+  closeSlot,
+  createAgentSession,
+  createBinding,
+  createRoomSlot,
+  createSlot,
+  getAgentSession,
+  getBinding,
+  getRoomSlot,
+  getSlot,
+  listAgentSessions,
+  listBindings,
+  listRoomSlots,
+  listSlots,
+} from './agent-bindings.ts'
+export type {
+  AgentBinding,
+  AgentSessionRecord,
+  BindingKind,
+  BindingState,
+  CloseOptions,
+  CreateAgentSessionInput,
+  CreateBindingInput,
+  CreateRoomSlotInput,
+  ListBindingsFilter,
+  ListSlotsFilter,
+  RoomSlot,
+  SessionStatus,
+  SlotStatus,
+} from './agent-bindings.ts'
 
 // ---- M4：房间成员与扩展列 ------------------------------------------------------
 export {
@@ -176,6 +217,25 @@ export type {
   TickResult,
   UpdateScheduleInput,
 } from './schedules.ts'
+export {
+  claimDueRoutines,
+  createRoutine,
+  deleteRoutine,
+  enqueueRoutineNow,
+  finishRoutineRun,
+  getRoutine,
+  getRoutineRun,
+  listRoutineRuns,
+  listRoutines,
+  updateRoutine,
+} from './routines.ts'
+export type {
+  CreateRoutineInput,
+  Routine,
+  RoutineRun,
+  RoutineRunStatus,
+  UpdateRoutineInput,
+} from './routines.ts'
 export type { RuntimePhase, WorkspaceRuntime } from './workspace-runtime.ts'
 
 export { createDmRoom, findDmRoom } from './dm.ts'
@@ -352,14 +412,17 @@ export {
   CONNECTOR_SLUG_MAX,
   CONNECTOR_SLUG_PATTERN,
   CONNECTOR_STATUSES,
+  connectionAliasFor,
   deleteConnection,
   findCallByIdem,
   findGrant,
   getConnection,
+  getConnectionById,
   isConnectorSlug,
   listConnections,
   listGrants,
   recordCall,
+  setDefaultConnection,
   setGrant,
   upsertConnection,
 } from './connectors.ts'
@@ -402,3 +465,47 @@ export type {
 } from './token-credits.ts'
 export { MAIN_BOT_NAME, MAIN_BOT_ROLE, MAIN_BOT_MODEL, ensureMainBot } from './onboarding.ts'
 export type { EnsureMainBotInput, EnsureMainBotResult } from './onboarding.ts'
+
+// ---- Local Computer / roostd（0025_computer_nodes.sql）----------------------
+export {
+  COMPUTER_BINDING_STATUSES,
+  COMPUTER_JOB_STATES,
+  COMPUTER_STATUSES,
+  claimComputerJob,
+  createComputer,
+  createComputerBinding,
+  createComputerJob,
+  createComputerToken,
+  expireComputerJobs,
+  findComputerByTokenHash,
+  finishComputerJob,
+  generateComputerToken,
+  getComputer,
+  getComputerBinding,
+  getComputerJob,
+  hashComputerToken,
+  heartbeatComputer,
+  listComputerBindings,
+  listComputerJobs,
+  listComputers,
+  listQueuedComputerJobs,
+  markComputerJobRunning,
+  renewComputerJobLease,
+  revokeComputer,
+  revokeComputerBinding,
+  touchComputer,
+} from './computers.ts'
+export type {
+  Computer,
+  ComputerBinding,
+  ComputerBindingStatus,
+  ComputerJob,
+  ComputerJobState,
+  ComputerStatus,
+  CreateComputerBindingInput,
+  CreateComputerInput,
+  CreateComputerJobInput,
+  CreateComputerTokenInput,
+  HeartbeatComputerInput,
+  ListComputerBindingsFilter,
+} from './computers.ts'

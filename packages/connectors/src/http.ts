@@ -30,6 +30,7 @@ import type {
   ConnectorAuthorizeOptions,
   ConnectorCall,
   ConnectorGrant,
+  ConnectorStatusDetails,
   ConnectorStatusOptions,
   ConnectorSummary,
   GatewayBackend,
@@ -94,6 +95,8 @@ export class HttpGatewayBackend implements GatewayBackend {
     const body: Record<string, unknown> = { slug }
     if (options.workspaceId !== undefined) body['workspaceId'] = options.workspaceId
     if (options.state !== undefined) body['state'] = options.state
+    if (options.accountId !== undefined) body['accountId'] = options.accountId
+    if (options.connectionAlias !== undefined) body['connectionName'] = options.connectionAlias
 
     const response = await this.request('POST', '/authorize', body)
     this.assertOk(response, 'authorize')
@@ -105,8 +108,14 @@ export class HttpGatewayBackend implements GatewayBackend {
   }
 
   async status(slug: string, options: ConnectorStatusOptions = {}): Promise<ConnectionStatus> {
+    return (await this.statusDetails(slug, options)).status
+  }
+
+  async statusDetails(slug: string, options: ConnectorStatusOptions = {}): Promise<ConnectorStatusDetails> {
     const query = new URLSearchParams({ slug })
     if (options.workspaceId !== undefined) query.set('workspaceId', options.workspaceId)
+    if (options.accountId !== undefined) query.set('accountId', options.accountId)
+    if (options.connectionAlias !== undefined) query.set('connectionName', options.connectionAlias)
 
     const response = await this.request('GET', `/status?${query.toString()}`)
     this.assertOk(response, 'status')
@@ -118,7 +127,10 @@ export class HttpGatewayBackend implements GatewayBackend {
     ) {
       throw new GatewayRequestError('protocol', 'gateway /status returned an unknown status')
     }
-    return status as ConnectionStatus
+    const accountLabel = isRecord(value) && typeof value['accountLabel'] === 'string' && value['accountLabel'].trim() !== ''
+      ? value['accountLabel'].trim().slice(0, 200)
+      : undefined
+    return { status: status as ConnectionStatus, ...(accountLabel === undefined ? {} : { accountLabel }) }
   }
 
   async call(call: ConnectorCall, _grant: ConnectorGrant): Promise<CallResult> {
@@ -130,6 +142,8 @@ export class HttpGatewayBackend implements GatewayBackend {
       botId: call.botId,
     }
     if (call.idem !== undefined) body['idem'] = call.idem
+    if (call.accountId !== undefined) body['accountId'] = call.accountId
+    if (call.connectionAlias !== undefined) body['connectionName'] = call.connectionAlias
 
     let response: GatewayResponse
     try {

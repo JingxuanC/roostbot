@@ -97,14 +97,26 @@ async function loadCatalog() {
   return catalogCache.value
 }
 
-async function statusFor(slug) {
-  if (NO_AUTH.has(slug)) return 'connected'
+async function statusFor(slug, connectionName = '') {
+  if (NO_AUTH.has(slug)) return { status: 'connected' }
   const connections = await gateway('/v1/connections', { token: ADMIN })
-  const match = (Array.isArray(connections) ? connections : []).find((item) => item && item.service === slug)
-  if (!match) return 'revoked'
-  if (match.status === 'active') return 'connected'
-  if (match.status === 'expired') return 'expired'
-  return 'revoked'
+  const match = (Array.isArray(connections) ? connections : []).find((item) =>
+    item && item.service === slug && (connectionName === '' || item.alias === connectionName || item.connectionName === connectionName))
+  if (!match) return { status: 'revoked' }
+  const status = match.status === 'active' ? 'connected' : match.status === 'expired' ? 'expired' : 'revoked'
+  return {
+    status,
+    ...(typeof match.accountLabel === 'string' && match.accountLabel.trim() !== ''
+      ? { accountLabel: match.accountLabel.trim().slice(0, 200) }
+      : {})
+  }
+}
+
+async function findNamedConnection(slug, connectionName) {
+  if (connectionName === '') return null
+  const connections = await gateway('/v1/connections', { token: ADMIN })
+  return (Array.isArray(connections) ? connections : []).find((item) =>
+    item && item.service === slug && (item.alias === connectionName || item.connectionName === connectionName)) ?? null
 }
 
 async function readBody(req) {
@@ -121,10 +133,47 @@ async function readBody(req) {
   return JSON.parse(text)
 }
 
+async function proxyOAuthCallback(req, res, url) {
+  // OpenConnector's browser callback is unauthenticated (state is validated by
+  // the gateway). Keep it on the same public origin as Roost so the provider
+  // OAuth app only needs one callback URL.
+  const target = `${BASE}/oauth/callback${url.search}`
+  const headers = {}
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined || name === 'host' || name === 'authorization' || name === 'content-length') continue
+    headers[name] = Array.isArray(value) ? value.join(',') : value
+  }
+  let body
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    body = Buffer.concat(chunks)
+    headers['content-length'] = String(body.length)
+  }
+  const response = await fetch(target, {
+    method: req.method,
+    headers,
+    body,
+    redirect: 'manual',
+    signal: AbortSignal.timeout(15_000)
+  })
+  const responseHeaders = {}
+  for (const name of ['location', 'content-type', 'cache-control', 'set-cookie']) {
+    const value = response.headers.get(name)
+    if (value !== null) responseHeaders[name] = value
+  }
+  const buffer = Buffer.from(await response.arrayBuffer())
+  res.writeHead(response.status, responseHeaders)
+  res.end(buffer)
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', 'http://bridge.local')
     if (url.pathname === '/health') return json(res, 200, { ok: true })
+    if (url.pathname === '/oauth/callback' && (req.method === 'GET' || req.method === 'POST')) {
+      return await proxyOAuthCallback(req, res, url)
+    }
     if (!authorized(req)) return json(res, 401, { error: 'unauthorized' })
 
     if (url.pathname === '/connectors' && req.method === 'GET') {
@@ -135,18 +184,25 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const slug = typeof body.slug === 'string' ? body.slug.trim() : ''
       const state = typeof body.state === 'string' ? body.state.trim() : ''
+      const connectionName = typeof body.connectionName === 'string' ? body.connectionName.trim() : ''
       if (slug === '') return json(res, 400, { error: 'slug is required' })
       if (NO_AUTH.has(slug)) {
         const callback = `${ROOST_PUBLIC_BASE}/api/connectors/callback/${encodeURIComponent(slug)}?state=${encodeURIComponent(state)}&status=connected`
         return json(res, 200, { url: callback })
       }
       const returnUri = `${ROOST_PUBLIC_BASE}/api/connectors/callback/${encodeURIComponent(slug)}?state=${encodeURIComponent(state)}&status=connected`
-      const data = await gateway(`/v1/connections/${encodeURIComponent(slug)}/connect`, {
+      const existing = await findNamedConnection(slug, connectionName)
+      const data = await gateway('/api/oauth/connection-requests', {
         method: 'POST',
         token: ADMIN,
-        body: { returnUri }
+        body: {
+          service: slug,
+          returnUri,
+          ...(connectionName === '' ? {} : { connectionName }),
+          ...(existing && typeof existing.id === 'string' ? { appId: existing.id } : {})
+        }
       })
-      const urlValue = data && (data.url || data.authorizationUrl || data.redirectUrl)
+      const urlValue = data && (data.authorizationUrl || data.url || data.redirectUrl)
       if (typeof urlValue !== 'string' || urlValue === '') {
         return json(res, 502, { error: 'OpenConnector did not return an authorization URL' })
       }
@@ -155,8 +211,9 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/status' && req.method === 'GET') {
       const slug = (url.searchParams.get('slug') ?? '').trim()
+      const connectionName = (url.searchParams.get('connectionName') ?? '').trim()
       if (slug === '') return json(res, 400, { error: 'slug is required' })
-      return json(res, 200, { status: await statusFor(slug) })
+      return json(res, 200, await statusFor(slug, connectionName))
     }
 
     if (url.pathname === '/call' && req.method === 'POST') {
@@ -165,7 +222,11 @@ const server = createServer(async (req, res) => {
       const action = typeof body.action === 'string' ? body.action.trim() : ''
       if (slug === '' || action === '') return json(res, 400, { error: 'slug and action are required' })
       const idem = typeof body.idem === 'string' ? body.idem : ''
-      const extraHeaders = idem === '' ? {} : { 'Idempotency-Key': idem }
+      const connectionName = typeof body.connectionName === 'string' ? body.connectionName.trim() : ''
+      const extraHeaders = {
+        ...(idem === '' ? {} : { 'Idempotency-Key': idem }),
+        ...(connectionName === '' ? {} : { 'x-oo-connector-alias': connectionName })
+      }
       const result = await gateway(`/v1/actions/${encodeURIComponent(slug)}.${encodeURIComponent(action)}`, {
         method: 'POST',
         body: { input: body.args ?? {} },
@@ -183,5 +244,7 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`openconnector-bridge listening on :${PORT}`)
+  const address = server.address()
+  const actualPort = typeof address === 'object' && address !== null ? address.port : PORT
+  console.log(`openconnector-bridge listening on :${actualPort}`)
 })

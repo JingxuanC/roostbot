@@ -33,6 +33,7 @@ import {
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { StorePort } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
+import { postApprovalCardMessage } from './cards.ts'
 import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import { approvalJson } from './bot-rooms-routes.ts'
 
@@ -136,6 +137,27 @@ export async function handleInternalCreateApproval(
       consequence,
       at: ctx.now(),
     })
+    // 沙箱审批不只是抽屉里的一张单：同步投影成房间时间线的审批卡。
+    // target 形如 dsh:room-rm_...-bot_...:call_...；解析失败就只保留审批单。
+    if (kind === 'tool.call' && requesterKind === 'bot') {
+      const match = /room-(rm_[0-9A-Za-z]+)-(bot_[0-9A-Za-z]+)/.exec(target ?? '')
+      if (match !== null) {
+        try {
+          postApprovalCardMessage(store, {
+            roomId: match[1]!,
+            botId: match[2]!,
+            approval,
+            title: action ?? '调用工具',
+            action,
+            target,
+            consequence,
+            at: ctx.now(),
+          })
+        } catch (err) {
+          console.error('roost api: failed to post approval card', err)
+        }
+      }
+    }
     sendJson(res, 201, { approval: approvalJson(approval) })
   } catch (err) {
     sendApprovalFailure(res, err)

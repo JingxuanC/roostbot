@@ -21,6 +21,8 @@
 
 import { BOT_LIMITS } from '../../contract/src/index.ts'
 import type { Bot, BotStatus, UpdateBotInput } from '../../contract/src/index.ts'
+import { AGENT_RUNTIME_KINDS, isAgentRuntimeKind } from '../../agent-runtime/src/index.ts'
+import type { AgentRuntimeKind } from '../../agent-runtime/src/index.ts'
 import { StoreError } from './errors.ts'
 import { appendEvent } from './events.ts'
 import { asInteger, asNonEmptyString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
@@ -35,7 +37,7 @@ export const BOT_APPROVALS = ['ask', 'edits', 'auto', 'full'] as const
 export const BOT_SOFT_DELETE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 const BOT_COLUMNS =
-  'id, workspace_id, name, role, persona, provider, model, avatar_json, skills_json, tools_allow_json, tools_deny_json, approval, memory_scopes_json, status, created_by, created_at, deleted_at'
+  'id, workspace_id, name, role, persona, provider, model, avatar_json, skills_json, tools_allow_json, tools_deny_json, approval, memory_scopes_json, status, runtime_kind, runtime_config, credential_ref, capabilities, created_by, created_at, deleted_at'
 
 /** 名字里不允许出现的字符：控制字符、路径分隔符、@（@Name 是房间里的提及语法）。 */
 const ILLEGAL_NAME = /[\u0000-\u001f\u007f/\\<>:"|?*@]/
@@ -54,6 +56,11 @@ export interface CreateBotStoreInput {
   toolsDeny?: string[]
   approval?: Bot['approval']
   memoryScopes?: string[]
+  /** 缺省 dsh。只接受 AgentRuntimeKind；非法值抛 INVALID_BOT。 */
+  runtimeKind?: AgentRuntimeKind
+  runtimeConfig?: Record<string, unknown> | null
+  credentialRef?: string | null
+  capabilities?: Record<string, unknown> | null
   /** 创建者（用户 id 或 bot id）；写 bot_versions 与 bot.created 事件时作为 actor。 */
   createdBy: string
   createdAt?: number
@@ -96,6 +103,10 @@ interface BotRow {
   approval: string
   memory_scopes_json: string
   status: string
+  runtime_kind: string | null
+  runtime_config: string | null
+  credential_ref: string | null
+  capabilities: string | null
   created_by: string
   created_at: number | bigint
   deleted_at: number | bigint | null
@@ -116,6 +127,10 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
   const toolsDeny = readStringList(req.toolsDeny, 'bot.toolsDeny', [])
   const approval = readApproval(req.approval, 'ask')
   const memoryScopes = readStringList(req.memoryScopes, 'bot.memoryScopes', ['team'])
+  const runtimeKind = readRuntimeKind(req.runtimeKind, 'dsh')
+  const runtimeConfigJson = readRuntimeConfig(req.runtimeConfig, 'bot.runtimeConfig')
+  const credentialRef = readCredentialRef(req.credentialRef, 'bot.credentialRef')
+  const capabilitiesJson = readCapabilities(req.capabilities, 'bot.capabilities')
   const createdBy = asNonEmptyString(req.createdBy, 'bot.createdBy', 'INVALID_BOT')
   const createdAt =
     req.createdAt === undefined || req.createdAt === null
@@ -141,7 +156,7 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
     store.db
       .prepare(
         `INSERT INTO bots (${BOT_COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, NULL)`,
       )
       .run(
         id,
@@ -157,6 +172,10 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
         JSON.stringify(toolsDeny),
         approval,
         JSON.stringify(memoryScopes),
+        runtimeKind,
+        runtimeConfigJson,
+        credentialRef,
+        capabilitiesJson,
         createdBy,
         createdAt,
       )
@@ -203,6 +222,10 @@ export function createBot(store: Store, input: CreateBotStoreInput): Bot {
     approval,
     memoryScopes,
     status: 'active',
+    runtimeKind,
+    ...(runtimeConfigJson === null ? {} : { runtimeConfig: parseJsonObject(runtimeConfigJson) }),
+    ...(credentialRef === null ? {} : { credentialRef }),
+    ...(capabilitiesJson === null ? {} : { capabilities: parseJsonObject(capabilitiesJson) as Bot['capabilities'] }),
     createdBy,
     createdAt,
   }
@@ -267,6 +290,14 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
       ? parseStringArray(current.memory_scopes_json)
       : readStringList(patch.memoryScopes, 'bot.memoryScopes', [])
   const status = patch.status === undefined ? readStatus(current.status, 'active') : readStatus(patch.status, 'active')
+  const runtimeKind =
+    patch.runtimeKind === undefined ? readRuntimeKind(current.runtime_kind, 'dsh') : readRuntimeKind(patch.runtimeKind)
+  const runtimeConfigJson =
+    patch.runtimeConfig === undefined ? current.runtime_config : readRuntimeConfig(patch.runtimeConfig, 'bot.runtimeConfig')
+  const credentialRef =
+    patch.credentialRef === undefined ? current.credential_ref : readCredentialRef(patch.credentialRef, 'bot.credentialRef')
+  const capabilitiesJson =
+    patch.capabilities === undefined ? current.capabilities : readCapabilities(patch.capabilities, 'bot.capabilities')
 
   const personaChanged = patch.persona !== undefined && persona !== current.persona
 
@@ -285,6 +316,10 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
   if (approval !== current.approval) changed.push('approval')
   if (JSON.stringify(memoryScopes) !== current.memory_scopes_json) changed.push('memoryScopes')
   if (status !== current.status) changed.push('status')
+  if (runtimeKind !== (current.runtime_kind ?? 'dsh')) changed.push('runtimeKind')
+  if (runtimeConfigJson !== current.runtime_config) changed.push('runtimeConfig')
+  if (credentialRef !== current.credential_ref) changed.push('credentialRef')
+  if (capabilitiesJson !== current.capabilities) changed.push('capabilities')
 
   store.db.exec('SAVEPOINT roost_update_bot')
   try {
@@ -302,7 +337,8 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
         `UPDATE bots
             SET name = ?, role = ?, persona = ?, model = ?, avatar_json = ?,
                 skills_json = ?, tools_allow_json = ?, tools_deny_json = ?,
-                approval = ?, memory_scopes_json = ?, status = ?
+                approval = ?, memory_scopes_json = ?, status = ?,
+                runtime_kind = ?, runtime_config = ?, credential_ref = ?, capabilities = ?
           WHERE id = ?`,
       )
       .run(
@@ -317,6 +353,10 @@ export function updateBot(store: Store, input: UpdateBotStoreInput): Bot {
         approval,
         JSON.stringify(memoryScopes),
         status,
+        runtimeKind,
+        runtimeConfigJson,
+        credentialRef,
+        capabilitiesJson,
         botId,
       )
 
@@ -574,6 +614,72 @@ function readProvider(value: unknown): string {
   return provider
 }
 
+function readRuntimeKind(value: unknown, fallback?: AgentRuntimeKind): AgentRuntimeKind {
+  if (value === undefined || value === null) {
+    if (fallback !== undefined) return fallback
+    throw new StoreError('INVALID_BOT', 'bot.runtimeKind is required')
+  }
+  if (!isAgentRuntimeKind(value)) {
+    throw new StoreError(
+      'INVALID_BOT',
+      `bot.runtimeKind must be one of ${AGENT_RUNTIME_KINDS.join('|')}`,
+    )
+  }
+  return value
+}
+
+/** runtime_config / capabilities 都以 JSON 文本落库；这里负责对象 + 大小校验。 */
+function readJsonObject(value: unknown, label: string, maxBytes: number): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new StoreError('INVALID_BOT', `${label} must be a JSON object`)
+  }
+  let text: string
+  try {
+    text = JSON.stringify(value)
+  } catch (err) {
+    throw new StoreError('INVALID_BOT', `${label} must be JSON-serializable`, { cause: err })
+  }
+  if (text.length > maxBytes) {
+    throw new StoreError('INVALID_BOT', `${label} is too large (max ${maxBytes} bytes)`)
+  }
+  return text
+}
+
+function readRuntimeConfig(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null
+  return readJsonObject(value, label, 32 * 1024)
+}
+
+function readCapabilities(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null
+  return readJsonObject(value, label, 64 * 1024)
+}
+
+/**
+ * credential_ref 是指向 secret provider 的引用，不是密钥本身。
+ * 这里只校验形状；API 读取时也只返回引用，不解析 secret。
+ */
+function readCredentialRef(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string') throw new StoreError('INVALID_BOT', `${label} must be a string`)
+  const text = value.trim()
+  if (text === '') throw new StoreError('INVALID_BOT', `${label} must not be empty`)
+  if (text.length > 500) throw new StoreError('INVALID_BOT', `${label} must be at most 500 characters`)
+  if (ILLEGAL_SHORT_TEXT.test(text)) throw new StoreError('INVALID_BOT', `${label} contains control characters`)
+  return text
+}
+
+function parseJsonObject(raw: unknown): Record<string, unknown> | undefined {
+  if (typeof raw !== 'string' || raw === '') return undefined
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+    return parsed as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
 function readApproval(value: unknown, fallback: Bot['approval']): Bot['approval'] {
   if (value === undefined || value === null) return fallback
   if (value === 'ask' || value === 'edits' || value === 'auto' || value === 'full') return value
@@ -672,6 +778,10 @@ function rowToBot(row: unknown): Bot {
     approval: (r.approval as Bot['approval']) ?? 'ask',
     memoryScopes: parseStringArray(r.memory_scopes_json),
     status: (r.status as BotStatus) ?? 'active',
+    runtimeKind: isAgentRuntimeKind(r.runtime_kind) ? r.runtime_kind : 'dsh',
+    ...(r.runtime_config === null ? {} : { runtimeConfig: parseJsonObject(r.runtime_config) }),
+    ...(r.credential_ref === null ? {} : { credentialRef: r.credential_ref }),
+    ...(r.capabilities === null ? {} : { capabilities: parseJsonObject(r.capabilities) as Bot['capabilities'] }),
     createdBy: r.created_by,
     createdAt: toNumber(r.created_at),
     ...(r.deleted_at === null ? {} : { deletedAt: toNumber(r.deleted_at) }),

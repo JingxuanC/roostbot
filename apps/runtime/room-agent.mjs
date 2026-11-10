@@ -14,12 +14,14 @@
 // 通知是 session.event 与 session.status。
 
 import { graceLimitsFromEnv, graceVerdict } from './turn-grace.mjs'
+import { decideRoutineAttempt, isolatedRoutinePrompt, ROUTINE_MAX_ATTEMPTS } from './routine-turn.mjs'
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { DEFAULT_DSH_WEB_PORT, startDshWeb } from './dsh-web.mjs'
 import { installProfilePlugin } from './profile-plugins.mjs'
+import { createExternalApprovalPolicy } from './external-approvals.mjs'
 
 /** 环境变量里的端口：非法/未设返回 undefined，交给默认值。 */
 function readPort(value) {
@@ -103,6 +105,17 @@ export function replyIdem(roomId, seq, botId) {
   return `reply-${roomId}-${seq}-${botId}`
 }
 
+/**
+ * 本次助手文本相对已推送前缀的增量。
+ * 新文本是旧文本的延长就只返回多出来的那段；否则整段重发（模型改写了前缀）。
+ */
+export function deltaSlice(previous, next) {
+  if (typeof next !== 'string' || next === '') return ''
+  const prev = typeof previous === 'string' ? previous : ''
+  if (next.startsWith(prev)) return next.slice(prev.length)
+  return next
+}
+
 /** 从 session.event 里取助手文本（assistant/message 的 text blocks）。 */
 export function assistantText(event) {
   if (event === undefined || event.type !== 'assistant/message') return undefined
@@ -110,6 +123,14 @@ export function assistantText(event) {
   if (!Array.isArray(content)) return undefined
   const text = content.filter((block) => block?.type === 'text').map((block) => block.text).join('')
   return text === '' ? undefined : text
+}
+
+/** DSH 的实时 token 流：assistant/live-chunk 的 text-delta。 */
+export function liveChunkText(event) {
+  if (event === undefined || event.type !== 'assistant/live-chunk') return undefined
+  const chunk = event.data?.chunk
+  if (!chunk || chunk.type !== 'text-delta') return undefined
+  return typeof chunk.text === 'string' ? chunk.text : undefined
 }
 
 // [PASS] 允许中英文方括号和大小写；与 packages/rooms 的 classifyReply 同一口径
@@ -287,8 +308,47 @@ export function prepareApprovalBridgeProfile(options = {}) {
 
 export async function startRoomAgent(options) {
   const log = options.log ?? ((line) => console.log(`[room-agent] ${line}`))
+  // Codex needs a writable CODEX_HOME. The image carries the DeepSeek provider
+  // template; copy it into the per-workspace home so the CLI can create its
+  // session/cache files without writing to a root-owned image directory.
+  const codexHome = String(process.env.CODEX_HOME ?? '').trim()
+  const codexTemplate = String(process.env.ROOST_CODEX_CONFIG_TEMPLATE ?? '').trim()
+  if (codexHome !== '' && codexTemplate !== '') {
+    try {
+      mkdirSync(codexHome, { recursive: true })
+      const target = `${codexHome}/config.toml`
+      if (!existsSync(target) && existsSync(codexTemplate)) copyFileSync(codexTemplate, target)
+    } catch (error) {
+      log(`codex home prepare failed: ${errorMessage(error)}`)
+    }
+  }
+  // Grok Build reads ~/.grok/config.toml. HOME is /workspace in the container;
+  // seed the DeepSeek provider template into the writable per-workspace home.
+  const grokHome = String(process.env.ROOST_GROK_HOME ?? `${process.env.HOME ?? '/workspace'}/.grok`).trim()
+  const grokTemplate = String(process.env.ROOST_GROK_CONFIG_TEMPLATE ?? '').trim()
+  if (grokHome !== '' && grokTemplate !== '') {
+    try {
+      mkdirSync(grokHome, { recursive: true })
+      const target = `${grokHome}/config.toml`
+      // Managed Grok workspaces use the image's DeepSeek template. Overwrite a
+      // stale legacy config so an old empty file cannot hide the provider.
+      // The template points at the control-plane model proxy via this
+      // placeholder; a local BYO setup falls back to api.deepseek.com.
+      if (existsSync(grokTemplate)) {
+        const base = (String(process.env.DEEPSEEK_BASE_URL ?? '').trim().replace(/\/+$/, '')) || 'https://api.deepseek.com'
+        const template = readFileSync(grokTemplate, 'utf8').replaceAll('__ROOST_DEEPSEEK_BASE_URL__', base)
+        writeFileSync(target, template)
+      }
+    } catch (error) {
+      log(`grok home prepare failed: ${errorMessage(error)}`)
+    }
+  }
   const botId = options.botId
   const pollMs = options.pollMs ?? 500
+  // 控制面支持 GET /api/internal/events 时用长轮询，不再按 pollMs 空转。
+  // 404/405/501 说明对面还是旧控制面，退回按房间拉 messages。
+  let eventsApi = options.eventsApi !== false
+  const eventWaitMs = Number.isFinite(options.eventWaitMs) ? options.eventWaitMs : 15_000
   const apiBase = String(options.apiBase ?? '').replace(/\/+$/, '')
   const token = options.runtimeToken
   const headers = { 'content-type': 'application/json', 'x-runtime-token': token }
@@ -313,6 +373,19 @@ export async function startRoomAgent(options) {
   const backoffMaxMs = options.backoffMaxMs ?? 30_000
   let stopped = false
 
+  // Multi-runtime (docs/design/agent-runtimes.md §6). OFF by default: the DSH
+  // spawn/session/stream-tap path below is untouched unless ROOST_MULTI_RUNTIME=1.
+  // The supervisor is created lazily and its module is imported dynamically, so a
+  // dsh-only room never adds a dependency on the supervisor/adapters graph.
+  const multiRuntimeEnabled = options.multiRuntime === true
+    || (options.multiRuntime !== false && (process.env.ROOST_MULTI_RUNTIME ?? '0') === '1')
+  const runtimeCacheMs = Number.isFinite(options.runtimeCacheMs) ? options.runtimeCacheMs : 30_000
+  // botId -> {runtimeKind, capabilities}; negative-cached so a broken endpoint is
+  // asked at most once per window and every bot falls back to dsh meanwhile.
+  let runtimeKindsCache = { at: 0, byBot: new Map() }
+  let supervisorInstance = null
+  let supervisorPromise = null
+
   // 审批桥必须在 DSH 启动前落到 profile 里（DSH 只在 boot 时读 cordis.patch.yml）。
   // 装成功时把 DSH 的权限档位钉到 workspace-write：控制面给沙箱的
   // DSH_PERMISSION_MODE=danger-full-access 会把 approval 策略一起钉成 never，
@@ -336,6 +409,20 @@ export async function startRoomAgent(options) {
   // 插件面板容器（ADR 0004 / wave1 §C）：沙箱里额外一个 `dsh web`，只绑 127.0.0.1:4099。
   // 后台启动、**不阻塞 SDK 会话**：面板容器起不来时只记日志（dsh-web 里打 reason），
   // 房间对话照常。ROOST_DSH_WEB=0 关闭；进程退出（stop）时一并 kill。
+  // Per-Bot vendor env is delivered as a workspace-scoped JSON map. Keep it
+  // out of adapter configs (which are shared) and merge it into the session spec.
+  let botCredentialMap = {}
+  try {
+    const raw = String(process.env.ROOST_BOT_CREDENTIALS ?? '').trim()
+    if (raw !== '') botCredentialMap = JSON.parse(raw)
+  } catch {
+    log('ROOST_BOT_CREDENTIALS is not valid JSON; ignoring')
+  }
+  function botCredentialEnv(botId) {
+    const entry = botCredentialMap[botId]
+    return entry !== null && typeof entry === 'object' && !Array.isArray(entry) ? { ...entry } : {}
+  }
+
   const dshWebEnabled = (process.env.ROOST_DSH_WEB ?? '1') !== '0'
   const dshWebPort =
     readPort(options.dshWebPort ?? process.env.ROOST_DSH_WEB_PORT ?? process.env.DSH_WEB_PORT) ??
@@ -362,9 +449,88 @@ export async function startRoomAgent(options) {
       .catch(() => null) // startDshWeb 契约上不抛；兜底避免 unhandled rejection
   }
 
+  // sessionId → 正在生成的房间。文本变长就 POST message.delta，不等整段说完。
+  const streaming = new Map()
+  const deltaBuffers = new Map()
+  let deltasEnabled = true
+
+  /** 把 50ms 内的 token 合并成一个 delta，避免每个 token 都写一条事件。 */
+  function queueDelta(sessionId, roomId, botId, text) {
+    if (!deltasEnabled || text === '') return
+    let buffer = deltaBuffers.get(sessionId)
+    if (buffer === undefined) {
+      buffer = { roomId, botId, pending: '', timer: null }
+      deltaBuffers.set(sessionId, buffer)
+    }
+    buffer.pending += text
+    if (buffer.timer !== null) return
+    buffer.timer = setTimeout(() => {
+      buffer.timer = null
+      const chunk = buffer.pending
+      buffer.pending = ''
+      if (chunk !== '') void postDelta(buffer.roomId, buffer.botId, chunk)
+    }, 50)
+  }
+
+  function clearDeltaBuffer(sessionId) {
+    const buffer = deltaBuffers.get(sessionId)
+    if (buffer === undefined) return
+    if (buffer.timer !== null) clearTimeout(buffer.timer)
+    deltaBuffers.delete(sessionId)
+  }
+
+  /** Multi-runtime only: flush a pending delta so advance cannot beat the stream. */
+  async function flushDeltaBuffer(sessionId) {
+    const buffer = deltaBuffers.get(sessionId)
+    if (buffer === undefined) return
+    if (buffer.timer !== null) {
+      clearTimeout(buffer.timer)
+      buffer.timer = null
+    }
+    const chunk = buffer.pending
+    buffer.pending = ''
+    deltaBuffers.delete(sessionId)
+    if (chunk !== '') await postDelta(buffer.roomId, buffer.botId, chunk)
+  }
+
+  async function postDelta(roomId, botId, delta) {
+    if (!deltasEnabled || typeof delta !== 'string' || delta === '') return
+    let response
+    try {
+      response = await request(`/api/internal/rooms/${encodeURIComponent(roomId)}/deltas`, {
+        method: 'POST',
+        body: JSON.stringify({ botId, delta })
+      })
+    } catch {
+      return
+    }
+    if (response.status === 404 || response.status === 405 || response.status === 501) deltasEnabled = false
+    await response.text().catch(() => '')
+  }
+
   rpc.on('session.event', (params) => {
+    if (process.env.ROOST_DEBUG_EVENTS === '1') log(`event ${params?.event?.type ?? '?'} ${JSON.stringify(params?.event?.data ?? {}).slice(0, 200)}`)
+    const liveChunk = liveChunkText(params?.event)
+    if (liveChunk !== undefined) {
+      const live = streaming.get(params.sessionId)
+      if (live !== undefined && liveChunk !== '') {
+        live.sent += liveChunk
+        live.chunked = true
+        queueDelta(params.sessionId, live.roomId, live.botId, liveChunk)
+      }
+      return
+    }
     const text = assistantText(params?.event)
-    if (text !== undefined) assistant.set(params.sessionId, text)
+    if (text === undefined) return
+    assistant.set(params.sessionId, text)
+    const live = streaming.get(params.sessionId)
+    if (live === undefined) return
+    // 镜像里装了 assistant-stream tap 时，流式文本由插件负责；否则用最终答案兜底
+    // 补一段 delta（老 fake DSH/没有 tap 的部署）。
+    if (live.chunked === true || process.env.ROOST_STREAM_TAP === '1') return
+    const delta = deltaSlice(live.sent, text)
+    live.sent = text
+    if (delta !== '') void postDelta(live.roomId, live.botId, delta)
   })
   rpc.on('session.status', (params) => {
     if (typeof params?.sessionId !== 'string') return
@@ -385,6 +551,24 @@ export async function startRoomAgent(options) {
     model: options.model ?? 'deepseek-chat'
   })
   log(`sdk ready: ${initialized?.serverInfo?.name ?? 'unknown'} ${initialized?.serverInfo?.version ?? ''}`)
+
+  // Docker/remote runtime providers use a file marker instead of scraping stdout.
+  // Remove it on exit so a container that dies cannot be mistaken for ready.
+  const readyFile = String(process.env.ROOST_READY_FILE ?? '').trim()
+  if (readyFile !== '') {
+    try {
+      mkdirSync(dirname(readyFile), { recursive: true })
+      const tmp = `${readyFile}.tmp`
+      writeFileSync(tmp, JSON.stringify({
+        readyAt: Date.now(),
+        pid: process.pid,
+        dsh: initialized?.serverInfo?.version ?? null
+      }))
+      renameSync(tmp, readyFile)
+    } catch (error) {
+      log(`ready file write failed: ${errorMessage(error)}`)
+    }
+  }
 
   /**
    * 等这个 session 空闲。**必须在 prompt 之前注册**：服务端可能在 prompt 的
@@ -423,19 +607,23 @@ export async function startRoomAgent(options) {
   }
 
   /** 投一条 prompt，等 idle，返回助手文本（可能为空）；被 stop 时提前返回 stopped。 */
-  async function runTurn(sessionId, text, signal) {
+  async function runTurn(sessionId, text, signal, streamTo) {
     await prepareSession(sessionId)
     assistant.delete(sessionId)
+    if (streamTo && typeof streamTo.roomId === 'string' && typeof streamTo.botId === 'string') {
+      streaming.set(sessionId, { roomId: streamTo.roomId, botId: streamTo.botId, sent: '', chunked: false })
+    }
     const idle = idleSignal(sessionId)
     const stop = stopSignalPromise(signal)
     const limits = graceLimitsFromEnv()
     const deadline = delay(limits.replyTimeoutMs ?? 240_000)
     let grace = null
     try {
-      await rpc.request('session/prompt', {
+      const promptResult = await rpc.request('session/prompt', {
         sessionId,
         contentBlocks: [{ type: 'text', text }]
       })
+      if (process.env.ROOST_DEBUG_EVENTS === '1') log(`prompt result ${JSON.stringify(promptResult).slice(0, 200)}`)
       // 没有 status 通知时用 session/wait 兜底（真服务端会等到空闲再回）；
       // session/wait 本身失败时不要抢先结束，继续等 idle 通知/超时。
       const fallback = rpc
@@ -468,6 +656,8 @@ export async function startRoomAgent(options) {
         timedOut: outcome === 'deadline'
       }
     } finally {
+      streaming.delete(sessionId)
+      clearDeltaBuffer(sessionId)
       stop.cancel()
       idle.cancel()
       deadline.cancel()
@@ -476,10 +666,10 @@ export async function startRoomAgent(options) {
   }
 
   /** 一个 slot 的执行结果；会话丢失记 failed(SESSION)，用户停止记 missed，其余按文本归类。 */
-  async function runSlot(sessionId, prompt, messageText, signal) {
+  async function runSlot(sessionId, prompt, messageText, signal, streamTo) {
     const text = typeof prompt === 'string' && prompt.trim() !== '' ? prompt : `房间里有人说：${messageText}`
     try {
-      const { answer, idle, stopped: wasStopped } = await runTurn(sessionId, text, signal)
+      const { answer, idle, stopped: wasStopped } = await runTurn(sessionId, text, signal, streamTo)
       // 用户停止当前成员：不重跑这个 slot，按 missed 收尾，轮次继续（docs/design/rooms.md §10）。
       if (wasStopped === true) return { kind: 'missed' }
       if (answer !== undefined) return classifySlotResult(answer)
@@ -490,6 +680,233 @@ export async function startRoomAgent(options) {
     } catch (error) {
       return { kind: 'failed', code: 'SESSION', message: errorMessage(error) }
     }
+  }
+
+  // ── Multi-runtime helpers (only reached with ROOST_MULTI_RUNTIME=1) ────────
+
+  function multiRuntimeWorkspaceId() {
+    return String(options.workspaceId ?? process.env.ROOST_WORKSPACE_ID ?? '').trim()
+  }
+
+  /** Adapter configs come from env defaults; minimal args per design §6.1/§12.3. */
+  const externalApprovalPolicy = createExternalApprovalPolicy({
+    request,
+    workspaceId: options.workspaceId ?? process.env.ROOST_WORKSPACE_ID ?? '',
+    log: (line) => log(line)
+  })
+
+  function buildSupervisorOptions() {
+    const grokBin = (process.env.ROOST_GROK_BIN ?? '').trim() || 'grok'
+    const claudeBin = (process.env.ROOST_CLAUDE_BIN ?? '').trim() || 'claude'
+    const codexBin = (process.env.ROOST_CODEX_BIN ?? '').trim() || 'codex'
+    const hermesBin = (process.env.ROOST_HERMES_BIN ?? '').trim() || 'hermes'
+    // Only the vendor credentials the CLI needs; never forward the control-plane
+    // runtime token or DSH keys to an external agent.
+    const claudeEnv = {}
+    for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']) {
+      const value = process.env[key]
+      if (typeof value === 'string' && value !== '') claudeEnv[key] = value
+    }
+    const codexEnv = {}
+    for (const key of ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY']) {
+      const value = process.env[key]
+      if (typeof value === 'string' && value !== '') codexEnv[key] = value
+    }
+    const grokEnv = {}
+    // Grok's DeepSeek provider reads its key/base URL from the child env. The
+    // managed runtime injects the workspace-scoped model-proxy token as
+    // DEEPSEEK_API_KEY; local/BYO configurations keep their own values.
+    for (const key of ['XAI_API_KEY', 'GROK_API_KEY', 'XAI_BASE_URL', 'GROK_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']) {
+      const value = process.env[key]
+      if (typeof value === 'string' && value !== '') grokEnv[key] = value
+    }
+    return {
+      adapterConfigs: {
+        'grok-build': { command: grokBin, args: ['agent', '--always-approve', 'stdio'], env: grokEnv, permissionPolicy: externalApprovalPolicy },
+        codex: { command: codexBin, args: [], env: codexEnv, permissionPolicy: externalApprovalPolicy },
+        hermes: { command: hermesBin, args: ['acp'], env: { ...grokEnv, ...codexEnv }, permissionPolicy: externalApprovalPolicy },
+        'claude-code': {
+          command: claudeBin,
+          args: ['--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json'],
+          env: claudeEnv
+        }
+      },
+      logger: (message, meta) => {
+        log(`supervisor: ${message}${meta === undefined ? '' : ` ${JSON.stringify(meta)}`}`)
+      }
+    }
+  }
+
+  /**
+   * Lazily create the supervisor. Returns an instance, a promise, or null when
+   * multi-runtime is off. A failed dynamic import logs and returns null so the
+   * room falls back to the DSH path instead of stopping the agent.
+   */
+  function getSupervisor() {
+    if (!multiRuntimeEnabled) return null
+    if (options.supervisor !== undefined && options.supervisor !== null) {
+      supervisorInstance = options.supervisor
+      return supervisorInstance
+    }
+    if (supervisorInstance !== null) return supervisorInstance
+    if (supervisorPromise === null) {
+      const factory = typeof options.createSupervisor === 'function'
+        ? (opts) => options.createSupervisor(opts)
+        : (opts) => import('./agent-supervisor.mjs').then((module) => module.createAgentSupervisor(opts))
+      supervisorPromise = Promise.resolve()
+        .then(() => factory(buildSupervisorOptions()))
+        .then((instance) => {
+          supervisorInstance = instance
+          return instance
+        })
+        .catch((error) => {
+          log(`supervisor unavailable: ${errorMessage(error)}; using the dsh path`)
+          return null
+        })
+    }
+    return supervisorPromise
+  }
+
+  /**
+   * GET /api/internal/bots?workspaceId=… (runtime token) → botId -> runtimeKind.
+   * Any failure (404/405/501/network/5xx) is negative-cached for the window and
+   * every bot falls back to dsh.
+   */
+  async function loadBotRuntimeKinds() {
+    if (!multiRuntimeEnabled) return new Map()
+    const now = Date.now()
+    if (runtimeKindsCache.at !== 0 && now - runtimeKindsCache.at < runtimeCacheMs) {
+      return runtimeKindsCache.byBot
+    }
+    const workspaceId = multiRuntimeWorkspaceId()
+    const path = workspaceId === ''
+      ? '/api/internal/bots'
+      : `/api/internal/bots?workspaceId=${encodeURIComponent(workspaceId)}`
+    try {
+      const data = await requestJson(path)
+      const list = Array.isArray(data) ? data : Array.isArray(data?.bots) ? data.bots : []
+      const byBot = new Map()
+      for (const item of list) {
+        if (item === null || typeof item !== 'object') continue
+        const id = typeof item.id === 'string'
+          ? item.id
+          : typeof item.botId === 'string'
+            ? item.botId
+            : ''
+        if (id === '') continue
+        const runtimeKind = typeof item.runtimeKind === 'string' && item.runtimeKind !== ''
+          ? item.runtimeKind
+          : typeof item.runtime === 'string' && item.runtime !== ''
+            ? item.runtime
+            : 'dsh'
+        byBot.set(id, { runtimeKind, capabilities: item.capabilities })
+      }
+      runtimeKindsCache = { at: Date.now(), byBot }
+      return byBot
+    } catch (error) {
+      log(`bot runtime lookup failed: ${errorMessage(error)}; defaulting every bot to dsh`)
+      runtimeKindsCache = { at: Date.now(), byBot: new Map() }
+      return runtimeKindsCache.byBot
+    }
+  }
+
+  function runtimeKindFor(targetBotId, byBot) {
+    if (!multiRuntimeEnabled) return 'dsh'
+    const entry = byBot?.get?.(targetBotId)
+    return typeof entry?.runtimeKind === 'string' && entry.runtimeKind !== '' ? entry.runtimeKind : 'dsh'
+  }
+
+  function supervisorContext(roomId, room, members, message) {
+    const roomName = typeof room?.name === 'string' && room.name !== '' ? room.name : roomId
+    const memberList = (Array.isArray(members) ? members : roomMembers(room)).map((member) => ({
+      botId: member.botId,
+      name: member.botId,
+      ...(member.role === 'host' ? { role: 'host' } : {})
+    }))
+    const recentMessages = message === undefined || message === null
+      ? []
+      : [{
+          seq: Number.isSafeInteger(message.seq) ? message.seq : 0,
+          actor: typeof message.actor?.id === 'string' ? message.actor.id : 'user',
+          text: typeof message.text === 'string' ? message.text : '',
+          at: typeof message.at === 'string' ? message.at : ''
+        }]
+    return { roomName, members: memberList, recentMessages, artifacts: [], tokenBudget: 0 }
+  }
+
+  /**
+   * Run one turn through the supervisor for a non-dsh bot.
+   * Streams text.delta through the existing internal /deltas route, keeps the
+   * agent's text.final for the caller (advance / say owns persistence), logs
+   * errors and stops on turn.ended. The supervisor's guardAgentEvents already
+   * rejects a missing/duplicate terminal frame.
+   */
+  /** Codex ACP prepends its model-metadata fallback warning to the answer. */
+  function stripCodexMetadataWarning(text) {
+    if (typeof text !== 'string') return text
+    return text.replace(/^Model metadata for `[^`]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.\s*/, '')
+  }
+
+  async function runSupervisorTurn({ roomId, targetBotId, runtimeKind, sessionId, prompt, messageText, signal, context }) {
+    const supervisor = await getSupervisor()
+    if (supervisor === null) throw new Error('multi-runtime supervisor unavailable')
+    const text = typeof prompt === 'string' && prompt.trim() !== '' ? prompt : `房间里有人说：${messageText}`
+    const workspaceId = multiRuntimeWorkspaceId()
+    const workRoot = String(options.workdir ?? process.env.ROOST_WORKDIR ?? '/workspace')
+    const botWorkdir = `${workRoot.replace(/\/+$/, '')}/agents/${targetBotId}`
+    try {
+      mkdirSync(botWorkdir, { recursive: true })
+    } catch {
+      // The adapter will report a useful spawn error if the workdir is unusable.
+    }
+    const turnId = `mr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    const runtimeTurn = {
+      turnId,
+      input: text,
+      context,
+      signal: signal ?? new AbortController().signal
+    }
+    let finalText
+    let endReason = 'stop'
+    let errorText = null
+    const events = supervisor.send({
+      roomId,
+      botId: targetBotId,
+      runtimeKind,
+      sessionSpec: {
+        sessionId,
+        roomId,
+        botId: targetBotId,
+        workspaceId,
+        workdir: botWorkdir,
+        env: botCredentialEnv(targetBotId)
+      },
+      turn: runtimeTurn,
+      options: {}
+    })
+    for await (const event of events) {
+      if (event.type === 'text.delta') {
+        queueDelta(sessionId, roomId, targetBotId, event.text)
+      } else if (event.type === 'text.final') {
+        finalText = stripCodexMetadataWarning(event.text)
+      } else if (event.type === 'error') {
+        errorText = event.message
+        log(`multi-runtime ${runtimeKind} error for ${targetBotId}: ${event.code} ${event.message}`)
+      } else if (event.type === 'turn.ended') {
+        endReason = event.reason
+      }
+    }
+    await flushDeltaBuffer(sessionId)
+    return { text: finalText, reason: endReason, error: errorText }
+  }
+
+  function slotResultFromSupervisor(turnResult) {
+    if (turnResult.reason === 'cancelled' || turnResult.reason === 'timeout') return { kind: 'missed' }
+    if (typeof turnResult.text === 'string') return classifySlotResult(turnResult.text)
+    if (turnResult.reason === 'error') {
+      return { kind: 'failed', code: 'SESSION', message: turnResult.error ?? 'multi-runtime turn failed' }
+    }
+    return { kind: 'missed' }
   }
 
   async function request(path, init = {}) {
@@ -729,17 +1146,50 @@ export async function startRoomAgent(options) {
     log(`advanced ${roundId} slot ${slotIndex} ${result.kind}`)
   }
 
-  async function runAssignments(roomId, assignments, message) {
+  async function runAssignments(roomId, assignments, message, room = null, runtimeKinds = null) {
     for (const assignment of assignments) {
       const sessionId =
         typeof assignment.sessionId === 'string' && assignment.sessionId !== ''
           ? assignment.sessionId
           : sessionIdFor(assignment.roomId ?? roomId, assignment.botId)
+      const runtimeKind = runtimeKindFor(assignment.botId, runtimeKinds)
+      if (multiRuntimeEnabled && runtimeKind !== 'dsh') {
+        const supervisor = await getSupervisor()
+        if (supervisor !== null) {
+          const watch = watchSlotStop(assignment.roomId ?? roomId, assignment.index)
+          let runtimeResult
+          try {
+            const turnResult = await runSupervisorTurn({
+              roomId: assignment.roomId ?? roomId,
+              targetBotId: assignment.botId,
+              runtimeKind,
+              sessionId,
+              prompt: assignment.prompt,
+              messageText: message.text,
+              signal: watch?.signal,
+              context: supervisorContext(assignment.roomId ?? roomId, room, null, message)
+            })
+            runtimeResult = slotResultFromSupervisor(turnResult)
+          } catch (error) {
+            log(`multi-runtime slot failed for ${assignment.botId} (${runtimeKind}): ${errorMessage(error)}`)
+            runtimeResult = { kind: 'failed', code: 'SESSION', message: errorMessage(error) }
+          } finally {
+            watch?.cancel()
+          }
+          await advance(assignment.roundId, assignment.index, runtimeResult)
+          if (runtimeResult.kind === 'posted' && typeof runtimeResult.text === 'string') void rememberClaims(runtimeResult.text)
+          continue
+        }
+        log(`supervisor unavailable; running ${assignment.botId} on the dsh path`)
+      }
       await prepareSession(sessionId)
       const watch = watchSlotStop(assignment.roomId ?? roomId, assignment.index)
       let result
       try {
-        result = await runSlot(sessionId, assignment.prompt, message.text, watch?.signal)
+        result = await runSlot(sessionId, assignment.prompt, message.text, watch?.signal, {
+          roomId: assignment.roomId ?? roomId,
+          botId: assignment.botId ?? botId
+        })
       } finally {
         watch?.cancel()
       }
@@ -749,11 +1199,50 @@ export async function startRoomAgent(options) {
   }
 
   /** 旧路径：一个 Bot 直接把助手文本 `say` 回房间。 */
-  async function fallbackSay(roomId, message) {
+  async function fallbackSay(roomId, message, room = null, members = null, runtimeKinds = null) {
     const sessionId = sessionIdFor(roomId, botId)
+    const runtimeKind = runtimeKindFor(botId, runtimeKinds)
+    if (multiRuntimeEnabled && runtimeKind !== 'dsh' && (await getSupervisor()) !== null) {
+      let answer
+      try {
+        const turnResult = await runSupervisorTurn({
+          roomId,
+          targetBotId: botId,
+          runtimeKind,
+          sessionId,
+          prompt: `房间里有人说：${message.text}`,
+          messageText: message.text,
+          signal: undefined,
+          context: supervisorContext(roomId, room, members, message)
+        })
+        if (turnResult.reason === 'cancelled' || turnResult.reason === 'timeout') {
+          log(`multi-runtime turn ${turnResult.reason} for ${botId} seq ${message.seq}`)
+          return
+        }
+        if (typeof turnResult.text !== 'string' || turnResult.text.trim() === '') {
+          log(`no assistant text for ${botId} seq ${message.seq} (${runtimeKind})`)
+          return
+        }
+        answer = turnResult.text
+      } catch (error) {
+        log(`multi-runtime turn failed for ${botId} seq ${message.seq}: ${errorMessage(error)}`)
+        return
+      }
+      const response = await request(`/api/rooms/${encodeURIComponent(roomId)}/say`, {
+        method: 'POST',
+        body: JSON.stringify({ botId, text: answer, idem: replyIdem(roomId, message.seq, botId) })
+      })
+      const body = await response.text().catch(() => '')
+      if (!response.ok) log(`say failed ${response.status}: ${body}`)
+      else {
+        log(`replied ${roomId} seq ${message.seq} session ${sessionId} (${runtimeKind})`)
+        void rememberClaims(answer)
+      }
+      return
+    }
     let answer
     try {
-      const turn = await runTurn(sessionId, `房间里有人说：${message.text}`)
+      const turn = await runTurn(sessionId, `房间里有人说：${message.text}`, undefined, { roomId, botId })
       answer = turn.answer
     } catch (error) {
       log(`turn failed for ${sessionId} seq ${message.seq}: ${errorMessage(error)}`)
@@ -792,6 +1281,8 @@ export async function startRoomAgent(options) {
   }
 
   async function handleUserMessage(room, members, message) {
+    // One lookup per user message; dsh-only agents never call the endpoint.
+    const runtimeKinds = multiRuntimeEnabled ? await loadBotRuntimeKinds() : null
     if (members.length > 0) {
       const assignments = await fetchAssignments(room.id)
       if (assignments !== null) {
@@ -799,12 +1290,12 @@ export async function startRoomAgent(options) {
           log(`no assignments for ${room.id} seq ${message.seq}`)
           return
         }
-        await runAssignments(room.id, assignments, message)
+        await runAssignments(room.id, assignments, message, room, runtimeKinds)
         return
       }
       log(`assignments unavailable for ${room.id}; single-bot fallback`)
     }
-    await fallbackSay(room.id, message)
+    await fallbackSay(room.id, message, room, members, runtimeKinds)
   }
 
   async function pollRoom(room) {
@@ -834,28 +1325,160 @@ export async function startRoomAgent(options) {
     }
   }
 
+  function eventsCursor() {
+    if (Number.isSafeInteger(cursors.__events)) return cursors.__events
+    let max = 0
+    for (const [key, value] of Object.entries(cursors)) {
+      if (key.startsWith('__')) continue
+      if (Number.isSafeInteger(value)) max = Math.max(max, value)
+    }
+    return max
+  }
+
+  /**
+   * workspace 级长轮询。返回 null 表示这条路由不可用，调用方退回 pollRoom。
+   * immediateEmpty：请求几乎立刻返回且没有事件（假控制面或空库），外层仍按 pollMs 睡。
+   */
+  const routineDone = new Set()
+
+  async function postRoutineResult(runId, decision) {
+    const response = await request(`/api/internal/routine-runs/${encodeURIComponent(runId)}/result`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text: typeof decision.text === 'string' ? decision.text : '',
+        ...(decision.error === true ? { error: true } : {})
+      })
+    })
+    const body = await response.text().catch(() => '')
+    if (response.status === 404 || response.status === 405 || response.status === 501) return
+    if (!response.ok) {
+      throw new ControlPlaneError(
+        `/api/internal/routine-runs/${runId}/result ${response.status}${body === '' ? '' : `: ${body.slice(0, 200)}`}`,
+        { status: response.status, body }
+      )
+    }
+  }
+
+  /** 隔离跑：新 session，prompt 里没有房间历史。失败按次数重试，只交卷一次。 */
+  async function runRoutine(event) {
+    const payload = event?.payload ?? {}
+    const runId = typeof payload.runId === 'string' ? payload.runId : ''
+    const target = typeof payload.botId === 'string' ? payload.botId : ''
+    if (runId === '' || target !== botId || routineDone.has(runId)) return
+    const prompt = isolatedRoutinePrompt(payload.prompt)
+    let decision = { action: 'silent', text: '', error: false }
+    if (prompt === '') {
+      decision = { action: 'silent', text: '', error: false }
+    } else {
+      for (let attempt = 1; attempt <= ROUTINE_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          const turn = await runTurn(`routine-${runId}-${attempt}`, prompt)
+          decision = decideRoutineAttempt({
+            attempt,
+            maxAttempts: ROUTINE_MAX_ATTEMPTS,
+            answer: turn?.answer,
+            timedOut: turn?.timedOut === true
+          })
+        } catch (error) {
+          decision = decideRoutineAttempt({
+            attempt,
+            maxAttempts: ROUTINE_MAX_ATTEMPTS,
+            error: errorMessage(error)
+          })
+        }
+        if (decision.action !== 'retry') break
+      }
+    }
+    if (decision.action === 'retry') return
+    await postRoutineResult(runId, decision.action === 'post' ? decision : { text: '', error: false })
+    routineDone.add(runId)
+  }
+
+  async function pollViaEvents(rooms) {
+    if (!eventsApi) return null
+    const after = eventsCursor()
+    const params = new URLSearchParams({
+      after: String(after),
+      waitMs: String(Math.max(0, Math.min(25_000, eventWaitMs)))
+    })
+    const workspaceId = (process.env.ROOST_WORKSPACE_ID ?? options.workspaceId ?? '').trim()
+    if (workspaceId !== '') params.set('workspaceId', workspaceId)
+    const started = Date.now()
+    const response = await request(`/api/internal/events?${params}`)
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      eventsApi = false
+      await response.body?.cancel?.().catch(() => undefined)
+      return null
+    }
+    const text = await response.text().catch(() => '')
+    if (!response.ok) {
+      throw new ControlPlaneError(
+        `/api/internal/events ${response.status}${text === '' ? '' : `: ${text.slice(0, 200)}`}`,
+        { status: response.status, body: text }
+      )
+    }
+    let data
+    try {
+      data = text.trim() === '' ? {} : JSON.parse(text)
+    } catch {
+      throw new ControlPlaneError('/api/internal/events returned invalid JSON', { status: response.status, body: text })
+    }
+    const events = Array.isArray(data?.events) ? data.events : []
+    const roomById = new Map()
+    for (const room of rooms) {
+      if (typeof room?.id === 'string' && room.id !== '') roomById.set(room.id, room)
+    }
+    for (const event of events) {
+      const room = roomById.get(event?.roomId)
+      const message = event?.message
+      if (event?.kind === 'schedule.routine.fired') {
+        await runRoutine(event)
+      }
+      if (event?.kind === 'chat.message' && room && message?.actor?.kind === 'user' && Number.isSafeInteger(message.seq)) {
+        const seen = cursors[room.id] ?? 0
+        if (message.seq > seen) {
+          await handleUserMessage(room, roomMembers(room), message)
+        }
+      }
+      if (Number.isSafeInteger(event?.seq)) {
+        cursors.__events = Math.max(cursors.__events ?? 0, event.seq)
+        if (typeof event?.roomId === 'string' && event.roomId !== '' && Number.isSafeInteger(message?.seq)) {
+          cursors[event.roomId] = Math.max(cursors[event.roomId] ?? 0, message.seq)
+        } else if (typeof event?.roomId === 'string' && event.roomId !== '') {
+          cursors[event.roomId] = Math.max(cursors[event.roomId] ?? 0, event.seq)
+        }
+        saveCursors(options.stateFile, cursors)
+      }
+    }
+    return { immediateEmpty: events.length === 0 && Date.now() - started < 50 }
+  }
+
   async function poll() {
     const rooms = await syncRooms()
+    const viaEvents = await pollViaEvents(rooms)
+    if (viaEvents !== null) return viaEvents
     for (const room of rooms) {
       if (typeof room?.id !== 'string' || room.id === '') continue
       await pollRoom(room)
     }
+    return { immediateEmpty: true }
   }
 
   async function loop() {
     let delay = backoffBaseMs
     while (!stopped) {
       try {
-        await poll()
+        const result = await poll()
         delay = backoffBaseMs
+        // 长轮询已经等过，或者刚拿到事件：马上再看一眼。
+        // 旧控制面（或空响应立刻返回）仍按 pollMs 睡，和原来的紧轮询一样。
+        if (result?.immediateEmpty) await sleep(pollMs)
       } catch (error) {
         // 控制面不可达：一行日志 + 指数退避，恢复后重置（不退出进程）。
         log(`poll failed: ${errorMessage(error)}`)
         await sleep(delay)
         delay = nextBackoff(delay, { baseMs: backoffBaseMs, maxMs: backoffMaxMs })
-        continue
       }
-      await sleep(pollMs)
     }
   }
 
@@ -869,10 +1492,23 @@ export async function startRoomAgent(options) {
       if (stopPromise !== null) return stopPromise
       stopPromise = (async () => {
         stopped = true
+        if (readyFile !== '') {
+          try { rmSync(readyFile, { force: true }) } catch { /* best effort */ }
+        }
         // 先取消/等 dsh web：abort 会让还在轮询的 startDshWeb 立刻 kill 子进程并返回。
         dshWebAbort.abort()
         if (dshWebStart !== null) await dshWebStart.catch(() => null)
         if (dshWebHandle !== null) await dshWebHandle.stop().catch(() => undefined)
+        if (multiRuntimeEnabled) {
+          try {
+            const multiRuntimeSupervisor = supervisorInstance ?? (supervisorPromise === null ? null : await supervisorPromise)
+            if (multiRuntimeSupervisor !== null && multiRuntimeSupervisor !== undefined) {
+              await multiRuntimeSupervisor.closeAll()
+            }
+          } catch {
+            // best effort: shutdown must still stop DSH even if an adapter is wedged
+          }
+        }
         await rpc.request('shutdown').catch(() => undefined)
         rpc.close()
       })()

@@ -33,10 +33,20 @@ import {
   handleCreateBot,
   handleDeleteBot,
   handleGetBot,
+  handleOpenBotDm,
   handleListBots,
   handlePatchBot,
   handleRestoreBot
 } from './bots-routes.ts'
+import {
+  handleCloseAgentBinding,
+  handleCreateAgentBinding,
+  handleCreateRoomSlot,
+  handleDeleteRoomSlot,
+  handleGetRoomSlot,
+  handleListRoomSlots,
+  handlePatchRoomSlot,
+} from './agent-bindings-routes.ts'
 import {
   handleAddRoomMembers,
   handleCreateRoomExtended,
@@ -96,7 +106,11 @@ import type { ModelProxyHandler } from '../../../packages/budget/src/index.ts'
 import { handleModelProxy, type ModelProxyRouteContext } from './model-proxy-routes.ts'
 import { recordUsage } from '../../../packages/store/src/budget.ts'
 import { metricsFromEvent } from '../../../packages/observability/src/index.ts'
-import { setEventSink } from '../../../packages/store/src/events.ts'
+import { readWorkspaceRoomEvents, setEventSink } from '../../../packages/store/src/events.ts'
+import { appendRoomSignal, readRoomEvents } from '../../../packages/store/src/room-log.ts'
+import type { Event } from '../../../packages/store/src/types.ts'
+import { armRoomWait, publishFromStoredEvent, publishRoomWake } from './room-bus.ts'
+import { encodeSseFrame, framesForRoomEvent, internalEventJson } from './room-stream.ts'
 import {
   handleCreateApprovalGrant,
   handleInternalCreateApproval,
@@ -113,6 +127,8 @@ import {
   handleListQuotas,
   handlePatchQuota,
 } from './budget-routes.ts'
+import { handleProviderConsole } from './provider-console-routes.ts'
+import type { ProviderConsoleClient } from './provider-console-client.ts'
 import {
   handleDeleteMemory,
   handleExportMemories,
@@ -131,6 +147,15 @@ import {
   handleRunScheduleNow,
   handleStopRun,
 } from './schedules-routes.ts'
+import {
+  handleCreateRoutine,
+  handleDeleteRoutine,
+  handleInternalRoutineResult,
+  handleListRoutineRuns,
+  handleListRoutines,
+  handlePatchRoutine,
+  handleRunRoutineNow,
+} from './routines-routes.ts'
 import { startSchedulerLoop } from './scheduler-loop.ts'
 import { handlePluginsSync } from './plugins-sync-routes.ts'
 import {
@@ -174,14 +199,34 @@ import {
   handleInternalAttachmentGc,
   handleServeMessageFile,
   handleServeSignedAttachment,
+  handlePostRoomArtifact,
   handleUploadAttachment,
 } from './attachments-routes.ts'
 import type { AttachmentsRuntime } from './attachments-routes.ts'
 import { openRoundForMessage } from './round-orchestrator.ts'
+import { answerChoiceCard, decorateParts, parseCard, postCard, projectApprovalDecision } from './cards.ts'
 import { activeRound, setStopping } from '../../../packages/store/src/rounds.ts'
 import { findExhaustedWorkspaceQuota } from '../../../packages/store/src/budget.ts'
+import { handleNativeAdvance, handleNativeAssignments } from './native-relay-routes.ts'
+import { handleCreateCliToken } from './cli-token-routes.ts'
+import {
+  handleComputerClaimJob,
+  handleComputerHeartbeat,
+  handleComputerJobDelta,
+  handleComputerJobHistory,
+  handleComputerJobLease,
+  handleGetComputerJob,
+  handleComputerJobResult,
+  handleComputerJobs,
+  handleCreateComputer,
+  handleCreateWorkspaceComputerBinding,
+  handleDeleteComputer,
+  handleDeleteComputerBinding,
+  handleListComputers,
+  handleListWorkspaceComputerBindings,
+} from './computers-routes.ts'
 import { handleInternalAdvance, handleInternalAssignments, handleInternalRound } from './rounds-http.ts'
-import { readWorkspaceRuntime, startWorkspaceRuntime } from './workspace-runtime.ts'
+import { readWorkspaceRuntime, startWorkspaceRuntime, stopWorkspaceRuntime } from './workspace-runtime.ts'
 import type { RuntimeManager } from './workspace-runtime.ts'
 import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
@@ -191,6 +236,7 @@ import {
   writeHttpLog,
 } from './logger.ts'
 import type { HttpLogEntry } from './logger.ts'
+import { recordTrace, recentTraceSpans } from './trace.ts'
 import { createMetrics } from './metrics.ts'
 import type { MetricsRegistry } from './metrics.ts'
 import { handleAudit } from './audit-routes.ts'
@@ -198,7 +244,7 @@ import { TokenBucketLimiter } from './rate-limit.ts'
 import type { RateLimiter, RateLimitKind } from './rate-limit.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { hasActiveSessionsForAccount, touchSession } from '../../../packages/store/src/sessions.ts'
-import { listMessageAttachments } from '../../../packages/store/src/attachments.ts'
+import { getArtifact, linkArtifact, listMessageAttachments } from '../../../packages/store/src/attachments.ts'
 import type { MessageAttachment } from '../../../packages/store/src/attachments.ts'
 
 export const DEFAULT_HOST = '127.0.0.1'
@@ -250,8 +296,13 @@ export function defaultPanelForwardHooks(): PanelForwardHooks {
 }
 
 export interface ServerOptions {
-  /** SSE 轮询间隔（毫秒）；默认 700，测试里调小。 */
+  /**
+   * 没有总线唤醒时，SSE / 长轮询最多再等多久（毫秒）。
+   * 写路径会立刻唤醒，这只是漏报兜底。默认 15s；测试里调小。
+   */
   streamPollMs?: number
+  /** 房间 routine 的隔离执行器。不传时到点只入队，等沙箱交卷。 */
+  routineRunner?: import('./routine-worker.ts').RoutineRunner
   /**
    * 内部接口的 runtime token（`ROOST_RUNTIME_TOKEN`）。不给 = 内部接口关闭（404）。
    * 只有同机的 runtime worker 持有它，不走用户会话。
@@ -264,6 +315,8 @@ export interface ServerOptions {
   rawStore?: Store
   /** 工作区沙箱管理器；不配置时 /start 返回 runtime.not_configured。 */
   runtimeManager?: RuntimeManager
+  /** Daytona provider console（自托管 fork /provider/*）只读客户端；不配置时 /api/provider/* 返回 501。 */
+  providerConsole?: ProviderConsoleClient
   /** 面板端口转发的可注入钩子（测试用）；默认走 panel-forward.ts 的 openshell submit。 */
   panelForward?: PanelForwardHooks
   /** 发信口（测试注入）；不传时验证/重置 token 写 stdout。 */
@@ -365,6 +418,7 @@ interface HandlerContext extends AuthContext {
   metrics: MetricsRegistry
   /** 每个 server 实例独立的内存令牌桶。 */
   rateLimiter: RateLimiter
+  routineRunner?: import('./routine-worker.ts').RoutineRunner
   /** 调度循环是否实际启用（memory port 下不启动）。 */
   schedulerEnabled: boolean
   /** 结构化请求日志出口。 */
@@ -373,6 +427,8 @@ interface HandlerContext extends AuthContext {
   connectorBackend: GatewayBackend
   /** 公网写操作 Origin 白名单（ROOST_ALLOWED_ORIGINS），启动时标准化。 */
   allowedOrigins: readonly string[]
+  /** Daytona provider console 只读客户端（/api/provider/*）；未配置时相关路由返回 501。 */
+  providerConsole?: ProviderConsoleClient
 }
 
 type Clock = () => number
@@ -1283,6 +1339,8 @@ function messageJson(
     at: message.at,
     actor: { kind: message.actorKind, id: message.actorId },
     text: message.text,
+    ...(message.parts === undefined ? {} : { parts: message.parts }),
+    ...(message.routine === undefined ? {} : { routine: message.routine }),
     // 无附件时也返回 []，前端形状稳定。
     attachments: attachments.map((item) => ({
       artifactId: item.artifactId,
@@ -1295,11 +1353,15 @@ function messageJson(
   }
 }
 
+/** `<img>` 不能带 Bearer。消息里的图片换成这么久的签名地址。 */
+const MESSAGE_IMAGE_TTL_SECONDS = 120
+
 /** 批量给消息挂上附件；只有 SQLite store 可用时才查（memory harness 不查）。 */
-function messagesJson(
+async function messagesJson(
   ctx: HandlerContext,
-  messages: RoomMessageRecord[]
-): Record<string, unknown>[] {
+  messages: RoomMessageRecord[],
+  roomId?: string | Array<string | null>,
+): Promise<Record<string, unknown>[]> {
   if (ctx.rawStore === undefined || messages.length === 0) {
     return messages.map((message) => messageJson(message))
   }
@@ -1316,7 +1378,88 @@ function messagesJson(
     console.error('roost api: failed to load message attachments', error)
     grouped = new Map()
   }
-  return messages.map((message) => messageJson(message, grouped.get(message.seq) ?? []))
+  const roomIds = Array.isArray(roomId) ? roomId : messages.map(() => roomId ?? null)
+  const jsons = messages.map((message, index) => {
+    const json = messageJson(message, grouped.get(message.seq) ?? [])
+    const messageRoom = roomIds[index] ?? null
+    if (messageRoom === null || ctx.rawStore === undefined || !Array.isArray(json.parts)) return json
+    return { ...json, parts: decorateParts(ctx.rawStore, messageRoom, json.parts as never) }
+  })
+  await signMessageImages(ctx, jsons, roomIds)
+  return jsons
+}
+
+/**
+ * 成员校验通过之后才签名。陌生人拿不到这条响应，也就拿不到 token。
+ * 签名失败时保留原来的成员路径，不把整条消息打成 500。
+ */
+async function signMessageImages(
+  ctx: HandlerContext,
+  jsons: Record<string, unknown>[],
+  roomIds: Array<string | null>,
+): Promise<void> {
+  const content = ctx.attachments?.content
+  if (content === undefined || ctx.rawStore === undefined) return
+  const workspaceByRoom = new Map<string, string | null>()
+  const workspaceFor = async (roomId: string | null): Promise<string | null> => {
+    if (roomId === null || roomId === '') return null
+    const cached = workspaceByRoom.get(roomId)
+    if (cached !== undefined) return cached
+    const workspaceId = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    workspaceByRoom.set(roomId, workspaceId)
+    return workspaceId
+  }
+  // 缓存按「房间 workspace + 产物」分开。别的 workspace 的产物即使 id 已知也不签名。
+  const signed = new Map<string, string | null>()
+  const urlFor = async (artifactId: string, roomId: string | null): Promise<string | null> => {
+    const workspaceId = await workspaceFor(roomId)
+    const key = `${workspaceId ?? ''}\0${artifactId}`
+    const cached = signed.get(key)
+    if (cached !== undefined) return cached
+    const artifact = getArtifact(ctx.rawStore!, artifactId)
+    if (artifact === null || workspaceId === null || artifact.workspaceId !== workspaceId) {
+      signed.set(key, null)
+      return null
+    }
+    try {
+      const url = await content.signRead(artifactId, MESSAGE_IMAGE_TTL_SECONDS)
+      signed.set(key, url)
+      return url
+    } catch (error) {
+      console.error('roost api: failed to sign message image', error)
+      signed.set(key, null)
+      return null
+    }
+  }
+  for (let index = 0; index < jsons.length; index += 1) {
+    const json = jsons[index]!
+    const roomId = roomIds[index] ?? null
+    if (Array.isArray(json.attachments)) {
+      for (const item of json.attachments) {
+        if (item === null || typeof item !== 'object') continue
+        const artifactId = (item as { artifactId?: unknown }).artifactId
+        if (typeof artifactId !== 'string' || artifactId === '') continue
+        const url = await urlFor(artifactId, roomId)
+        if (url !== null) (item as { url: string }).url = url
+      }
+    }
+    if (!Array.isArray(json.parts)) continue
+    const next = []
+    for (const part of json.parts) {
+      if (part === null || typeof part !== 'object') {
+        next.push(part)
+        continue
+      }
+      const image = part as { type?: unknown; artifactId?: unknown }
+      if (image.type === 'image' && typeof image.artifactId === 'string' && image.artifactId !== '') {
+        const url = await urlFor(image.artifactId, roomId)
+        next.push(url === null ? part : { ...image, url })
+      } else {
+        next.push(part)
+      }
+    }
+    json.parts = next
+  }
 }
 
 
@@ -1367,15 +1510,21 @@ async function handleInternalMessages(ctx: RoomRouteContext, req: IncomingMessag
   try {
     if (afterSeq !== undefined) {
       // 增量路径（room-agent 轮询）不受裁剪影响：after 之后照单全收。
-      const messages = await ctx.store.readMessagesInternal({ roomId, afterSeq })
-      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
+      // waitMs>0 且当前没有新消息时挂起，直到房间总线唤醒或超时（替代紧轮询）。
+      const waitMs = readWaitMs(res, url)
+      if (waitMs === null) return
+      const messages = await waitForRoomLoad(req, roomId, waitMs, async () =>
+        ctx.store.readMessagesInternal({ roomId, afterSeq }),
+      )
+      if (res.writableEnded || req.destroyed) return
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages, roomId) })
       return
     }
     // 首看/向前翻页走裁剪投影（rooms.md §3：保留 60、首看 12）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLogInternal({ roomId, ...query })
-    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages, roomId), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1395,18 +1544,91 @@ async function handleSay(ctx: RoomRouteContext, req: IncomingMessage, res: Serve
   const body = parsed.value as Record<string, unknown>
   const botId = typeof body.botId === 'string' ? body.botId.trim() : ''
   const text = typeof body.text === 'string' ? body.text.trim() : ''
+  const artifactIds = parseArtifactIds(body.artifactIds)
   if (botId === '' || botId.length > 64) {
     return sendError(res, 400, 'invalid_body', 'body.botId must be 1..64 characters')
   }
-  if (text === '' || text.length > 8000) {
-    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
+  if (artifactIds === null) {
+    return sendError(res, 400, 'invalid_body', 'body.artifactIds must be an array of artifact ids')
   }
+  if (text.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be at most 8000 characters')
+  }
+  if (body.card !== undefined) {
+    if (ctx.rawStore === undefined) {
+      return sendError(res, 503, 'runtime.not_configured', 'cards need the SQLite store')
+    }
+    let card
+    try {
+      card = parseCard(body.card)
+    } catch (error) {
+      return sendError(res, 400, 'invalid_body', error instanceof Error ? error.message : 'invalid card')
+    }
+    try {
+      const posted = postCard({ store: ctx.rawStore, roomId, botId, text, card })
+      const [postedJson] = await messagesJson(ctx, [messageRecordFromRoom(posted.message)], roomId)
+      sendJson(res, 201, {
+        message: postedJson,
+        cardId: posted.cardId,
+        ...(posted.approvalId === undefined ? {} : { approvalId: posted.approvalId }),
+        round: posted.round,
+      })
+    } catch (err) {
+      sendStoreFailure(res, err)
+    }
+    return
+  }
+  if (text === '' && artifactIds.length === 0) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters, or attach an image')
+  }
+  if (artifactIds.length > 0 && ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'image messages need the SQLite store')
+  }
+  if (artifactIds.length > 0 && ctx.rawStore !== undefined) {
+    const workspaceId = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    for (const artifactId of artifactIds) {
+      const artifact = getArtifact(ctx.rawStore, artifactId)
+      if (artifact === null || (workspaceId !== null && artifact.workspaceId !== workspaceId)) {
+        return sendError(res, 400, 'invalid_body', `unknown artifact ${artifactId}`)
+      }
+    }
+  }
+  const parts =
+    artifactIds.length === 0
+      ? undefined
+      : [
+          ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+          ...artifactIds.map((artifactId) => ({ type: 'image' as const, artifactId })),
+        ]
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   try {
-    const message = await ctx.store.postBotMessage({ roomId, botId, text, ...(idem === undefined ? {} : { idem }) })
-    sendJson(res, 201, { message: messagesJson(ctx, [message])[0] })
+    const message = await ctx.store.postBotMessage({
+      roomId,
+      botId,
+      text,
+      ...(parts === undefined ? {} : { parts }),
+      ...(idem === undefined ? {} : { idem })
+    })
+    if (ctx.rawStore !== undefined && artifactIds.length > 0) {
+      artifactIds.forEach((artifactId, position) => linkArtifact(ctx.rawStore!, message.seq, artifactId, position))
+    }
+    const [postedJson] = await messagesJson(ctx, [message], roomId)
+    sendJson(res, 201, { message: postedJson })
   } catch (err) {
     sendStoreFailure(res, err)
+  }
+}
+
+function messageRecordFromRoom(message: { seq: number; at: string; actor: { kind: string; id: string } | null; text: string; parts?: RoomMessageRecord['parts'] }): RoomMessageRecord {
+  const kind = message.actor?.kind
+  const actorKind = kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
+  return {
+    seq: message.seq,
+    at: message.at,
+    actorKind,
+    actorId: message.actor?.id ?? 'unknown',
+    text: message.text,
+    ...(message.parts === undefined ? {} : { parts: message.parts }),
   }
 }
 
@@ -1422,6 +1644,14 @@ function sendStoreFailure(res: ServerResponse, err: unknown): void {
   }
   if (/unknown room/i.test(message)) {
     sendError(res, 404, 'room_not_found', message)
+    return
+  }
+  if (/unknown card/i.test(message)) {
+    sendError(res, 404, 'card.not_found', message)
+    return
+  }
+  if (/unknown option|card\.|choice card|approval card/i.test(message)) {
+    sendError(res, 400, 'invalid_body', message)
     return
   }
   if (/unknown workspace/i.test(message)) {
@@ -1465,14 +1695,14 @@ async function handleReadMessages(ctx: RoomRouteContext, req: IncomingMessage, r
     if (afterSeq !== undefined) {
       // 增量路径（SSE 断线补拉）不受裁剪影响：after 之后照单全收。
       const messages = await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, afterSeq })
-      sendJson(res, 200, { messages: messagesJson(ctx, messages) })
+      sendJson(res, 200, { messages: await messagesJson(ctx, messages, roomId) })
       return
     }
     // 首看给最近 12 条；before 游标向前翻，最多翻到最近 60 条（rooms.md §3）。
     const query = readLogQuery(res, url)
     if (query === null) return
     const page = await ctx.store.readRoomLog({ accountId: auth.session.accountId, roomId, ...query })
-    sendJson(res, 200, { messages: messagesJson(ctx, page.messages), page: logPageJson(page) })
+    sendJson(res, 200, { messages: await messagesJson(ctx, page.messages, roomId), page: logPageJson(page) })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1503,6 +1733,51 @@ function logPageJson(page: { hasMore: boolean; oldestSeq: number | null; floorSe
   return { hasMore: page.hasMore, before: page.oldestSeq, floor: page.floorSeq }
 }
 
+async function handleAnswerCard(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'cards need the SQLite store')
+  }
+  const match = /^\/api\/rooms\/([^/]+)\/cards\/([^/]+)\/answer$/.exec(url.pathname)
+  const roomId = match === null ? null : safeDecode(match[1]!)
+  const cardId = match === null ? null : safeDecode(match[2]!)
+  if (roomId === null || roomId === '' || cardId === null || cardId === '') {
+    return sendError(res, 404, 'not_found', 'malformed card path')
+  }
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const optionId = typeof body.optionId === 'string' ? body.optionId.trim() : ''
+  if (optionId === '') return sendError(res, 400, 'invalid_body', 'body.optionId is required')
+  const workspaceId = workspaceIdForRoom(ctx, roomId)
+  if (workspaceId !== null) {
+    const gate = requireWorkspaceRole(ctx, workspaceId, auth.session.accountId, ['owner', 'admin', 'member'])
+    if (!gate.ok) return sendError(res, gate.status, gate.code, gate.message)
+  }
+  try {
+    await ctx.store.readMessages({ accountId: auth.session.accountId, roomId, limit: 1 })
+    const result = answerChoiceCard({
+      store: ctx.rawStore,
+      roomId,
+      cardId,
+      optionId,
+      accountId: auth.session.accountId,
+      at: ctx.now(),
+    })
+    const [answeredJson] = await messagesJson(ctx, [messageRecordFromRoom(result.message)], roomId)
+    sendJson(res, 200, {
+      optionId: result.optionId,
+      label: result.label,
+      alreadyAnswered: result.alreadyAnswered,
+      message: answeredJson,
+      round: result.round,
+    })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
 async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const auth = await authenticate(ctx, req)
   if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message)
@@ -1511,8 +1786,15 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
   if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
   const body = parsed.value as Record<string, unknown>
   const text = typeof body.text === 'string' ? body.text.trim() : ''
-  if (text === '' || text.length > 8000) {
-    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters')
+  const artifactIds = parseArtifactIds(body.artifactIds)
+  if (artifactIds === null) {
+    return sendError(res, 400, 'invalid_body', 'body.artifactIds must be an array of artifact ids')
+  }
+  if ((text === '' && artifactIds.length === 0) || text.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.text must be 1..8000 characters, or attach an image')
+  }
+  if (artifactIds.length > 0 && ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'image messages need the SQLite store')
   }
   const idem = typeof body.idem === 'string' && body.idem !== '' ? body.idem : undefined
   const roomId = roomIdFromPath(url.pathname)
@@ -1537,13 +1819,34 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
     }
   }
 
+  if (artifactIds.length > 0 && ctx.rawStore !== undefined) {
+    for (const artifactId of artifactIds) {
+      const artifact = getArtifact(ctx.rawStore, artifactId)
+      if (artifact === null || (workspaceId !== null && artifact.workspaceId !== workspaceId)) {
+        return sendError(res, 400, 'invalid_body', `unknown artifact ${artifactId}`)
+      }
+    }
+  }
+
+  const parts =
+    artifactIds.length === 0
+      ? undefined
+      : [
+          ...(text === '' ? [] : [{ type: 'text', text }]),
+          ...artifactIds.map((artifactId) => ({ type: 'image', artifactId })),
+        ]
+
   try {
     const message = await ctx.store.postMessage({
       accountId: auth.session.accountId,
       roomId,
       text,
+      ...(parts === undefined ? {} : { parts }),
       ...(idem === undefined ? {} : { idem })
     })
+    if (ctx.rawStore !== undefined && artifactIds.length > 0) {
+      artifactIds.forEach((artifactId, position) => linkArtifact(ctx.rawStore!, message.seq, artifactId, position))
+    }
     // 一条用户消息开启一轮；失败不影响消息本身（消息已经落库）。
     if (ctx.rawStore !== undefined) {
       try {
@@ -1555,7 +1858,8 @@ async function handlePostMessage(ctx: RoomRouteContext, req: IncomingMessage, re
         console.error('roost api: failed to open round', error)
       }
     }
-    sendJson(res, 201, { message: messagesJson(ctx, [message])[0] })
+    const [postedJson] = await messagesJson(ctx, [message], roomId)
+    sendJson(res, 201, { message: postedJson })
   } catch (err) {
     sendStoreFailure(res, err)
   }
@@ -1586,6 +1890,7 @@ async function handleStreamTicket(ctx: RoomRouteContext, req: IncomingMessage, r
   }
   const ticket = randomBytes(32).toString('hex')
   const expiresAt = ctx.now() + STREAM_TICKET_TTL_MS
+  pruneStreamTickets(ctx, auth.session.accountId)
   ctx.streamTickets.set(ticket, {
     tokenHash: auth.session.tokenHash,
     accountId: auth.session.accountId,
@@ -1595,10 +1900,147 @@ async function handleStreamTicket(ctx: RoomRouteContext, req: IncomingMessage, r
   sendJson(res, 200, { ticket, expiresAt })
 }
 
+const STREAM_TICKETS_PER_ACCOUNT = 32
+
+/** 丢掉过期票，并限制每个账号同时持有的未使用票，避免无限签发把进程堆满。 */
+function pruneStreamTickets(ctx: RoomRouteContext, accountId: string): void {
+  const now = ctx.now()
+  for (const [key, value] of ctx.streamTickets) {
+    if (value.expiresAt <= now) ctx.streamTickets.delete(key)
+  }
+  const owned = [...ctx.streamTickets.entries()].filter(([, value]) => value.accountId === accountId)
+  while (owned.length >= STREAM_TICKETS_PER_ACCOUNT) {
+    const oldest = owned.shift()
+    if (oldest === undefined) break
+    ctx.streamTickets.delete(oldest[0])
+  }
+}
+
+function parseArtifactIds(value: unknown): string[] | null {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > 8) return null
+  const ids: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !/^[0-9a-f]{32}$/.test(item)) return null
+    ids.push(item)
+  }
+  return ids
+}
+
+/** `waitMs` 查询参数。省略 = 0（不等）。非法时已经写了 400，返回 null。 */
+function readWaitMs(res: ServerResponse, url: URL): number | null {
+  const raw = url.searchParams.get('waitMs')
+  if (raw === null || raw === '') return 0
+  const waitMs = Number.parseInt(raw, 10)
+  if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > 25_000) {
+    sendError(res, 400, 'invalid_body', 'waitMs must be an integer from 0 to 25000')
+    return null
+  }
+  return waitMs
+}
+
 /**
- * SSE：新消息推送。用轮询读 store（SQLite 是唯一真相，轮询不会漏；写侧不需要广播）。
+ * 先挂上监听再读，避免「读完到开始等」之间漏掉一次写入。
+ * 空结果且 waitMs>0 时挂起，醒来再读一次。
+ */
+async function waitForRoomLoad<T>(
+  req: IncomingMessage,
+  roomId: string | null,
+  waitMs: number,
+  load: () => Promise<T>,
+  isEmpty: (value: T) => boolean = (value) => Array.isArray(value) && value.length === 0,
+): Promise<T> {
+  const waiter = armRoomWait(roomId)
+  const abort = new AbortController()
+  const onClose = (): void => abort.abort()
+  req.on('close', onClose)
+  try {
+    let value = await load()
+    if (isEmpty(value) && waitMs > 0 && abort.signal.aborted !== true) {
+      await waiter.wait(waitMs, abort.signal)
+      if (abort.signal.aborted !== true && !req.destroyed) value = await load()
+    }
+    return value
+  } finally {
+    waiter.cancel()
+    req.off('close', onClose)
+  }
+}
+
+function messageRecordFromEvent(event: Event): RoomMessageRecord {
+  const kind = event.actor?.kind
+  const actorKind =
+    kind === 'user' || kind === 'bot' || kind === 'system' || kind === 'control-plane' ? kind : 'system'
+  const text = typeof event.payload.text === 'string' ? event.payload.text : ''
+  const routine = event.payload.routine
+  const parts = Array.isArray(event.payload.parts) ? (event.payload.parts as RoomMessageRecord['parts']) : undefined
+  return {
+    seq: event.seq,
+    at: event.at,
+    actorKind,
+    actorId: event.actor?.id ?? 'unknown',
+    text,
+    ...(parts === undefined || parts.length === 0 ? {} : { parts }),
+    ...(routine !== undefined && routine !== null && typeof routine === 'object'
+      ? { routine: routine as RoomMessageRecord['routine'] }
+      : {}),
+  }
+}
+
+/**
+ * 把 afterSeq 之后的房间事件写成 SSE 帧。返回写出的事件条数（不是帧数）。
+ * 成员校验走 readMessages：没权限或房间没了会抛，调用方结束流。
+ */
+async function writeRoomStream(
+  ctx: RoomRouteContext,
+  res: ServerResponse,
+  input: { accountId: string; roomId: string; afterSeq: number },
+): Promise<{ count: number; lastSeq: number }> {
+  if (ctx.rawStore === undefined) {
+    const batch = await ctx.store.readMessages({
+      accountId: input.accountId,
+      roomId: input.roomId,
+      afterSeq: input.afterSeq,
+      limit: 200,
+    })
+    const batchJson = await messagesJson(ctx, batch, input.roomId)
+    let lastSeq = input.afterSeq
+    for (let index = 0; index < batch.length; index += 1) {
+      const message = batch[index]!
+      lastSeq = message.seq
+      res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(batchJson[index])}\n\n`)
+    }
+    if (batch.length > 0) res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
+    return { count: batch.length, lastSeq }
+  }
+
+  // 先做一次成员校验（读 1 条即可）。真正的帧从房间日志拼，这样 round/speaking 和消息按 seq 交错。
+  await ctx.store.readMessages({
+    accountId: input.accountId,
+    roomId: input.roomId,
+    afterSeq: input.afterSeq,
+    limit: 1,
+  })
+  const events = readRoomEvents(ctx.rawStore, { roomId: input.roomId, afterSeq: input.afterSeq, limit: 200 })
+  if (events.length === 0) return { count: 0, lastSeq: input.afterSeq }
+  const chatRecords = events.filter((event) => event.kind === 'chat.message').map(messageRecordFromEvent)
+  const chatJson = await messagesJson(ctx, chatRecords, input.roomId)
+  let chatIndex = 0
+  let lastSeq = input.afterSeq
+  for (const event of events) {
+    const message = event.kind === 'chat.message' ? (chatJson[chatIndex++] ?? null) : null
+    for (const frame of framesForRoomEvent(event, message)) res.write(encodeSseFrame(frame))
+    lastSeq = event.seq
+  }
+  res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
+  return { count: events.length, lastSeq }
+}
+
+/**
+ * SSE：写进房间日志就推。总线负责立刻唤醒；streamPollMs 只是漏报兜底。
  * 鉴权是 Bearer、同源 cookie，或一次性短票 `?ticket=`。长期会话 token 不再放进 URL。
  * 每一轮 pump 都重新检查会话是否被吊销或过期。
+ * `after` 与 Last-Event-ID 取较大者，断线从上次 seq 续。
  */
 async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if ((url.searchParams.get('access_token') ?? '') !== '') {
@@ -1644,6 +2086,11 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
   const afterRaw = url.searchParams.get('after')
   let lastSeq = afterRaw === null ? 0 : Number.parseInt(afterRaw, 10)
   if (!Number.isSafeInteger(lastSeq) || lastSeq < 0) lastSeq = 0
+  const lastEventHeader = req.headers['last-event-id']
+  if (typeof lastEventHeader === 'string' && /^[0-9]+$/.test(lastEventHeader)) {
+    const parsed = Number(lastEventHeader)
+    if (Number.isSafeInteger(parsed) && parsed > lastSeq) lastSeq = parsed
+  }
 
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -1658,6 +2105,8 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
     if (!closed) res.write(': ping\n\n')
   }, 15_000)
   heartbeat.unref?.()
+  const waiter = armRoomWait(roomId)
+  const abort = new AbortController()
 
   const pump = async (): Promise<void> => {
     while (!closed) {
@@ -1666,38 +2115,165 @@ async function handleStream(ctx: RoomRouteContext, req: IncomingMessage, res: Se
         res.write(`event: error\ndata: ${JSON.stringify({ code: fresh.code })}\n\n`)
         break
       }
-      let batch: RoomMessageRecord[]
+      let wrote = 0
       try {
-        batch = await ctx.store.readMessages({
+        const result = await writeRoomStream(ctx, res, {
           accountId: fresh.accountId,
           roomId,
           afterSeq: lastSeq,
-          limit: 200
         })
+        wrote = result.count
+        lastSeq = result.lastSeq
       } catch {
         // 房间被删或权限变化：结束流，让客户端重连并处理。
         res.write('event: error\ndata: {"code":"stream_unavailable"}\n\n')
         break
       }
-      const batchJson = messagesJson(ctx, batch)
-      for (let index = 0; index < batch.length; index += 1) {
-        const message = batch[index]!
-        lastSeq = message.seq
-        res.write(`id: ${message.seq}\nevent: message\ndata: ${JSON.stringify(batchJson[index])}\n\n`)
-      }
-      if (batch.length > 0) res.write(`event: cursor\ndata: ${JSON.stringify({ seq: lastSeq })}\n\n`)
-      await sleep(ctx.streamPollMs)
+      if (wrote > 0) continue
+      if (closed) break
+      await waiter.wait(ctx.streamPollMs, abort.signal)
     }
   }
 
   req.on('close', () => {
     closed = true
+    abort.abort()
+    waiter.cancel()
     clearInterval(heartbeat)
   })
 
-  await pump()
-  clearInterval(heartbeat)
-  if (!res.writableEnded) res.end()
+  try {
+    await pump()
+  } finally {
+    waiter.cancel()
+    clearInterval(heartbeat)
+    if (!res.writableEnded) res.end()
+  }
+}
+
+/** GET /api/internal/events?after=&waitMs=&workspaceId= —— 沙箱按 seq 长轮询房间日志。 */
+async function handleInternalEvents(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'room events need the SQLite store')
+  }
+  const afterRaw = url.searchParams.get('after')
+  const afterSeq = afterRaw === null || afterRaw === '' ? 0 : Number.parseInt(afterRaw, 10)
+  if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
+    return sendError(res, 400, 'invalid_body', 'after must be a non-negative integer seq')
+  }
+  const waitMs = readWaitMs(res, url)
+  if (waitMs === null) return
+  const requested = url.searchParams.get('workspaceId')
+  const workspaceId = auth.workspaceId ?? (requested === null || requested === '' ? null : requested)
+  if (auth.workspaceId !== null) {
+    if (!ensureRuntimeWorkspace(auth, requested ?? auth.workspaceId, res)) return
+  } else if (requested !== null && requested !== '') {
+    // 全局 token 显式点名 workspace 时，确认它存在；不存在就空列表，不 500。
+  }
+
+  try {
+    const events = await waitForRoomLoad(
+      req,
+      null,
+      waitMs,
+      async () =>
+        readWorkspaceRoomEvents(ctx.rawStore!, {
+          workspaceId,
+          afterSeq,
+          limit: 200,
+        }),
+    )
+    if (res.writableEnded || req.destroyed) return
+    const chatEvents = events.filter((event) => event.kind === 'chat.message')
+    const chat = chatEvents.map(messageRecordFromEvent)
+    const chatRooms = chatEvents.map((event) =>
+      (event.audience ?? '').startsWith('room:') ? (event.audience ?? '').slice('room:'.length) : null,
+    )
+    const chatJson = await messagesJson(ctx, chat, chatRooms)
+    let chatIndex = 0
+    sendJson(res, 200, {
+      events: events.map((event) =>
+        internalEventJson(event, event.kind === 'chat.message' ? (chatJson[chatIndex++] ?? null) : null),
+      ),
+    })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+/** POST /api/internal/rooms/:id/deltas —— 把一段流式增量追加成 chat.message.delta。 */
+async function handleInternalDelta(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'room events need the SQLite store')
+  }
+  const match = /^\/api\/internal\/rooms\/([^/]+)\/deltas$/.exec(url.pathname)
+  const roomId = match === null ? null : safeDecode(match[1]!)
+  if (roomId === null || roomId === '') return sendError(res, 404, 'not_found', 'malformed room path')
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const botId = typeof body.botId === 'string' ? body.botId.trim() : ''
+  const delta = typeof body.delta === 'string' ? body.delta : ''
+  if (botId === '' || botId.length > 64) {
+    return sendError(res, 400, 'invalid_body', 'body.botId must be 1..64 characters')
+  }
+  if (delta === '' || delta.length > 8000) {
+    return sendError(res, 400, 'invalid_body', 'body.delta must be 1..8000 characters')
+  }
+  const messageSeq =
+    body.messageSeq === undefined || body.messageSeq === null ? undefined : Number(body.messageSeq)
+  if (messageSeq !== undefined && (!Number.isSafeInteger(messageSeq) || messageSeq < 1)) {
+    return sendError(res, 400, 'invalid_body', 'body.messageSeq must be a positive integer')
+  }
+  try {
+    const event = appendRoomSignal(ctx.rawStore, {
+      roomId,
+      domain: 'chat',
+      kind: 'chat.message.delta',
+      actor: { kind: 'bot', id: botId },
+      payload: {
+        delta,
+        ...(messageSeq === undefined ? {} : { messageSeq }),
+      },
+    })
+    sendJson(res, 201, {
+      event: { seq: event.seq, at: event.at, kind: event.kind, delta },
+    })
+  } catch (err) {
+    sendStoreFailure(res, err)
+  }
+}
+
+/**
+ * POST /api/internal/notify { roomId, seq? }
+ * 另一个进程写完 SQLite 后敲一下，本进程的 SSE / 长轮询立刻醒。
+ * 不写事件；醒来的连接自己再读库。
+ */
+async function handleInternalNotify(ctx: RoomRouteContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const auth = authorizeRuntimeHttp(ctx, req, res)
+  if (auth === null) return
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) return sendError(res, parsed.status, parsed.code, parsed.message)
+  const body = parsed.value as Record<string, unknown>
+  const roomId = typeof body.roomId === 'string' ? body.roomId.trim() : ''
+  if (roomId === '' || roomId.length > 80) {
+    return sendError(res, 400, 'invalid_body', 'body.roomId is required')
+  }
+  if (auth.workspaceId !== null) {
+    const roomWorkspace = await ctx.store.getRoomWorkspace(roomId).catch(() => null)
+    if (!ensureRuntimeWorkspace(auth, roomWorkspace, res)) return
+  }
+  const seq = typeof body.seq === 'number' && Number.isSafeInteger(body.seq) && body.seq >= 0 ? body.seq : 0
+  publishRoomWake({ roomId, seq, kind: 'notify' })
+  sendJson(res, 202, { ok: true, roomId, seq })
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1867,6 +2443,18 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
   }
 
   // Prometheus 抓取端点：无鉴权，手写 text/plain（M6-6.6）。
+  if (path === '/api/debug/traces' && method === 'GET') {
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message)
+      return
+    }
+    const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10)
+    const limit = Number.isSafeInteger(rawLimit) ? rawLimit : 100
+    sendJson(res, 200, { spans: recentTraceSpans(limit) })
+    return
+  }
+
   if (path === '/metrics') {
     if (method !== 'GET') {
       notFound(req, res, method, path)
@@ -2076,6 +2664,54 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (/^\/api\/rooms\/[^/]+\/slots$/.test(path)) {
+    if (method === 'GET') {
+      await handleListRoomSlots(ctx, req, res, url)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateRoomSlot(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/slots\/[^/]+$/.test(path)) {
+    if (method === 'GET') {
+      await handleGetRoomSlot(ctx, req, res, url)
+      return
+    }
+    if (method === 'PATCH') {
+      await handlePatchRoomSlot(ctx, req, res, url)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteRoomSlot(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/slots\/[^/]+\/bindings$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleCreateAgentBinding(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/bindings\/[^/]+\/close$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleCloseAgentBinding(ctx, req, res, url)
+    return
+  }
+
   if (/^\/api\/rooms\/[^/]+$/.test(path)) {
     if (method === 'GET') {
       await handleGetRoom(ctx, req, res, url)
@@ -2108,6 +2744,30 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleRemoveRoomMember(ctx, req, res, url)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/artifacts$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/rooms\/([^/]+)\/artifacts$/.exec(path)
+    const roomId = match === null ? null : safeDecode(match[1]!)
+    if (roomId === null || roomId === '') {
+      sendError(res, 404, 'not_found', 'malformed room path')
+      return
+    }
+    await handlePostRoomArtifact(ctx, req, res, roomId)
+    return
+  }
+
+  if (/^\/api\/rooms\/[^/]+\/cards\/[^/]+\/answer$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleAnswerCard(ctx as RoomRouteContext, req, res, url)
     return
   }
 
@@ -2506,6 +3166,12 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  // 算力提供方经济数据（Daytona 自托管 fork 的 /provider/*）：节点、用量、收益、结算、告警。
+  if (path.startsWith('/api/provider/')) {
+    await handleProviderConsole(ctx, req, res, url)
+    return
+  }
+
   // 记忆：内部写入 / 检索 / 读取记录，用户列表 / 删除 / 导出（memory.md §4–§9）。
   if (path === '/api/internal/memories') {
     if (method !== 'POST') {
@@ -2558,6 +3224,77 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleDeleteMemory(ctx, req, res, url)
+    return
+  }
+
+  const routinesCollection = /^\/api\/workspaces\/([^/]+)\/routines$/.exec(path)
+  if (routinesCollection !== null) {
+    const workspaceId = decodeSegment(routinesCollection[1]!)
+    if (workspaceId === null) {
+      sendError(res, 404, 'not_found', 'malformed workspace path')
+      return
+    }
+    if (method === 'GET') {
+      await handleListRoutines(ctx, req, res, workspaceId)
+      return
+    }
+    if (method === 'POST') {
+      await handleCreateRoutine(ctx, req, res, workspaceId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  const routineRunsPath = /^\/api\/routines\/([^/]+)\/runs$/.exec(path)
+  if (routineRunsPath !== null) {
+    const routineId = decodeSegment(routineRunsPath[1]!)
+    if (routineId === null) return sendError(res, 404, 'not_found', 'malformed routine path')
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleListRoutineRuns(ctx, req, res, routineId)
+    return
+  }
+
+  const routineRunNow = /^\/api\/routines\/([^/]+)\/run$/.exec(path)
+  if (routineRunNow !== null) {
+    const routineId = decodeSegment(routineRunNow[1]!)
+    if (routineId === null) return sendError(res, 404, 'not_found', 'malformed routine path')
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleRunRoutineNow(ctx, req, res, routineId)
+    return
+  }
+
+  const routinePath = /^\/api\/routines\/([^/]+)$/.exec(path)
+  if (routinePath !== null) {
+    const routineId = decodeSegment(routinePath[1]!)
+    if (routineId === null) return sendError(res, 404, 'not_found', 'malformed routine path')
+    if (method === 'PATCH') {
+      await handlePatchRoutine(ctx, req, res, routineId)
+      return
+    }
+    if (method === 'DELETE') {
+      await handleDeleteRoutine(ctx, req, res, routineId)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
+  const routineResult = /^\/api\/internal\/routine-runs\/([^/]+)\/result$/.exec(path)
+  if (routineResult !== null) {
+    const runId = decodeSegment(routineResult[1]!)
+    if (runId === null) return sendError(res, 404, 'not_found', 'malformed routine run path')
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalRoutineResult(ctx, req, res, runId)
     return
   }
 
@@ -2792,15 +3529,50 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
-  if (/^\/api\/workspaces\/[^/]+\/(start|runtime)$/.test(path)) {
-    const match = /^\/api\/workspaces\/([^/]+)\/(start|runtime)$/.exec(path)
+  if (/^\/api\/workspaces\/[^/]+\/logs$/.test(path)) {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    const match = /^\/api\/workspaces\/([^/]+)\/logs$/.exec(path)
+    const workspaceId = match === null ? null : safeDecode(match[1]!)
+    if (workspaceId === null) {
+      sendError(res, 404, 'not_found', 'malformed workspace path')
+      return
+    }
+    const auth = await authenticate(ctx, req)
+    if (!auth.ok) {
+      sendError(res, auth.status, auth.code, auth.message)
+      return
+    }
+    const workspaces = await ctx.store.listWorkspaces({ accountId: auth.session.accountId })
+    if (!workspaces.some((workspace) => workspace.id === workspaceId)) {
+      sendError(res, 404, 'not_found', 'unknown workspace')
+      return
+    }
+    if (ctx.runtimeManager?.logs === undefined) {
+      sendError(res, 503, 'runtime.not_configured', 'runtime logs are not available for this provider')
+      return
+    }
+    try {
+      const tail = Number.parseInt(url.searchParams.get('tail') ?? '120', 10)
+      const logs = await ctx.runtimeManager.logs(workspaceId, { tail: Number.isFinite(tail) ? tail : 120 })
+      sendJson(res, 200, { logs })
+    } catch (error) {
+      sendError(res, 502, 'runtime.logs_failed', error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  if (/^\/api\/workspaces\/[^/]+\/(start|runtime|stop)$/.test(path)) {
+    const match = /^\/api\/workspaces\/([^/]+)\/(start|runtime|stop)$/.exec(path)
     const workspaceId = match === null ? null : safeDecode(match[1]!)
     const action = match?.[2]
     if (workspaceId === null || action === undefined) {
       sendError(res, 404, 'not_found', 'malformed workspace path')
       return
     }
-    if (action === 'start' && method !== 'POST') {
+    if ((action === 'start' || action === 'stop') && method !== 'POST') {
       notFound(req, res, method, path)
       return
     }
@@ -2831,6 +3603,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       sendError(res, 503, 'runtime.not_configured', 'no runtime manager configured')
       return
     }
+    if (action === 'stop') {
+      try {
+        const result = await stopWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
+        sendJson(res, 200, result)
+      } catch (error) {
+        sendError(res, 502, 'runtime.stop_failed', error instanceof Error ? error.message : String(error))
+      }
+      return
+    }
     try {
       const result = await startWorkspaceRuntime(ctx.rawStore, workspaceId, ctx.runtimeManager)
       try {
@@ -2849,12 +3630,127 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  const computerCtx = { store: ctx.store, rawStore: ctx.rawStore, now: ctx.now }
+  if (path === '/api/cli/tokens') {
+    if (method !== 'POST') { notFound(req, res, method, path); return }
+    await handleCreateCliToken({ store: ctx.store, now: ctx.now }, req, res)
+    return
+  }
+
+  if (path === '/api/computers') {
+    if (method === 'GET') { await handleListComputers(computerCtx, req, res); return }
+    if (method === 'POST') { await handleCreateComputer(computerCtx, req, res); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+$/.test(path)) {
+    if (method === 'DELETE') { await handleDeleteComputer(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/heartbeat$/.test(path)) {
+    if (method === 'POST') { await handleComputerHeartbeat(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs$/.test(path)) {
+    if (method === 'GET') { await handleComputerJobs(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/lease$/.test(path)) {
+    if (method === 'POST') { await handleComputerJobLease(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/history$/.test(path)) {
+    if (method === 'GET') { await handleComputerJobHistory(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+$/.test(path)) {
+    if (method === 'GET') { await handleGetComputerJob(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/events$/.test(path)) {
+    if (method === 'POST') { await handleComputerJobDelta(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/claim$/.test(path)) {
+    if (method === 'POST') { await handleComputerClaimJob(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computers\/[^/]+\/jobs\/[^/]+\/result$/.test(path)) {
+    if (method === 'POST') { await handleComputerJobResult(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/workspaces\/[^/]+\/computer-bindings$/.test(path)) {
+    if (method === 'GET') { await handleListWorkspaceComputerBindings(computerCtx, req, res, url); return }
+    if (method === 'POST') { await handleCreateWorkspaceComputerBinding(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+  if (/^\/api\/computer-bindings\/[^/]+$/.test(path)) {
+    if (method === 'DELETE') { await handleDeleteComputerBinding(computerCtx, req, res, url); return }
+    notFound(req, res, method, path)
+    return
+  }
+
+  if (path === '/api/native/assignments') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleNativeAssignments(ctx as never, req, res, url)
+    return
+  }
+
+  if (path === '/api/native/advance') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleNativeAdvance(ctx as never, req, res)
+    return
+  }
+
+  if (path === '/api/internal/notify') {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalNotify(ctx as RoomRouteContext, req, res)
+    return
+  }
+
+  if (path === '/api/internal/events') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalEvents(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
   if (/^\/api\/internal\/rooms\/[^/]+\/messages$/.test(path)) {
     if (method !== 'GET') {
       notFound(req, res, method, path)
       return
     }
     await handleInternalMessages(ctx as RoomRouteContext, req, res, url)
+    return
+  }
+
+  if (/^\/api\/internal\/rooms\/[^/]+\/deltas$/.test(path)) {
+    if (method !== 'POST') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleInternalDelta(ctx as RoomRouteContext, req, res, url)
     return
   }
 
@@ -3028,6 +3924,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
     return
   }
 
+  if (/^\/api\/bots\/[^/]+\/dm$/.test(path)) {
+    if (method === 'POST') {
+      await handleOpenBotDm(ctx, req, res, url)
+      return
+    }
+    notFound(req, res, method, path)
+    return
+  }
+
   if (/^\/api\/bots\/[^/]+\/restore$/.test(path)) {
     if (method === 'POST') {
       await handleRestoreBot(ctx, req, res, url)
@@ -3109,18 +4014,20 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
     claimFailureAlerts: [],
     streamTickets: new Map(),
     sessionAccounts: new Set<string>(),
-    streamPollMs: options.streamPollMs ?? 700,
+    streamPollMs: options.streamPollMs ?? 15_000,
     runtimeToken: options.runtimeToken ?? process.env.ROOST_RUNTIME_TOKEN,
     dsh,
     serverState: state,
     metrics: createMetrics(),
     rateLimiter: new TokenBucketLimiter(),
+    ...(options.routineRunner === undefined ? {} : { routineRunner: options.routineRunner }),
     schedulerEnabled,
     logSink: options.logSink ?? writeHttpLog,
     connectorBackend: options.connectorBackend ?? createGatewayBackend(process.env),
     allowedOrigins: parseAllowedOrigins(process.env.ROOST_ALLOWED_ORIGINS),
     ...(options.rawStore === undefined ? {} : { rawStore: options.rawStore }),
     ...(options.runtimeManager === undefined ? {} : { runtimeManager: options.runtimeManager }),
+    ...(options.providerConsole === undefined ? {} : { providerConsole: options.providerConsole }),
     panelForward,
     ...(options.rawStore === undefined
       ? {}
@@ -3137,8 +4044,13 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
   // 插件安装复用控制面的限流桶（10/小时/账号，rate-limit.test.ts 覆盖）。
   installRoutes.rateLimiter = ctx.rateLimiter
 
-  // 事件 → 指标（6.6.1）：store 的 appendEvent 是唯一写入口，注册一个只读 sink。
+  // 事件 → 指标，并唤醒房间 SSE / 长轮询。appendEvent 是 SQLite 的唯一写入口。
   setEventSink((event) => {
+    try {
+      publishFromStoredEvent(event)
+    } catch {
+      // 总线失败不影响事件写入。
+    }
     try {
       ctx.metrics.ingest(metricsFromEvent(event as never))
     } catch {
@@ -3225,6 +4137,13 @@ export function createServer(options: ServerOptions, sharedState?: ServerState):
         // 忽略日志出口异常。
       }
       ctx.metrics.record(method, path, status, durationMs)
+      recordTrace({
+        traceId: requestId,
+        name: 'http',
+        at: startedAt,
+        durationMs,
+        attrs: { method, path, status }
+      })
     })
 
     handleRequest(ctx, req, res).catch((err: unknown) => {
@@ -3348,6 +4267,7 @@ export async function startServer(
       ? startSchedulerLoop({
           rawStore: options.rawStore,
           ...(options.now === undefined ? {} : { now: options.now }),
+          ...(options.routineRunner === undefined ? {} : { routineRunner: options.routineRunner }),
         })
       : null
 

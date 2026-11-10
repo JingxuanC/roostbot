@@ -4,16 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#F2F8FC" />
-    <meta name="description" content="Roost 网页端：配对、房间、Bot 与建群设置。" />
-    <title>Roost · 配对</title>
+    <meta name="theme-color" content="#F3EFE6" />
+    <meta name="description" content="Roost 网页端：登录、房间、Bot 与建群设置。" />
+    <title>Roost · Research Rooms</title>
     <!-- 图标内联成 data URI：不额外加文件，也不让浏览器为 /favicon.ico 404 一次 -->
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2096%2096'%3E%3Crect%20width='96'%20height='96'%20rx='24'%20fill='%23141619'/%3E%3Cpath%20d='M48%2020C62%2020%2072%2034%2072%2050C72%2066%2061%2076%2048%2076C35%2076%2024%2066%2024%2050C24%2034%2034%2020%2048%2020Z'%20fill='none'%20stroke='%23D8AB52'%20stroke-width='6'/%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css" />
-    <link rel="stylesheet" href="./styles-blue.css" />
+    <link rel="stylesheet" href="./styles.css?v=20261108a" />
+    <link rel="stylesheet" href="./styles-blue.css?v=20261108a" />
+    <link rel="stylesheet" href="./styles-grok.css?v=20261108a" />
+    <link rel="stylesheet" href="./styles-white.css?v=20261108a" />
+    <link rel="stylesheet" href="./styles-desk.css?v=20261108a" />
   </head>
   <body>
     <div id="boot-warning" class="boot-warning" role="alert" hidden>
@@ -22,85 +25,6 @@
         请用静态服务器打开（见 <code>apps/web/README.md</code>）。
       </p>
     </div>
-
-    <!-- ------------------------------------------------------------ 页面一：配对（ui.md §3.1） -->
-    <main id="pair-view" class="pair">
-      <form id="pair-form" class="pair-card" novalidate>
-        <h1 class="wordmark">Roost</h1>
-        <p class="pair-hint">输入另一台设备上显示的配对码</p>
-
-        <fieldset class="code-fieldset">
-          <legend class="field-label">配对码</legend>
-          <div class="code" id="code-boxes">
-            <input
-              class="code-digit"
-              id="code-0"
-              type="text"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength="1"
-              aria-label="第 1 位"
-              autofocus
-            />
-            <input
-              class="code-digit"
-              id="code-1"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 2 位"
-            />
-            <input
-              class="code-digit"
-              id="code-2"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 3 位"
-            />
-            <input
-              class="code-digit"
-              id="code-3"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 4 位"
-            />
-            <input
-              class="code-digit"
-              id="code-4"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 5 位"
-            />
-            <input
-              class="code-digit"
-              id="code-5"
-              type="text"
-              inputmode="numeric"
-              maxlength="1"
-              aria-label="第 6 位"
-            />
-          </div>
-        </fieldset>
-
-        <p id="pair-error" class="pair-error" role="alert" hidden></p>
-        <p id="pair-note" class="pair-note muted" role="status" hidden></p>
-
-        <button id="pair-submit" class="btn btn-primary btn-block pair-submit" type="submit">
-          配对
-        </button>
-
-        <p class="pair-foot muted">没有配对码？<a href="#/login">登录账号</a> · <a href="#/register">注册</a></p>
-        <p class="pair-foot">
-          <button id="preview-btn" class="btn btn-quiet" type="button">
-            预览房间（假数据，不配对）
-          </button>
-        </p>
-        <p id="api-note" class="api-note muted"></p>
-      </form>
-    </main>
 
     <!-- ------------------------------------------------------------ 账号页（auth.md §4；cookie 会话） -->
     <div id="auth-view" class="auth" hidden>
@@ -114,8 +38,16 @@
       <nav id="sidebar" class="sidebar" aria-label="导航" tabindex="-1">
         <div class="brand">
           <span class="brand-name">Roost</span>
-          <span class="brand-tag">M4</span>
+          <span class="brand-tag">Desk</span>
+          <a class="brand-bots" href="#/bots" aria-label="Bot 管理" title="Bot 管理">Bot</a>
+          <a class="head-icon" href="#/rooms/new" aria-label="新建房间" title="新建房间">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </a>
         </div>
+        <label class="side-search">
+          <span class="sr-only">搜索</span>
+          <input id="side-search" type="search" placeholder="搜索机器人 / 房间" autocomplete="off" />
+        </label>
 
         <button
           id="needs-btn"
@@ -134,26 +66,21 @@
           <span class="approvals-link-hint" aria-hidden="true">查看 →</span>
         </a>
 
-        <h2 class="nav-title" id="rooms-title">房间</h2>
+        <h2 class="nav-title" id="rooms-title">对话</h2>
         <ul class="room-list" id="room-list" aria-labelledby="rooms-title"></ul>
         <p class="nav-add"><a href="#/rooms/new">＋ 新建房间</a></p>
 
-        <div class="drawer-manage">
-          <h2 class="nav-title">管理</h2>
-          <a class="drawer-link" href="#/bots">Bot 与身份</a>
-          <a class="drawer-link" href="#/plugins">插件与面板</a>
-          <a class="drawer-link" href="#/usage">用量与预算</a>
-          <a class="drawer-link" href="#/schedules">定时任务</a>
-          <a class="drawer-link" href="#/connectors">连接器</a>
-          <a class="drawer-link" href="#/approvals">审批</a>
-          <a class="drawer-link" href="#/settings">设置</a>
+        <div class="sidebar-bottom">
+          <a class="sidebar-settings-link" href="#/settings">设置 <span aria-hidden="true">↗</span></a>
+          <p class="sidebar-foot muted" id="sidebar-foot">未连接控制面</p>
         </div>
-
-        <p class="sidebar-foot muted" id="sidebar-foot">未连接控制面</p>
       </nav>
 
       <main id="room-main" class="main" tabindex="-1">
         <header class="room-head">
+          <a id="room-back" class="head-icon room-back" href="#/home" aria-label="返回">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M11 4L6 9l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
           <button
             id="sidebar-toggle"
             class="btn btn-ghost sidebar-toggle"
@@ -166,9 +93,11 @@
             <span class="sr-only">打开菜单</span>
           </button>
           <div class="room-head-main">
+            <span id="room-pill-avatar" class="room-pill-avatar"></span>
             <div class="room-head-title">
               <span id="room-flock" class="room-flock" aria-hidden="true"></span>
               <h1 class="room-name" id="room-name">Roost</h1>
+              <span id="room-subtitle" class="room-subtitle"></span>
             </div>
             <span id="room-origin" class="room-origin" hidden></span>
             <a id="room-settings-link" class="room-settings-link" href="#" hidden>设置</a>
@@ -191,30 +120,68 @@
               需要你
             </button>
           </div>
+          <button id="room-more" class="head-icon" type="button" aria-label="更多" aria-expanded="false" aria-controls="room-menu">
+            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="4" cy="9" r="1.5" fill="currentColor"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><circle cx="14" cy="9" r="1.5" fill="currentColor"/></svg>
+          </button>
         </header>
+        <div id="room-menu" class="room-menu" hidden>
+          <a href="#/bots">Bot 与身份</a>
+          <a href="#/bots/new">新建 Bot</a>
+          <a href="#/plugins">插件与面板</a>
+          <a href="#/usage">用量与预算</a>
+          <a href="#/schedules">定时任务</a>
+          <a href="#/routines">房间定时</a>
+          <a href="#/connectors">连接器</a>
+          <a href="#/approvals">审批</a>
+          <a href="#/settings">设置</a>
+        </div>
 
         <p class="demo-strip" role="note" id="demo-strip-text" hidden>
           假数据预览：房间内容为固定样例，发送不会请求服务端。
         </p>
 
+        <div class="home-head">
+          <span class="avatar-user" aria-hidden="true"></span>
+          <a class="head-icon" href="#/rooms/new" aria-label="新建">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M9 3v12M3 9h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </a>
+        </div>
+
         <div id="round-status" class="round-status" role="status" aria-label="本轮状态" hidden></div>
 
         <div id="messages" class="messages" role="log" aria-label="消息"></div>
 
-        <form id="composer-form" class="composer">
+        <div id="typing-indicator" class="typing-indicator" role="status" aria-live="polite" hidden>
+          <span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span id="typing-text">正在思考…</span>
+        </div>
+        <form id="composer-form" class="composer grok-composer">
           <div id="mention-menu" class="mention-menu" role="listbox" aria-label="成员" hidden></div>
+          <div id="composer-files" class="composer-files" hidden></div>
+          <button id="composer-plus" class="composer-plus" type="button" aria-label="添加图片">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+          <input id="composer-file" type="file" accept="image/*" hidden />
+          <div class="composer-pill">
           <label class="sr-only" for="composer">消息</label>
           <textarea
             id="composer"
             name="message"
             rows="1"
-            placeholder="说点什么…"
+            placeholder="向选股师提问"
             autocomplete="off"
             aria-expanded="false"
             aria-controls="mention-menu"
             aria-autocomplete="list"
             aria-haspopup="listbox"
-          ></textarea>
+            ></textarea>
+          <button id="composer-mic" class="mic-btn" type="button" aria-label="语音">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="6" y="2" width="4" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          </div>
+          <button id="send" class="voice-btn" type="submit" title="发送" aria-label="发送" aria-keyshortcuts="Meta+Enter Control+Enter" disabled>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M8 3L4 7M8 3l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
           <p id="composer-error" class="composer-error" role="alert" hidden></p>
           <div class="composer-foot">
             <p class="who-row">
@@ -223,18 +190,18 @@
             </p>
             <div class="composer-row">
               <span class="composer-hint muted">Enter 换行</span>
-              <button
-                id="send"
-                class="btn btn-primary"
-                type="submit"
-                title="⌘↵ / Ctrl+↵ 发送"
-                aria-keyshortcuts="Meta+Enter Control+Enter"
-              >
-                <kbd aria-hidden="true">⌘↵</kbd> 发送
-              </button>
             </div>
           </div>
         </form>
+        <div class="home-dock">
+          <button id="home-grid" class="dock-grid" type="button" aria-label="工作区" aria-controls="room-menu">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="1" y="11" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="11" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+          <label class="search-pill">
+            <span class="sr-only">搜索</span>
+            <input id="home-search" type="search" placeholder="搜索" autocomplete="off" />
+          </label>
+        </div>
       </main>
 
       <aside
@@ -254,6 +221,21 @@
       </aside>
     </div>
 
+    <div id="image-viewer" class="image-viewer" hidden>
+      <header class="image-viewer-bar">
+        <button id="image-viewer-close" type="button" aria-label="关闭">×</button>
+        <h2 id="image-viewer-title">图片</h2>
+        <span></span>
+      </header>
+      <img id="image-viewer-img" alt="" />
+      <footer class="image-viewer-actions">
+        <button id="image-share" type="button"><span aria-hidden="true">↗</span>转发</button>
+        <button id="image-save" type="button"><span aria-hidden="true">↓</span>保存</button>
+        <button id="image-detail" type="button"><span aria-hidden="true">i</span>详情</button>
+      </footer>
+      <p id="image-detail-text" class="image-detail" hidden></p>
+    </div>
+
     <!-- ------------------------------------------------------------ 页面三至六：Bot 与房间设置 -->
     <div id="page-view" class="page" hidden>
       <a class="skip-link" href="#page-main">跳到主内容</a>
@@ -269,10 +251,10 @@
           <a href="#/panels">插件面板</a>
           <a href="#/usage">用量</a>
           <a href="#/schedules">定时任务</a>
+          <a href="#/routines">房间定时</a>
           <a href="#/connectors">连接器</a>
           <a href="#/settings">设置</a>
           <a href="#/login">登录</a>
-          <a href="#/">配对</a>
         </nav>
       </header>
       <p id="page-note" class="page-note" role="status" hidden></p>
@@ -292,6 +274,6 @@
         }
       }, 1200);
     </script>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=20261108a"></script>
   </body>
 </html>

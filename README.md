@@ -1,97 +1,365 @@
 # Roost Bot
 
-一群住在云机器上的 Bot，能连回你自己电脑上的 DSH。
+一群住在云机器上的 Bot，在同一个房间里协作；底层可以跑 DSH、Claude Code、Codex、Grok Build 等不同 Agent Runtime。
 
-- **云机器**：常驻、随时可用，Bot 团队在云上值班
-- **本地 DSH**：配对一次，云上的 Bot 就能使用你本机的工具、文件和模型额度
-- **记忆**：由 [causal-memory](../causal-memory) 提供，不是聊天记录，是可检索、可追溯的判断
-- **模型**：用户自带 token（BYO），平台不转售推理
+- **多 Agent 房间**：一个房间多个 Bot，按轮次发言、互相 @、流式输出
+- **异构 Runtime**：DSH、Claude Code、Codex、Grok Build（ACP）；Hermes 已有 ACP 适配
+- **Docker 运行时**：控制面签发运行 token，Docker worker 为每个 workspace 拉起独立容器
+- **BYO 模型**：DeepSeek、Anthropic、OpenAI、xAI 等用自己的 key；平台不转售推理
+- **Web / 桌面**：同源网页、桌面端、账号登录、SSE 实时消息
 
-状态：**TODO 152/152 完成**；前端已切到浅蓝白极简壳（打开即房间，管理收进设置/抽屉，见 [ui-refresh.md](docs/design/ui-refresh.md) 与 [截图](docs/assets/ui-app-room.png)）。
+截图：[房间](docs/assets/ui-desk-room.png) · [Bot 列表](docs/assets/ui-desk-bots.png) · [设置](docs/assets/ui-desk-settings.png)
 
-原状态：：M4 产品闭环、M5 平台能力、M6 商业化与工程债全部落地，含远端真实模型 + 沙箱重启记忆（4.5.3）、浏览器全流程（4.5.4）与 DSH 工具审批端到端（5.4.3）。验收证据见 [docs/build/wave3.md](docs/build/wave3.md)、[docs/assets/m5-browser-e2e.png](docs/assets/m5-browser-e2e.png)。
+## 现在是什么状态
+
+```text
+✅ 控制面 + 网页 + SQLite 单机闭环
+✅ 多 Agent 房间 / 私聊 Bot / harness 头像 / Bot 交接对话 / 轮次 / 流式输出 / 审批
+✅ RuntimeProvider 抽象
+✅ Docker runtime（worker + workspace 容器）
+✅ Claude Code / Codex / DSH / Grok Build 真实模型调用
+✅ bridge 网络 + egress allowlist
+✅ per-Bot credentialRef
+✅ Native Relay PoC
+✅ 1339 tests pass
+```
+
+远端真实环境验证过：
+
+```text
+ClaudeBot  → CLAUDE_DEEPSEEK_OK
+CodexBot   → CODEX_DEEPSEEK_OK
+DshBot     → DSH_DEEPSEEK_OK
+GrokBot    → GROK_DEEPSEEK_ROOM_OK
+```
+
+四个 Bot 在同一个远程 Docker workspace 里回复，模型都是 DeepSeek。
+
+## 架构
+
+```text
+Browser / Desktop / IM
+        │ REST + SSE
+        ▼
+┌──────────────────────────┐
+│ Control Plane            │
+│ Node 22 / SQLite         │
+│ rooms · bots · rounds    │
+│ auth · budgets · memory  │
+└──────────┬───────────────┘
+           │ RuntimeProvider
+     ┌─────┴──────────┐
+     ▼                ▼
+ local runtime    Docker worker
+ (spawn room-agent) (HTTP + token)
+                      │ docker run
+                      ▼
+                ┌────────────────────┐
+                │ workspace container │
+                │ room-agent         │
+                │ ├─ DSH             │
+                │ ├─ Claude Code     │
+                │ ├─ Codex ACP       │
+                │ └─ Grok Build ACP  │
+                └────────────────────┘
+```
+
+设计文档：
+
+- [RuntimeProvider / AgentAdapter 边界](docs/design/runtime-providers.md)
+- [Docker runtime 方案](docs/design/docker-runtime.md)
+- [实施状态与剩余工作](docs/design/docker-runtime-roadmap.md)
+- [Grok Build 本地 + DeepSeek](docs/design/grok-build-local.md)
+
+## Runtime Providers
+
+控制面只依赖 `RuntimeProvider`，计算层可替换：
+
+| Provider | 生命周期 | 持久 workspace | 状态 |
+|---|---|---|---|
+| `docker` | Docker worker + `roost-ws-<hash>` 容器 | 宿主机 bind mount | ✅ 生产默认 |
+| `local` | 本机 `room-agent` 子进程 | 本地目录 | ✅ 开发/本机 |
+| `daytona` | Daytona sandbox + volume | Daytona Volume（FUSE/S3） | ✅ Provider + 契约测试 |
+| `kubernetes` | Pod + PVC | PVC | ✅ Provider + 契约测试 |
+| `openshell` | 旧 OpenShell supervisor | 卷 | ⛔ 已封存，仅显式恢复 |
+
+选择方式：
+
+```sh
+ROOST_RUNTIME_PROVIDER=docker
+# 或 daytona / kubernetes / local
+```
+
+### Daytona
+
+```sh
+ROOST_RUNTIME_PROVIDER=daytona
+DAYTONA_API_KEY=...
+DAYTONA_SNAPSHOT=roost-agent:latest   # 从 roost/agent 镜像构建的 snapshot
+DAYTONA_VOLUME=roost-workspaces       # 可选
+ROOST_CP_HOST=<Daytona 能访问的控制面地址>
+ROOST_CP_PORT=8787
+```
+
+Daytona sandbox 由 snapshot entrypoint 启动 `node /opt/roost/room-agent.mjs`。
+详见 [daytona-kubernetes.md](docs/design/daytona-kubernetes.md)。
+
+### Kubernetes
+
+```sh
+ROOST_RUNTIME_PROVIDER=kubernetes
+ROOST_K8S_API_URL=https://kubernetes.default.svc
+ROOST_K8S_NAMESPACE=roost
+ROOST_K8S_IMAGE=ghcr.io/<org>/roost-agent:latest
+ROOST_K8S_STORAGE_CLASS=standard
+ROOST_CP_HOST=<Pod 能访问的控制面地址>
+ROOST_CP_PORT=8787
+```
+
+每个 workspace 一个 PVC + 一个长活 Pod；Pod 的 readinessProbe 检查
+`/workspace/.roost/ready`。`stop` 删除 Pod、保留 PVC。
+
+## 本地电脑（Computer / roostd）
+
+安装 CLI（需要 Node ≥ 22.18）：
+
+```sh
+npm install -g roost-cli
+```
+
+如果 npm registry 还没发布，可以下载 tarball 后本地安装：
+
+```sh
+curl -fLO https://www.roostbots.com/downloads/cli/v0.1.0/roost-cli-0.1.0.tgz
+npm install -g ./roost-cli-0.1.0.tgz
+```
+
+npm 12 直接安装远程 tarball 需要 `--allow-remote=all`。
+
+不用 npm 的便携安装器：
+
+```sh
+curl -fsSL https://www.roostbots.com/downloads/cli/v0.1.0/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://www.roostbots.com/downloads/cli/v0.1.0/install.ps1 | iex
+```
+
+然后把本地电脑接入 workspace，让某个 Bot 在本机运行：
+
+```sh
+# 在 Web 设置页生成 CLI 令牌
+roost login --token <cli-token> --server https://roostbots.com
+roost setup
+roost project add ./project --label project-a
+roost bind <workspace-id> --bot <bot-id> --agent claude-code --project <project-id>
+roost agent discover
+roost daemon autostart enable
+roost daemon start
+```
+
+本地 Agent 也可通过 MCP 使用 Roost 的绑定/检查工具：
+
+```json
+{"mcpServers":{"roost":{"command":"roost","args":["mcp","serve"]}}}
+```
+
+也可以在 Web 设置页「电脑与绑定」里直接选择电脑 / 项目 / Bot / Agent 绑定。
+
+之后房间里的这个 Bot 会把轮次派给本地 `roostd`，在本机目录启动 Agent，
+结果回到房间。本地路径只保存在 `~/.roost`，不上传云端。
+
+设计：[local-computer.md](docs/design/local-computer.md)
+
+## 支持的 Runtime
+
+| Runtime | 接入方式 | 模型来源 | 状态 |
+|---|---|---|---|
+| **DSH** | SDK 长活进程 | 控制面代理 / 用户 BYO | ✅ 默认 |
+| **Claude Code** | CLI stream-json | Anthropic 兼容端点（DeepSeek 可） | ✅ |
+| **Codex** | ACP (codex-acp) | OpenAI 兼容端点（DeepSeek 可） | ✅ |
+| **Grok Build** | ACP (`grok agent --always-approve stdio`) | 自定义 OpenAI 兼容端点（DeepSeek 可） | ✅ |
+| **Hermes** | ACP (`hermes acp`) | DeepSeek / OpenAI 兼容 | ✅ 已适配，暂未接入生产 |
+| **Native Relay** | 外部会话轮询 room assignment | 用户环境自己的模型 | PoC |
+
+镜像内置：
+
+```text
+DSH            0.2.1-rc.5
+Claude Code    2.1.319
+Codex CLI      0.167.0
+Grok Build     1.0.77
+Hermes Agent   0.19.0
+```
+
+## 快速开始（本地控制面）
+
+要求 Node ≥ 22.18，零依赖，不需要构建。
+
+```sh
+git clone https://github.com/JingxuanC/roostbot
+cd roostbot
+
+ROOST_DB=/tmp/roost.db \
+  node --experimental-strip-types apps/api/src/main.ts
+```
+
+打开 <http://127.0.0.1:8787/>。第一次打开是登录页；注册/登录后进入房间。当前是纯云端模式，没有本地配对页。
+
+
+## Docker Runtime
+
+一个 workspace 一个长期容器，容器里跑 room-agent 和多个 Agent harness。
+
+### 1. 构建镜像
+
+```sh
+docker build --network host \
+  -f apps/runtime/agent.Dockerfile \
+  -t roost/agent:multi-runtime .
+```
+
+镜像包含 DSH、Claude Code、Codex、Grok Build、Hermes，以及 DeepSeek 配置模板。
+
+### 2. 部署 Docker worker
+
+在 Docker 宿主机：
+
+```sh
+sh scripts/install-docker-worker.sh
+```
+
+配置样例：
+
+- [deploy/docker-worker.env.example](deploy/docker-worker.env.example)
+- [deploy/roost-docker-worker.service](deploy/roost-docker-worker.service)
+
+### 3. 配置控制面
+
+```bash
+ROOST_RUNTIME_PROVIDER=docker
+ROOST_DOCKER_WORKER_URL=http://172.17.43.58:8790
+ROOST_DOCKER_WORKER_TOKEN=...
+ROOST_DOCKER_IMAGE=roost/agent:multi-runtime
+ROOST_CP_HOST=172.17.43.89
+ROOST_CP_PORT=8787
+ROOST_CP_SCHEME=http
+ROOST_BOT_CREDENTIALS_FILE=/etc/roost/bot-credentials.json
+```
+
+完整样例：[deploy/roost-api-docker.env.example](deploy/roost-api-docker.env.example)。
+
+### 4. 网络与安全
+
+当前默认：
+
+```text
+非 root uid 1000
+cap-drop ALL
+no-new-privileges
+memory / pids / cpu limit
+独立 bridge 网络 roost-ws
+egress 默认拒绝
+  · 放行控制面 :8787
+  · 放行 api.deepseek.com:443
+```
+
+egress allowlist：[deploy/roost-egress-allowlist.sh](deploy/roost-egress-allowlist.sh)；
+Prometheus 规则：[deploy/prometheus-roost-rules.yml](deploy/prometheus-roost-rules.yml)。
+
+### 5. 验证
+
+```sh
+sh scripts/verify.sh
+```
+
+或只跑测试：
+
+```sh
+node --experimental-strip-types --test \
+  "packages/*/test/*.test.ts" "apps/*/test/*.test.ts"
+```
+
+## 模型与凭据
+
+工作区模型 key 存在控制面（SQLite，加密）；Bot 级凭据通过 `credentialRef` 引用：
+
+```json
+{
+  "vault://claude-a": { "ANTHROPIC_API_KEY": "sk-..." },
+  "vault://codex-b": { "OPENAI_API_KEY": "sk-..." },
+  "vault://grok-c": { "DEEPSEEK_API_KEY": "sk-..." }
+}
+```
+
+```bash
+ROOST_BOT_CREDENTIALS_FILE=/etc/roost/bot-credentials.json
+```
+
+Grok Build 本地配 DeepSeek：
+
+```sh
+sh scripts/configure-grok-deepseek.sh
+grok -p '只回复 OK' --model deepseek-chat
+```
+
+详见 [Grok Build 本地 + DeepSeek](docs/design/grok-build-local.md)。
+
+## 目录
+
+```text
+apps/api/            控制面 API、房间、审批、运行时管理
+apps/web/            同源网页
+apps/runtime/        room-agent、Agent adapters、Docker worker、镜像 Dockerfile
+packages/            store / rooms / agent-runtime / sandbox / contract ...
+scripts/             本地 E2E、Docker worker 安装、Grok 配置、验收
+deploy/              systemd、nginx、worker、egress、Prometheus
+docs/design/         40 份设计文档
+docs/build/          验收证据
+```
+
+## 官网
+
+官方站点在 `apps/site/`，已部署在 <https://www.roostbots.com/>；零构建、零外部请求、中英文切换：
+
+```bash
+node scripts/serve-site.mjs        # http://127.0.0.1:4173
+```
+
+![官网](docs/assets/site-desk.png)
+
+欧美极简、中性黑白灰、无衬线排版；支持 EN / 中文切换（右上角，或 `?lang=en`）。
+设计参考 Linear 的克制、Vercel 的产品即主角、Anthropic 的安静和 Raycast 的细节。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [TODO.md](TODO.md) | **唯一任务清单**（进度：`node scripts/todo-stats.mjs`） |
-| [docs/vision.md](docs/vision.md) | 做什么、不做什么、为谁做 |
-| [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户模型 |
-| [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时必须提供的七条契约 |
-| [docs/design/](docs/design/) | 设计文档（19 份）：事件、认证、记忆、预算、loop 与上下文、消息、协作、调度、工作区、沙箱、连接器、存储、界面、插件、产物、Bot 图标、房间运行时、Bot 身份、插件市场 |
-| [docs/spikes/](docs/spikes/) | 可复现的实验与结论（含环境限制） |
-| [docs/decisions/](docs/decisions/) | 命名、记忆、许可、插件面板等决策记录 |
-| [deploy/README.md](deploy/README.md) | 部署：systemd/launchd、反代与 TLS、备份/恢复、升级/回滚 |
+| [docs/vision.md](docs/vision.md) | 做什么、不做什么 |
+| [docs/architecture.md](docs/architecture.md) | 控制面 / 运行时 / 沙箱 / 租户 |
+| [docs/runtime-contract.md](docs/runtime-contract.md) | DSH 作为云运行时的契约 |
+| [docs/design/README.md](docs/design/README.md) | 设计文档索引 |
+| [docs/design/docker-runtime-roadmap.md](docs/design/docker-runtime-roadmap.md) | Docker runtime 完成度与剩余项 |
+| [docs/design/native-relay.md](docs/design/native-relay.md) | Native Relay PoC |
+| [deploy/README.md](deploy/README.md) | 部署、反代、备份恢复 |
+
+## 已知限制
+
+```text
+单机控制面，没有 HA
+没有旧 OpenShell workspace 数据迁移
+read-only rootfs 默认关闭（DSH native addon 兼容问题）
+gVisor / Kata 只完成评估，未切换默认运行时
+多 Docker worker 已有确定性放置，但只部署了一台
+Prometheus / Alertmanager 规则已写，实例未部署
+Hermes 已适配但暂未接入生产
+```
 
 ## 许可
 
 Apache License 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
 
 第三方组件登记在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-## 跑起来（M2 切片）
-
-零依赖、无需构建；Node ≥ 22.18（用内置 `node:sqlite` 与类型擦除）。
-
-```sh
-git clone https://github.com/JingxuanC/roostbot && cd roostbot
-ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
-# 打开 http://127.0.0.1:8787/ ，配对页就是同源网页
-```
-
-控制面同时伺服网页；配对 → 房间（房间目前是假数据）。验收脚本：
-
-```sh
-sh scripts/verify.sh      # 108 个测试 + 配对/房间/消息/Bot 回合 的真实 HTTP 检查
-```
-
-想看 Bot 回话，再起一个 room-agent（另一个终端，沙箱里由控制面 `/start` 自动拉起）：
-
-```sh
-ROOST_API=http://127.0.0.1:8787 ROOST_RUNTIME_TOKEN=dev-token ROOST_BOT_ID=selector \
-  ROOST_DSH_BIN=apps/runtime/test/fake-dsh.mjs node --experimental-strip-types apps/runtime/room-agent.mjs
-# room-agent 用 ROOST_API / ROOST_RUNTIME_TOKEN / ROOST_BOT_ID 连控制面；没有成员时走单 Bot 回退
-```
-
-想直接看有内容的房间（不手动发消息）：
-
-```sh
-node --experimental-strip-types scripts/seed-demo.ts /tmp/roost.db   # 种一个 workspace + 房间 + 4 条消息
-ROOST_DB=/tmp/roost.db node --experimental-strip-types apps/api/src/main.ts
-```
-
-![配对](docs/assets/m2-pairing.png)
-
-**真实房间**（消息来自控制面 SQLite；空房间会自动建一个）：
-
-![房间](docs/assets/m3-room-live.png)
-
-**Bot 真的在房间里说话**（room-agent 按房间轮次/prompt 驱动 DSH 会话）：
-
-![Bot 回复](docs/assets/m4-bot-reply.png)
-
-**这一版有什么/没有什么**（诚实清单）：
-
-| 有了 | 还没有 |
-|---|---|
-| 事件日志 + 幂等 + 迁移（SQLite） | 多端同步（同一 workspace 两个窗口还没一起测） |
-| 控制面：配对、会话、workspace | DSH 真跑在容器里（只有 sidecar 与镜像声明） |
-| 房间/消息的真实接口 + SSE 推送 | 多端同步（同一 workspace 两个窗口还没一起测） |
-| **Bot 真的在房间里说话**（room-agent 长活会话 + 轮次） | 本地开发可用 fake-dsh 模板 |
-| 网页：配对页 + 真实房间（SSE）+ Bot 回复 + 程序化图标 | 投递方式、流式 token、审批、连接器、插件页 |
-| sidecar 测试、entrypoint 优雅停机 | Docker 构建未在这台机器验证 |
-| 沙箱策略模型 + OpenShell 后端 | 真沙箱已在远端验证（需 Docker ≥ 28，见 spike 0002） |
-| **room-agent 的回复 = 沙箱里的真实 DSH 回合**（DeepSeek，凭据由 OpenShell 注入） | 单机部署；没有多租户/账号体系 |
-| 网页端真实房间 + SSE 多端 + Markdown 渲染（截图 `docs/assets/m5-live-room.png`） | 沙箱空闲只能 stop/start（docker 驱动不支持 suspend） |
-
-## 官网
-
-`apps/site/` 是零构建静态官网（暖白、大留白，参考 dsbot.app 的气质；鸟形象来自 `apps/web/lib/bird.js`）：
-
-```bash
-node scripts/serve-site.mjs        # http://127.0.0.1:4173
-```
-
-截图：[桌面](docs/assets/roost-site.png) · [移动端](docs/assets/roost-site-mobile.png)。
-部署：把 `apps/site/` 直接放到任意静态托管即可，无构建、无外部字体/CDN。
-

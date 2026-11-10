@@ -352,7 +352,9 @@ export interface FinishRoundOptions {
 export function finishRound(round: RoomRound, options: FinishRoundOptions = {}): RoomRound {
   if (round.state !== 'running') return round
   const stopped = options.stopped === true
-  const pending = round.slots.some(slot => slot.status === 'waiting' || slot.status === 'speaking')
+  const pending = round.slots.some(
+    slot => slot.status === 'waiting' || slot.status === 'speaking' || slot.status === 'needs_input'
+  )
   if (!stopped && pending && round.turns < turnLimit(round)) return round
   const next: RoomRound = {
     ...round,
@@ -379,6 +381,8 @@ export function slotLabel(slot: RoundSlot): string {
       return `${name}（在做事，完成后发）`
     case 'waiting-approval':
       return `${name}（等用户批准，完成后发）`
+    case 'needs_input':
+      return `${name}（在等你选择）`
     case 'failed':
       return `${name}（失败了）`
     case 'left':

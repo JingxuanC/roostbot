@@ -76,6 +76,21 @@ interface ResolvedToken {
   id?: string
 }
 
+/** Same-key-until-per-Bot-secrets: forward only vendor auth env to the sandbox. */
+function externalRuntimeEnv(): Record<string, string> {
+  const names = [
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY',
+    'XAI_API_KEY', 'XAI_BASE_URL', 'GROK_API_KEY', 'GROK_BASE_URL'
+  ]
+  const out: Record<string, string> = {}
+  for (const name of names) {
+    const value = process.env[name]
+    if (typeof value === 'string' && value.trim() !== '') out[name] = value
+  }
+  return out
+}
+
 export function openShellRuntimeManager(config: OpenShellRuntimeConfig): RuntimeManager {
   function resolveStore(context?: { store?: Store }): Store | undefined {
     return context?.store ?? config.rawStore
@@ -127,7 +142,11 @@ export function openShellRuntimeManager(config: OpenShellRuntimeConfig): Runtime
         // 沙箱内的边界是 OpenShell，不是 DSH 自带的 sandbox：
         // 不设这个的话 fresh session 会 pin 到 workspace-write + ask，每条 bash 都要人批。
         DSH_PERMISSION_MODE: 'danger-full-access',
+        // room-agent 装审批桥后默认会把 DSH 钉回 workspace-write；新产品默认全权，
+        // 这个显式值会覆盖它，bash/tool 不再逐次弹审批。
+        ROOST_DSH_PERMISSION_MODE: 'danger-full-access',
         ROOST_WORKDIR: '/workspace',
+        ...externalRuntimeEnv(),
       }
 
       try {

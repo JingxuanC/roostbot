@@ -318,3 +318,24 @@ export function birdSvg(id, options = {}) {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="${size}" height="${size}" role="img" aria-label="${esc(label)}" focusable="false"><g opacity="${pausedOpacity}" transform="rotate(${spec.tilt} 48 48)">${ring}<circle cx="48" cy="48" r="45" fill="${p.belly}" opacity="0.28"/>${tailMarkup(shape.tail, p)}<path d="${body}" fill="${p.body}"/><ellipse cx="48" cy="62" rx="${round(shape.bodyRx * 0.62)}" ry="${round(shape.bodyRy * 0.44 * (shape.belly ?? 1))}" fill="${p.belly}" opacity="0.85"/>${extrasMarkup(shape, p)}<ellipse cx="${48 - shape.bodyRx + 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><ellipse cx="${48 + shape.bodyRx - 6}" cy="56" rx="7" ry="12" fill="${p.wing}" opacity="0.85"/><path d="M22 58c2 6 5 10 9 13M74 58c-2 6-5 10-9 13" stroke="${p.belly}" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>${crestMarkup(shape.crest, p)}${browMarkup(spec.brow, state, shape.eyeY, shape.mood)}${eyesMarkup(shape, state, p, shape.mood)}${beakMarkup(shape, p)}${marking}${state === 'paused' ? '' : accessoryMarkup(accessory, shape, p)}<path d="M40 80l-6 7M56 80l6 7" stroke="#B9741F" stroke-width="3.4" stroke-linecap="round"/></g></svg>`
 }
+
+/** 稿子里的八只身体色。主 Bot 固定白，不跟这张表走。 */
+export const ROUND_BIRD_COLORS = ['#bf5af2', '#ff9f0a', '#8e8e93', '#64d2ff', '#30d158', '#ac8e68', '#0a84ff', '#ff375f']
+
+export function roundBirdColor(id, primary = false) {
+  if (primary) return '#f5f5f7'
+  return ROUND_BIRD_COLORS[birdHash(id) % ROUND_BIRD_COLORS.length]
+}
+
+/**
+ * 稿子里的简笔鸟：圆身、一笔额羽、两只竖眼、三角喙。
+ * viewBox 与 shared.js 的 birdSvg 一致，32/40/56 仍能认出眼睛。
+ * 星标画在头像外层，不进 SVG。
+ */
+export function roundBirdSvg(id, options = {}) {
+  const size = Number.isFinite(options.size) && options.size > 0 ? Math.round(options.size) : 40
+  const primary = options.primary === true
+  const color = roundBirdColor(id, primary)
+  const beak = color === '#ff9f0a' || color === '#ac8e68' ? '#fff6e8' : (primary ? '#ff9f0a' : '#ffb340')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 64" width="${size}" height="${size}" aria-hidden="true" focusable="false" overflow="visible"><circle cx="32" cy="34" r="26" fill="${color}" opacity=".22"/><circle cx="30" cy="34" r="20" fill="${color}"/><path d="M26 12c2-7 8-7 10 0" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round"/><path d="M26 12c2-7 8-7 10 0" fill="none" stroke="#111213" stroke-width="2.2" stroke-linecap="round" opacity=".45"/><ellipse cx="17" cy="42" rx="11" ry="6.5" fill="rgba(0,0,0,0.18)" transform="rotate(-32 17 42)"/><ellipse cx="24" cy="30" rx="4.6" ry="7.6" fill="#111213" transform="rotate(-18 24 30)"/><ellipse cx="38" cy="28" rx="4.6" ry="7.6" fill="#111213" transform="rotate(-18 38 28)"/><circle cx="25.2" cy="27.5" r="1.1" fill="rgba(255,255,255,0.35)"/><circle cx="39.2" cy="25.5" r="1.1" fill="rgba(255,255,255,0.35)"/><path d="M46 31.5 L64 36.2 L46 42 Z" fill="${beak}"/><path d="M46 36.2 L64 36.2" stroke="rgba(0,0,0,0.15)" stroke-width="1"/></svg>`
+}

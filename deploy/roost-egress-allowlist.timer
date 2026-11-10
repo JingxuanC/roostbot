@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Roost egress DNS allowlist
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=10min
+Unit=roost-egress-allowlist.service
+
+[Install]
+WantedBy=timers.target

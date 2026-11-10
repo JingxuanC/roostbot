@@ -1,7 +1,7 @@
 # 前端 UI 重设计：把 Roost 做得安静、简洁、优雅
 
-> 状态：**已实现（2026-11-05）**：浅蓝白主题、无侧栏房间壳、抽屉设置入口、移动端适配。
-> 实现见 `apps/web/styles-blue.css` + `apps/web/index.html` + `apps/web/app.js`；本文保留设计依据与验收标准。
+> 状态：**已实现（2026-11-05；2026-11-08 统一为 Research Desk 主题）**：暖纸底、墨色文字、深绿单一强调、桌面常驻导航栏、移动端抽屉、设置页统一排版。
+> 实现见 `apps/web/styles-desk.css`（最后加载，覆盖 `styles.css` / `styles-blue.css` / `styles-grok.css` / `styles-white.css`）+ `apps/web/index.html`；本文保留设计依据与验收标准。
 > 上游：`ui.md`（三原则与信息架构）、`bot-avatar.md`（鸟）。本文只回答一件事：
 > 现有实现如何收敛成「简洁优雅」，以及每一步怎么验收。
 
@@ -13,8 +13,9 @@
 2. **卡片依赖**：用边框、圆角、阴影、pill 来分区，而不是用留白和排版。
 3. **状态外露**：把内部状态（轮次、审批、暂停、用量）同时用文字、颜色、徽章、动画表达。
 
-方向建议：**浅蓝纸感（默认）+ 墨色文字 + 单一深蓝强调**；白色只留给 surface（顶栏、输入框、
-设置内容区），让「浅蓝 / 白」形成层次。深色作为后续可选项，不是二选一。官网随后同步同一套蓝白。
+方向建议：**白色纸感（默认）+ 墨色文字 + 单一深蓝强调**；浅灰只用于分区与输入区，
+让「白 / 浅灰」形成层次。房间保留 Grok 布局，但不再使用黑色外壳，
+其他页面与房间共用同一套 token；深色不再是默认方向。
 
 鸟是页面上唯一允许高饱和的元素，其余全部退到灰阶。
 
@@ -308,3 +309,101 @@ Bot 管理、房间管理、插件、用量、定时、连接器、设备、审�
 - 管理页仍使用既有 hash 路由（`#/bots`、`#/plugins`、`#/usage`…），没有迁移到 `/settings/*` 前缀；入口已统一收进抽屉。路由迁移留作后续。
 - 消息区保留了「加载更早的消息」按钮；短会话时会出现在消息上方。
 - `发送` 仍是文字按钮而不是纯图标，保证可读性。
+
+
+## 9. Research Desk 主题（2026-11-08）
+
+用户反馈「整体风格统一、UI 好看一点」后，按 `ui-design` skill 的研究台方向重做：
+
+```text
+paper #f3efe6 / ink #25221c / accent #2f5b4c
+serif display + sans body + mono labels
+hairline rules, 1-4px radius, no gradients
+no card-grid decoration; tables/lists use rules
+desktop: persistent rail; mobile: drawer
+```
+
+落地文件：
+
+```text
+apps/web/styles-desk.css
+apps/web/index.html（主题色/占位、desk 样式最后加载）
+apps/web/test/desk-theme.test.ts
+```
+
+截图：
+
+![Room](docs/assets/ui-desk-room.png)
+![Bot list](docs/assets/ui-desk-bots.png)
+![Settings](docs/assets/ui-desk-settings.png)
+![Mobile room](docs/assets/ui-desk-mobile.png)
+
+
+## 10. 极简侧栏（2026-11-08，用户反馈）
+
+用户指出「管理」列表不应常驻房间侧栏，参考 Grok Bot 的极简模式。已调整为：
+
+```text
+侧栏只保留：品牌 / 搜索 / 房间列表 / 新建房间 / 设置
+Bot、插件、用量、定时、连接器、审批全部进入 #/settings 的「管理入口」
+```
+
+设置页顶部新增管理索引（Bot 与身份、插件与面板、用量与预算、定时任务、
+房间定时、连接器、审批），不再把后台导航塞进房间界面。
+
+
+> 2026-11-08：纯云端模式。`#/` 直接进登录，配对码页面、`#room` 预览和配对入口已下线；侧栏管理入口已收进设置页。
+
+
+## 11. 对话列表（2026-11-08，用户反馈）
+
+用户指出「房间」不应作为顶层概念，参考 DSBot：创建 Bot 的同时就把它的私聊放进同一个对话列表。
+
+调整：
+
+```text
+侧栏标题：房间 → 对话
+列表顺序：群组在前，Bot 私聊在后
+每创建一个 Bot：自动刷新 rooms，并直接打开它的私聊
+Bot 列表 / Bot 设置：都有「私聊」入口
+```
+
+截图：[私聊](/Users/paopao/Documents/deepseek-harness/default-workspace/roostbot/docs/assets/ui-desk-dm.png)
+
+
+## 12. Bot 交接与对话（2026-11-08）
+
+参考 DS Bot 的 Exchange 设计：
+
+```text
+Bot 名字 / 头像可点 → 打开该 Bot 私聊
+Bot 消息里 @ 了另一个 Bot → 显示 A ⇄ B 交接标签
+点击交接标签 → 打开两个 Bot 在当前房间里的 handoff 对话
+```
+
+实现：
+
+```text
+apps/web/app.js
+  mentionedBotIds()
+  openExchangeDialog()
+  renderRoomMessage() 的可点头像 + A ⇄ B 标签
+  renderPeerMessage() 的「打开对话」
+```
+
+
+## 13. Harness 头像（2026-11-08）
+
+Bot 头像不再统一用小鸟，而是按 `runtimeKind` 显示对应 harness 标记：
+
+```text
+DSH         蓝色鲸/波
+Claude Code 橙色星芒
+Codex       黑色六边形结
+Grok Build  黑色 X
+Hermes      紫色 H / 翼
+Native Relay 灰色终端
+```
+
+未知 runtime 或旧数据仍回退程序化小鸟；自定义上传头像在未知 runtime 下仍可用。
+实现见 `apps/web/lib/dom.js` 的 `botHarnessKind` / `harnessAvatarSvg`。

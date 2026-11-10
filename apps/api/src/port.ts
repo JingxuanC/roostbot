@@ -148,6 +148,15 @@ export interface RoomMessageRecord {
   actorKind: 'user' | 'bot' | 'system' | 'control-plane'
   actorId: string
   text: string
+  /** 纯文本消息没有这个字段。 */
+  parts?: Array<{ type: string; [key: string]: unknown }>
+  routine?: {
+    routineId: string
+    runId: string
+    scheduledFor: string
+    timezone: string
+    error?: boolean
+  }
 }
 
 export interface ListRoomsInput {
@@ -174,6 +183,7 @@ export interface PostMessageInput {
   roomId: string
   text: string
   idem?: string
+  parts?: RoomMessageRecord['parts']
 }
 
 export interface ListBotsInput {
@@ -296,7 +306,13 @@ export interface StorePort {
   /** 房间归属的 workspace；未知房间 null。workspace token 的内部接口用它做归属校验。 */
   getRoomWorkspace(roomId: string): Promise<string | null>
   /** 以 Bot 身份写一条消息。 */
-  postBotMessage(input: { roomId: string; botId: string; text: string; idem?: string }): Promise<RoomMessageRecord>
+  postBotMessage(input: {
+    roomId: string
+    botId: string
+    text: string
+    idem?: string
+    parts?: RoomMessageRecord['parts']
+  }): Promise<RoomMessageRecord>
   /** 内部读：不走成员校验，调用方已经用 runtime token 证明过身份。 */
   readMessagesInternal(input: { roomId: string; afterSeq?: number; limit?: number }): Promise<RoomMessageRecord[]>
 

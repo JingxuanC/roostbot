@@ -1,5 +1,11 @@
 // M4 共享契约（docs/build/m4-contract.md）。所有实现都 import 这里，避免各自定义漂移。
 
+import type { AgentCapabilities, AgentRuntimeKind } from '../../agent-runtime/src/index.ts'
+
+export type { AgentCapabilities, AgentRuntimeKind }
+
+export type RuntimeConfig = Record<string, unknown>
+
 export interface ApiError {
   ok: false
   error: { code: string; message: string }
@@ -26,6 +32,14 @@ export interface Bot {
   createdAt: number
   /** 软删时刻（epoch 毫秒）；未删除时缺省。只在 includeDeleted 的读取里出现。 */
   deletedAt?: number
+  /** Agent Runtime：dsh / grok-build / claude-code / codex / hermes。旧数据默认 dsh。 */
+  runtimeKind?: AgentRuntimeKind
+  /** Runtime 专属配置（JSON-safe）；不存明文凭据。 */
+  runtimeConfig?: RuntimeConfig
+  /** 指向 secret provider 的引用，不是密钥本身；API 只暴露引用。 */
+  credentialRef?: string
+  /** 最近一次 probe/协商缓存的能力；UI 按它渲染。 */
+  capabilities?: AgentCapabilities
 }
 
 export interface CreateBotInput {
@@ -36,6 +50,11 @@ export interface CreateBotInput {
   provider?: string
   avatar?: Bot['avatar']
   persona?: string
+  /** 缺省 dsh；必须是 packages/agent-runtime 的 AgentRuntimeKind。 */
+  runtimeKind?: AgentRuntimeKind
+  runtimeConfig?: RuntimeConfig
+  credentialRef?: string
+  capabilities?: AgentCapabilities
 }
 
 export interface UpdateBotInput {
@@ -50,6 +69,10 @@ export interface UpdateBotInput {
   memoryScopes?: string[]
   model?: string
   status?: BotStatus
+  runtimeKind?: AgentRuntimeKind
+  runtimeConfig?: RuntimeConfig
+  credentialRef?: string
+  capabilities?: AgentCapabilities
 }
 
 export type RoomResponderKind = 'member' | 'everyone' | 'mentions' | 'auto'
@@ -93,7 +116,17 @@ export interface CreateRoomInput {
   purpose?: string
 }
 
-export type SlotStatus = 'waiting' | 'speaking' | 'posted' | 'passed' | 'failed' | 'missed' | 'working' | 'left' | 'waiting-approval'
+export type SlotStatus =
+  | 'waiting'
+  | 'speaking'
+  | 'posted'
+  | 'passed'
+  | 'failed'
+  | 'missed'
+  | 'working'
+  | 'left'
+  | 'waiting-approval'
+  | 'needs_input'
 
 export interface RoundSlot {
   botId: string
@@ -102,6 +135,8 @@ export interface RoundSlot {
   note?: string
   /** 被哪个成员 @ 调用进来的 */
   by?: string
+  /** 这张卡没人答之前，轮次停在这里。答案事件把它放回 waiting。 */
+  awaiting?: { kind: 'choice' | 'approval'; id: string }
 }
 
 export interface RoomRound {

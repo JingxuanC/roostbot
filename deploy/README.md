@@ -257,3 +257,27 @@ curl -fsS http://127.0.0.1:8787/healthz
 | DSH 面板 502 | 沙箱内 `dsh web` 未起，或宿主到 `127.0.0.1:4099` 不可达 |
 | 面板空白/混合内容 | `/api/config` 的 `dshBase` 不是 https；设置 `ROOST_DSH_PROXY_PUBLIC_PORT` 或 `ROOST_DSH_PUBLIC_ORIGIN` |
 | 备份 `database is locked` | 长时间写事务；重试，不要改成 `cp` |
+
+## 5. 官网（www）
+
+官网是零构建静态站，位于 `apps/site/`。当前部署：
+
+```text
+https://roostbots.com      → app（控制面 + 网页）
+https://www.roostbots.com  → 官网
+```
+
+`/etc/nginx/conf.d/roostbots.conf` 中 `www` server 直接 root 到
+`/opt/roost/apps/site`，apex 仍反代控制面。示例见
+[`nginx-site.conf`](nginx-site.conf)。
+
+更新：
+
+```sh
+cd /opt/roost && git pull --ff-only origin main
+# 静态文件即时生效；改了 nginx 才 reload
+nginx -t && systemctl reload nginx
+```
+
+官网 CTA 默认指向 `https://roostbots.com/`；可以在 `apps/site/index.html`
+的 `<body data-app-url="...">` 覆盖。

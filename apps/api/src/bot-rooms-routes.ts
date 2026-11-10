@@ -30,6 +30,7 @@ import {
 } from '../../../packages/store/src/bot-rooms.ts'
 import type { RoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
+import { projectApprovalDecision } from './cards.ts'
 import { authenticate, isPlainObject, readJsonBody, roomJson, sendError, sendJson } from './server.ts'
 import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { RoomRecord, StorePort } from './port.ts'
@@ -116,7 +117,13 @@ export async function handleInternalListBots(
     return sendError(res, 400, 'invalid_body', 'workspaceId is required (non-empty string)')
   }
   if (!ensureRuntimeWorkspace(auth, workspaceId, res)) return
-  const bots = listBots(store, workspaceId).map((bot) => ({ id: bot.id, name: bot.name, role: bot.role }))
+  const bots = listBots(store, workspaceId).map((bot) => ({
+    id: bot.id,
+    name: bot.name,
+    role: bot.role,
+    runtimeKind: bot.runtimeKind ?? 'dsh',
+    ...(bot.capabilities === undefined ? {} : { capabilities: bot.capabilities })
+  }))
   sendJson(res, 200, { bots })
 }
 
@@ -230,6 +237,7 @@ export async function handleDecideApproval(
       by: auth.session.accountId,
       at: ctx.now(),
     })
+    if (approval.status === 'pending') projectApprovalDecision(store, decided, decision, auth.session.accountId)
     sendJson(res, 200, { approval: approvalJson(decided) })
   } catch (err) {
     sendApprovalFailure(res, err)

@@ -17,6 +17,7 @@ import { StoreError } from '../../../packages/store/src/errors.ts'
 import { readMessages } from '../../../packages/store/src/rooms.ts'
 import { getRoomDetail } from '../../../packages/store/src/rooms-ext.ts'
 import { activeRound, latestRound, saveRound } from '../../../packages/store/src/rounds.ts'
+import { noteRoundOpened } from './round-signals.ts'
 import type { Store } from '../../../packages/store/src/types.ts'
 
 /** Room + dm 标记；API 读 rooms 时把 rooms.dm 一起带出来即可。 */
@@ -125,5 +126,6 @@ export function openKickoffRound(store: Store, roomId: string, at: number = Date
     at,
   })
   saveRound(store, round)
+  noteRoundOpened(store, round)
   return round
 }

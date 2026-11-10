@@ -138,6 +138,209 @@ export async function mountSettingsPage(root, ctx) {
  * 通知开关（ui.md §3.6，TODO 5.5.6）：只在 change 事件里请求权限（用户手势）。
  * 权限被拒绝时如实说明，不把开关留在「开」。
  */
+/** 只读的本地 Computer 列表；绑定动作在 CLI 里完成（workdir 只存在本机）。 */
+function computersSection(ctx, workspaceId) {
+  const box = el('div', { class: 'stack' })
+  const status = ui.statusLine('')
+  const section = ui.section('电脑与绑定', [status, box], {
+    description: '在电脑上运行 `roost setup`、`roost project add` 后，可以在这里把 Bot 绑定到本机项目。',
+  })
+  let data = { computers: [], bindings: [], bots: [] }
+  let selectedComputerId = ''
+  let selectedProjectId = ''
+
+  void load()
+  return section
+
+  function projectsOf(computer) {
+    const projects = computer && computer.capabilities && Array.isArray(computer.capabilities.projects)
+      ? computer.capabilities.projects
+      : []
+    return projects.filter((project) => project && typeof project.id === 'string' && project.id !== '')
+  }
+
+  function select(options, value, onChange) {
+    const node = el('select', { class: 'computer-form-select' })
+    for (const option of options) {
+      node.append(el('option', { value: option.value, text: option.label, selected: option.value === value }))
+    }
+    node.value = value
+    if (onChange) node.addEventListener('change', () => onChange(node.value))
+    return node
+  }
+
+  function botName(botId) {
+    const bot = data.bots.find((item) => item.id === botId)
+    return bot && bot.name ? bot.name : botId
+  }
+
+  function render() {
+    box.replaceChildren()
+    if (data.computers.length === 0) {
+      box.append(ui.emptyState({
+        title: '还没有电脑',
+        body: '在终端运行：roost login --token <CLI 令牌>，然后 roost setup 和 roost project add <项目目录>。',
+      }))
+      return
+    }
+
+    for (const computer of data.computers) {
+      const row = el('div', { class: 'computer-row' })
+      const title = el('div', { class: 'computer-row-main' })
+      title.append(el('strong', { text: computer.name || computer.id }))
+      title.append(el('span', { class: `computer-kind${computer.status === 'offline' ? ' is-offline' : ''}`, text: computer.status || 'unknown' }))
+      title.append(el('span', { class: 'computer-meta muted', text: `${computer.os || ''} ${computer.arch || ''}`.trim() }))
+      row.append(title)
+      const own = data.bindings.filter((binding) => binding.computerId === computer.id)
+      if (own.length > 0) {
+        const list = el('div', { class: 'computer-bindings' })
+        for (const binding of own) {
+          list.append(el('span', {
+            class: 'computer-binding',
+            text: `${botName(binding.botId)} · ${binding.agentKind || 'agent'} · ${binding.workdirLabel || 'project'}`,
+          }))
+        }
+        row.append(list)
+      }
+      box.append(row)
+    }
+
+    if (data.bots.length === 0) {
+      box.append(el('p', { class: 'muted', text: '还没有 Bot，先创建一个 Bot 再绑定。' }))
+      return
+    }
+    const online = data.computers.filter((computer) => computer.status !== 'offline' && computer.status !== 'revoked')
+    if (online.length === 0) {
+      box.append(el('p', { class: 'muted', text: '电脑当前离线；启动 roost daemon 后再绑定。' }))
+      return
+    }
+
+    if (!selectedComputerId || !online.some((computer) => computer.id === selectedComputerId)) {
+      selectedComputerId = online[0].id
+    }
+    const computer = online.find((item) => item.id === selectedComputerId) || online[0]
+    const projects = projectsOf(computer)
+    if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
+      selectedProjectId = projects[0]?.id || ''
+    }
+    if (projects.length === 0) {
+      box.append(el('p', {
+        class: 'muted',
+        text: `这台电脑还没有注册项目。运行：roost project add <目录>，然后保持 daemon 在线。`,
+      }))
+    }
+
+    const form = el('form', { class: 'computer-bind-form' })
+    const computerNode = select(online.map((item) => ({ value: item.id, label: item.name || item.id })), computer.id, (value) => {
+      selectedComputerId = value
+      selectedProjectId = ''
+      render()
+    })
+    const projectNode = select(projects.map((project) => ({ value: project.id, label: project.label || project.id })), selectedProjectId, (value) => {
+      selectedProjectId = value
+    })
+    const botNode = select(data.bots.map((bot) => ({ value: bot.id, label: bot.name || bot.id })), data.bots[0].id)
+    const agentNode = select([
+      { value: 'claude-code', label: 'Claude Code' },
+      { value: 'codex', label: 'Codex' },
+      { value: 'grok-build', label: 'Grok Build' },
+      { value: 'dsh', label: 'DSH' },
+    ], 'claude-code')
+    const submit = ui.button('绑定 Bot 到这台电脑', { variant: 'primary', type: 'submit', disabled: projects.length === 0 })
+
+    const fields = el('div', { class: 'computer-form-fields' })
+    for (const [label, node] of [['电脑', computerNode], ['项目', projectNode], ['Bot', botNode], ['Agent', agentNode]]) {
+      const field = el('label', { class: 'computer-form-field' })
+      field.append(el('span', { text: label }))
+      field.append(node)
+      fields.append(field)
+    }
+    form.append(fields, submit)
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      if (projects.length === 0) return
+      const project = projects.find((item) => item.id === selectedProjectId)
+      ui.setBusy(submit, true, '绑定中…')
+      ui.setStatus(status, '')
+      try {
+        await ctx.api.post(`/api/workspaces/${encodeURIComponent(workspaceId)}/computer-bindings`, {
+          computerId: computer.id,
+          botId: botNode.value,
+          agentKind: agentNode.value,
+          projectId: selectedProjectId,
+          workdirLabel: project?.label || 'project',
+        })
+        ui.setStatus(status, '已绑定。下一条发给这个 Bot 的消息会派到本机。')
+        await load()
+      } catch (error) {
+        if (isAuthError(error)) { ctx.requirePair(); return }
+        ui.setStatus(status, `绑定失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+      } finally {
+        ui.setBusy(submit, false)
+      }
+    })
+    box.append(form)
+  }
+
+  async function load() {
+    box.replaceChildren(ui.loading('正在载入电脑…'))
+    ui.setStatus(status, '')
+    try {
+      const [computersData, bindingsData, bots] = await Promise.all([
+        ctx.api.get('/api/computers'),
+        ctx.api.get(`/api/workspaces/${encodeURIComponent(workspaceId)}/computer-bindings`),
+        Promise.resolve(typeof ctx.loadBots === 'function' ? ctx.loadBots() : []),
+      ])
+      data = {
+        computers: Array.isArray(computersData?.computers) ? computersData.computers : [],
+        bindings: Array.isArray(bindingsData?.bindings) ? bindingsData.bindings : [],
+        bots: Array.isArray(bots) ? bots : [],
+      }
+      render()
+    } catch (error) {
+      if (isAuthError(error)) { ctx.requirePair(); return }
+      box.replaceChildren(ui.errorState({
+        error,
+        message: `电脑列表载入失败：${error instanceof Error ? error.message : String(error)}`,
+        onRetry: () => void load(),
+      }))
+    }
+  }
+}
+
+/** CLI token：让本地电脑通过 `roost login` 接入，不需要从浏览器手抄 cookie。 */
+function cliSection(ctx) {
+  const status = ui.statusLine('')
+  const output = el('pre', { class: 'cli-token-output', hidden: true })
+  const button = ui.button('生成 CLI 令牌', {
+    variant: 'primary',
+    onClick: async () => {
+      ui.setBusy(button, true, '生成中…')
+      ui.setStatus(status, '')
+      try {
+        const data = await ctx.api.post('/api/cli/tokens', { label: 'roost CLI' })
+        const token = data && typeof data.token === 'string' ? data.token : ''
+        if (token === '') throw new Error('服务端没有返回 token')
+        const origin = (() => {
+          try { return location.origin } catch { return 'https://roostbots.com' }
+        })()
+        output.textContent = `roost login --token ${token} --server ${origin}\nroost setup`
+        output.hidden = false
+        ui.setStatus(status, '令牌只显示一次。复制后运行上面的命令。')
+        try { await navigator.clipboard?.writeText(output.textContent) } catch {}
+      } catch (error) {
+        if (isAuthError(error)) { ctx.requirePair(); return }
+        ui.setStatus(status, `生成失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+      } finally {
+        ui.setBusy(button, false)
+      }
+    },
+  })
+  return ui.section('CLI 接入', [button, status, output], {
+    description: '安装 roost CLI 后，把本机作为执行节点接入 workspace。令牌只显示一次，可随时在设备列表吊销。',
+  })
+}
+
 function notificationSection() {
   const supported = supportsNotifications()
   const permission = notificationPermission()
@@ -192,9 +395,30 @@ function notificationSection() {
   })
 }
 
+function settingsHub() {
+  const links = [
+    ['#/bots', 'Bot 与身份', '运行时、模型与工具权限'],
+    ['#/plugins', '插件与面板', '扩展能力与面板'],
+    ['#/usage', '用量与预算', 'Token 与成本'],
+    ['#/schedules', '定时任务', '定时运行'],
+    ['#/routines', '房间定时', '房间内的定时回合'],
+    ['#/connectors', '连接器', '外部数据与工具'],
+    ['#/approvals', '审批', '需要你决定的动作'],
+  ]
+  const nav = el('nav', { class: 'settings-hub', 'aria-label': '管理' })
+  for (const [href, title, description] of links) {
+    const link = el('a', { class: 'settings-hub-link', href })
+    link.append(el('span', { class: 'settings-hub-title', text: title }))
+    link.append(el('span', { class: 'settings-hub-desc', text: description }))
+    link.append(el('span', { class: 'settings-hub-arrow', 'aria-hidden': 'true', text: '→' }))
+    nav.append(link)
+  }
+  return nav
+}
+
 function settingsView(ctx, root, state) {
   const header = ui.pageHeader(PAGE_TITLE, {
-    subtitle: '成员、设备与长期授权都在这里管理；单次批准不会写入长期授权。',
+    subtitle: '工作区、模型、成员与所有管理入口。',
     actions: [ui.linkButton('需要你', '#/approvals', { variant: 'ghost' })],
   })
 
@@ -206,7 +430,7 @@ function settingsView(ctx, root, state) {
   board.append(membersSection(pageCtx, state.members, remount))
   board.append(devicesSection(pageCtx, state.devices, remount))
   for (const node of grantsSections(ctx, root, state)) board.append(node)
-  return el('div', { class: 'stack' }, [header, notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
+  return el('div', { class: 'stack' }, [header, settingsHub(), cliSection(ctx), computersSection(ctx, state.workspaceId), notificationSection(), modelSection(ctx, state.workspaceId, state.role), board])
 }
 
 // ---------------------------------------------------------------------------

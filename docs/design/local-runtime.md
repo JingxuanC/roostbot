@@ -1,0 +1,158 @@
+# 本地进程 Runtime
+
+> 状态：开发用（2026-11-07）。用于在没有 Docker / OpenShell 的机器上跑通
+> 控制面 → room-agent → DSH 的真实链路。不是安全边界。
+
+## 启动
+
+准备一个本地 DSH 可执行文件（macOS 安装包内也能找到）：
+
+```bash
+DSH_BIN="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
+```
+
+启动控制面：
+
+```bash
+PORT=8799 \
+ROOST_DB=/tmp/roost-local.db \
+ROOST_RUNTIME_TOKEN=local-dev-token \
+ROOST_SANDBOX=local \
+ROOST_DSH_BIN="$DSH_BIN" \
+ROOST_LOCAL_WORKSPACE_DIR=/tmp/roost-workspaces \
+node --experimental-strip-types apps/api/src/main.ts
+```
+
+然后正常登录/创建 workspace/Bot；`POST /api/workspaces/:id/start` 会在本机启动：
+
+```text
+node apps/runtime/room-agent.mjs
+  └─ dsh --profile sdk
+```
+
+每个 workspace 一个子进程，workdir 在 `ROOST_LOCAL_WORKSPACE_DIR` 下。
+
+## 与 OpenShell 的差异
+
+| 项 | 本地 | OpenShell |
+|---|---|---|
+| 隔离 | 无（继承当前用户权限） | 容器/策略隔离 |
+| 启动 | 秒级 | 沙箱创建/镜像拉取 |
+| 凭据 | 控制面 token；模型 key 走控制面代理 | 同左 |
+| 多用户 | 仅开发/单机 | 生产 |
+| 停止 | 子进程 SIGTERM | sandbox stop |
+
+## 限制
+
+- `ROOST_DB=memory` 时没有 SQLite 校验 runtime token，只能用全局
+  `ROOST_RUNTIME_TOKEN`；不提供房间事件。
+- 真实聊天需要工作区模型凭据或平台模型 key；否则 DSH 在模型请求时失败。
+- 外部 Runtime（Grok Build/Claude/Codex）需要本机安装对应 CLI，并设置
+  `ROOST_GROK_BIN` / `ROOST_CLAUDE_BIN` / `ROOST_CODEX_BIN`。
+- 不要把这个模式暴露到公网。
+
+## 已验证的本地 E2E
+
+本机用 **DSH 0.2.1-rc.5**（不是 App 自带的 rc.3）+ 本地 fake model upstream 跑通：
+
+```text
+浏览器/HTTP → 本地控制面 → local room-agent → 本机 dsh rc.5
+  → /v1/messages → 控制面模型代理 → fake upstream
+  → chat.message → SSE
+```
+
+结果：
+
+```text
+REPLY { "seq": 7, "actor": { "kind": "bot" }, "text": "本地收到" }
+```
+
+注意：
+
+- App 自带的 DSH 是 rc.3，和 room-agent 的 SDK 事件协议不完全一致，会
+  `advanced ... missed`；本地 E2E 要显式指向 rc.5。
+- `POST /api/pairing/code` 创建的测试账号没有注册赠送额度；需要先
+  `grantTokenCredit`（或通过正常注册流程创建账号），否则模型代理返回
+  `free token balance is exhausted`。
+- macOS 上 App 的 Node 带 hardened runtime；rc.5 的原生 addon 需要匹配签名的
+  Node，本地可用 ad-hoc 签名的 Node 副本跑（仅开发）。
+
+## 一键本地 E2E
+
+```bash
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+  node --experimental-strip-types scripts/local-e2e.mjs
+```
+
+脚本会启动本地控制面、fake model upstream、本地 room-agent，跑一轮真实房间消息，并打印：
+
+```text
+REPLY {"actor":{"kind":"bot"},"text":"本地收到"}
+```
+
+## 本地多 Runtime E2E
+
+在本地 Claude Code CLI 可用、并指向 fake Anthropic upstream 后：
+
+```bash
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+ROOST_CLAUDE_BIN=/path/to/claude \
+  node --experimental-strip-types scripts/local-multi-e2e.mjs
+```
+
+实测结果：
+
+```text
+REPLY {"actor":{"kind":"bot"},"text":"本地 Claude 收到"}
+```
+
+这验证了：
+
+```text
+控制面 → room-agent supervisor → Claude Code CLI adapter
+  → /v1/messages → fake upstream → advance → chat.message
+```
+
+说明 ACP/CLI Adapter 与 `ROOST_MULTI_RUNTIME` 的链路在本地是通的。
+
+## 真实模型本地多 Bot 房间
+
+本机 Claude Code + Codex 都指向同一个 DeepSeek key：
+
+```bash
+. ~/roost-local-agents/env.sh
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+ROOST_CLAUDE_BIN=~/roost-local-agents/bin/claude \
+ROOST_CODEX_BIN=~/roost-local-agents/bin/codex-acp \
+  node --experimental-strip-types scripts/local-pair-room-e2e.mjs
+```
+
+实测：
+
+```text
+room [ 'ClaudeBot', 'CodexBot' ]
+PAIR_ROOM_OK { gotClaude: true, gotCodex: true }
+```
+
+两个不同 Runtime 的 Bot 在同一个 Roost 房间里按 @ 顺序发言，都是真实
+DeepSeek 返回，不是 fake upstream。
+
+### 三个 Runtime 同房间
+
+继续把本机 DSH 也拉进同一个房间：
+
+```bash
+ROOST_DSH_BIN=/path/to/dsh-0.2.1-rc.5 \
+ROOST_CLAUDE_BIN=~/roost-local-agents/bin/claude \
+ROOST_CODEX_BIN=~/roost-local-agents/bin/codex-acp \
+  node --experimental-strip-types scripts/local-three-room-e2e.mjs
+```
+
+实测：
+
+```text
+room [ 'ClaudeBot', 'CodexBot', 'DshBot' ]
+THREE_ROOM_OK { gotClaude: true, gotCodex: true, gotDsh: true }
+```
+
+三个 Bot 在同一个房间里按 @ 顺序发言，全部走真实 DeepSeek。

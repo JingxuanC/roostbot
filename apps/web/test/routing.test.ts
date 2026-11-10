@@ -8,15 +8,14 @@ import {
   routeMatch,
 } from '../lib/routing.js'
 
-test('空 hash / # / #/ 都是配对页', () => {
+test('空 hash / # / #/ 都进入云端登录', () => {
   for (const hash of ['', '#', '#/', '#//', '   ']) {
-    assert.deepEqual(routeMatch(hash), { name: 'pair', params: {}, path: '/' })
+    assert.deepEqual(routeMatch(hash), { name: 'login', params: {}, path: '/' })
   }
 })
 
-test('兼容旧的 #room（房间预览）', () => {
-  assert.equal(routeMatch('#room').name, 'room')
-  assert.equal(routeMatch('#room').params.id, null)
+test('本地预览 #room 已下线', () => {
+  assert.equal(routeMatch('#room').name, 'notFound')
 })
 
 test('#/bots 与新建入口', () => {
@@ -64,6 +63,8 @@ test('用量页有独立路由，且不带参数', () => {
 })
 
 test('定时任务页有独立路由，且不带参数', () => {
+  assert.equal(routeMatch('#/home').name, 'home')
+  assert.equal(routeMatch('#/routines').name, 'routines')
   assert.equal(routeMatch('#/schedules').name, 'schedules')
   assert.deepEqual(routeMatch('#/schedules').params, {})
   assert.equal(routeMatch('#/schedules/').name, 'schedules')

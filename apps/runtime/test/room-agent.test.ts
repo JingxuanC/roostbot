@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { JsonRpcProcessClient, assistantText, sessionIdFor, startRoomAgent } from '../room-agent.mjs'
+import { JsonRpcProcessClient, assistantText, deltaSlice, sessionIdFor, startRoomAgent } from '../room-agent.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -16,6 +16,13 @@ test('session id 是确定性的，且对特殊字符安全', () => {
   assert.equal(sessionIdFor('rm_1', 'selector'), 'room-rm_1-selector')
   assert.equal(sessionIdFor('rm 1/x', 'selector'), 'room-rm_1_x-selector')
   assert.equal(sessionIdFor('rm_1', 'selector'), sessionIdFor('rm_1', 'selector'))
+})
+
+test('deltaSlice 只返回新长出来的一段', () => {
+  assert.equal(deltaSlice('', '收到'), '收到')
+  assert.equal(deltaSlice('收到', '收到了'), '了')
+  assert.equal(deltaSlice('收到了', '改口'), '改口')
+  assert.equal(deltaSlice('收到', ''), '')
 })
 
 test('assistantText 只取 text blocks', () => {
@@ -26,6 +33,7 @@ test('assistantText 只取 text blocks', () => {
 
 async function fakeControlPlane(messages: Array<{ seq: number; actor: { kind: string; id: string }; text: string }>) {
   const said: Array<{ roomId: string; botId: string; text: string; idem: string }> = []
+  const deltas: Array<{ botId?: string; delta?: string }> = []
   const rooms = [{ id: 'rm_test' }]
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://local')
@@ -50,13 +58,23 @@ async function fakeControlPlane(messages: Array<{ seq: number; actor: { kind: st
       })
       return
     }
+    if (req.method === 'POST' && url.pathname === '/api/internal/rooms/rm_test/deltas') {
+      let body = ''
+      req.on('data', (chunk) => { body += chunk })
+      req.on('end', () => {
+        deltas.push(JSON.parse(body) as { botId?: string; delta?: string })
+        res.setHeader('content-type', 'application/json')
+        res.end('{}')
+      })
+      return
+    }
     res.statusCode = 404
     res.end('{}')
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : 0
-  return { base: `http://127.0.0.1:${port}`, said, close: () => new Promise((resolve) => server.close(resolve)) }
+  return { base: `http://127.0.0.1:${port}`, said, deltas, close: () => new Promise((resolve) => server.close(resolve)) }
 }
 
 test('两条消息走同一个 session，回复带 idem（多轮）', async () => {
@@ -75,13 +93,14 @@ test('两条消息走同一个 session，回复带 idem（多轮）', async () =
   })
   try {
     const deadline = Date.now() + 5000
-    while (Date.now() < deadline && cp.said.length < 2) await new Promise((r) => setTimeout(r, 20))
+    while (Date.now() < deadline && (cp.said.length < 2 || cp.deltas.length < 1)) await new Promise((r) => setTimeout(r, 20))
     assert.equal(cp.said.length, 2)
     // idem 带 botId：同一 seq 多个 Bot 不会互相覆盖
     assert.equal(cp.said[0].idem, 'reply-rm_test-1-selector')
     assert.equal(cp.said[1].idem, 'reply-rm_test-3-selector')
     // 第二轮由同一 session 产生（假 DSH 用轮数证明）
     assert.match(cp.said[1].text, /第 2 轮/)
+    assert.ok(cp.deltas.some((item) => (item.delta ?? '').includes('收到了')))
   } finally {
     await agent.stop()
     await cp.close()

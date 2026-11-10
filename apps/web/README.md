@@ -2,7 +2,7 @@
 
 零依赖、零构建：`index.html` + `app.js` + `styles.css`，原生 ES module，没有 npm 包、没有打包器、没有 TypeScript 源码。
 
-M4 在原来的配对页 / 房间页之上加了 Bot 与建群/房间设置，并把数据接到控制面的 M4 API。
+当前是云端模式：登录 / 注册后进入房间；本地配对页已下线。页面包含房间、Bot 与建群/房间设置，数据接到控制面 API。
 纯逻辑（路由、谁回答、@ 解析、API 客户端）抽在 `lib/` 里，用 `node:test` 覆盖；视图在 `views/`。
 
 ## 路由（hash）
@@ -28,7 +28,7 @@ M4 在原来的配对页 / 房间页之上加了 Bot 与建群/房间设置，�
 
 未知地址渲染「找不到这个页面」，不会白屏。刷新任何 hash 地址都能重新渲染；受保护页面在
 会话失效（401）时回到 `#/login`，并把原地址记到 `pendingRoute`，登录成功后回到原地址。
-登录页仍保留「用配对码登录」入口，旧的配对流程不被移除。
+登录页不再保留配对码入口；旧 `/api/pairing/*` 后端仅作兼容层。
 
 ## 怎么起
 
@@ -37,7 +37,7 @@ M4 在原来的配对页 / 房间页之上加了 Bot 与建群/房间设置，�
 node --experimental-strip-types apps/api/src/main.ts
 # → http://127.0.0.1:8787
 
-# 或任意静态服务器（只能看配对页与 #room 预览；API 要另配 ?api=）
+# 或任意静态服务器（只能看登录页与静态资源；API 要另配 ?api=）
 npx serve apps/web
 python3 -m http.server 8000 --directory apps/web
 ```
@@ -50,7 +50,6 @@ API 地址：默认同源；`?api=http://127.0.0.1:8787` 可指定（受 CORS �
 
 | 部分 | 状态 |
 |---|---|
-| 配对码（6 位、粘贴分段、错误就地显示） | **真**：`POST /api/pairing/claim` |
 | Bot 列表 / 新建 / 设置 / 暂停 / 删除 | **真**：`GET/POST/PATCH/DELETE /api/bots` |
 | 建群 / 房间设置 / 成员增删 / 谁回答 | **真**：`POST/PATCH /api/rooms`、`/members` |
 | 房间消息 / 发送 / SSE | **真**：`GET/POST /api/rooms/:id/messages`、`/stream` |
@@ -76,12 +75,13 @@ token 仍保留（`app.js` 的 `sessionToken`，只在内存），所以现有 t
 
 启动时先用 `GET /api/auth/me` 探测 cookie 会话；受保护页面收到 401 时把当前 hash 记到
 `pendingRoute`，跳到 `#/login`。登录成功后由 `completeAuth` 回到原地址。账号接口还没上线
-（404/405/501/503）时不会把页面锁死：配对页和旧的 Bearer 流程仍然可用。
+（404/405/501/503）时不会把页面锁死，仍会显示登录页。
 
 ## 文件
 
 ```
 index.html          四个视图的静态骨架（配对 / 账号 / 房间 / 路由页外壳）
+styles-desk.css     最终主题（Research Desk：纸/墨/深绿；最后加载）
 app.js              入口：状态、路由、房间页、SSE、输入区、@ 菜单
 styles.css          设计 token + 组件样式（深色一套）
 lib/glyph.js        程序化图标（packages/identity/src/glyph.ts 的等价重写，无 DOM）

@@ -34,11 +34,11 @@ interface Fixture {
   store: Store
   wsId: string
   clock: { now: () => number; advance: (ms: number) => void }
-  backendCalls: { count: number }
-  call: (method: string, path: string, options?: { body?: unknown; token?: string; runtimeToken?: string }) => Promise<ApiResult>
+  backendCalls: { count: number; calls: Array<{ connectionAlias?: string; accountId?: string }> }
+  call: (method: string, path: string, options?: { body?: unknown; token?: string; runtimeToken?: string; accept?: string }) => Promise<ApiResult>
 }
 
-function fakeBackend(backendCalls: { count: number }): GatewayBackend {
+function fakeBackend(backendCalls: { count: number; calls: Array<{ connectionAlias?: string; accountId?: string }> }): GatewayBackend {
   return {
     id: 'openconnector',
     async listConnectors() {
@@ -59,6 +59,7 @@ function fakeBackend(backendCalls: { count: number }): GatewayBackend {
     },
     async call(call) {
       backendCalls.count += 1
+      backendCalls.calls.push({ connectionAlias: call.connectionAlias, accountId: call.accountId })
       return { ok: true, data: { action: call.action, echo: call.args }, bytes: 42 }
     },
     async status(_slug: string) {
@@ -76,7 +77,7 @@ async function withApi(
   const port = createStorePort(store)
   let current = NOW
   const clock = { now: () => current, advance: (ms: number) => { current += ms } }
-  const backendCalls = { count: 0 }
+  const backendCalls = { count: 0, calls: [] as Array<{ connectionAlias?: string; accountId?: string }> }
   let started: Awaited<ReturnType<typeof startServer>> | null = null
 
   try {
@@ -103,17 +104,18 @@ async function withApi(
     async function call(
       method: string,
       path: string,
-      callOptions: { body?: unknown; token?: string; runtimeToken?: string } = {},
+      callOptions: { body?: unknown; token?: string; runtimeToken?: string; accept?: string } = {},
     ): Promise<ApiResult> {
       const headers: Record<string, string> = {}
       if (callOptions.token !== undefined) headers['authorization'] = `Bearer ${callOptions.token}`
       if (callOptions.runtimeToken !== undefined) headers['x-runtime-token'] = callOptions.runtimeToken
+      if (callOptions.accept !== undefined) headers['accept'] = callOptions.accept
       let body: string | undefined
       if (callOptions.body !== undefined) {
         headers['content-type'] = 'application/json'
         body = JSON.stringify(callOptions.body)
       }
-      const init: RequestInit = { method, headers }
+      const init: RequestInit = { method, headers, redirect: 'manual' }
       if (body !== undefined) init.body = body
       const response = await fetch(`${baseUrl}${path}`, init)
       const text = await response.text()
@@ -222,7 +224,8 @@ test('连接 / 回调 / 断开：owner 起 OAuth，state 一次有效，断开�
       body: { workspaceId: fx.wsId },
       token: VIEWER_TOKEN,
     })
-    assert.equal(viewerConnect.status, 403)
+    // 普通成员也可以连接自己的账号；不和 owner 的连接互相覆盖。
+    assert.equal(viewerConnect.status, 201)
 
     await connectViaApi(fx)
     assert.equal(callsRows(fx.store).length, 0, 'connecting does not record a call')
@@ -249,7 +252,35 @@ test('连接 / 回调 / 断开：owner 起 OAuth，state 一次有效，断开�
     assert.ok(connectorKinds(fx.store).includes('connector.disconnected'))
 
     const viewerDelete = await fx.call('DELETE', `/api/connectors/github?workspaceId=${fx.wsId}`, { token: VIEWER_TOKEN })
-    assert.equal(viewerDelete.status, 403)
+    assert.equal(viewerDelete.status, 204)
+  })
+})
+
+test('回调兼容 OpenConnector 的 status=success', async () => {
+  await withApi(async (fx) => {
+    const started = await fx.call('POST', '/api/connectors/github/connect', { body: { workspaceId: fx.wsId }, token: TOKEN })
+    assert.equal(started.status, 201)
+    const callback = await fx.call(
+      'GET',
+      `/api/connectors/callback/github?state=${started.json.state}&status=success&service=github&code=None`,
+    )
+    assert.equal(callback.status, 200, JSON.stringify(callback.json))
+    assert.equal(callback.json.connected, true)
+    assert.equal(fx.store.db.prepare('SELECT COUNT(*) AS n FROM connections WHERE workspace_id = ?').get(fx.wsId).n, 1)
+  })
+})
+
+test('浏览器回调 302 回连接器页，API 客户端仍拿 JSON', async () => {
+  await withApi(async (fx) => {
+    const started = await fx.call('POST', '/api/connectors/github/connect', { body: { workspaceId: fx.wsId }, token: TOKEN })
+    assert.equal(started.status, 201)
+    const callback = await fx.call(
+      'GET',
+      `/api/connectors/callback/github?state=${started.json.state}&status=success&service=github`,
+      { accept: 'text/html,application/xhtml+xml' },
+    )
+    assert.equal(callback.status, 302)
+    assert.equal(callback.headers.get('location'), '/#/connectors?connected=github')
   })
 })
 
@@ -315,6 +346,48 @@ test('授权接口：owner/admin 才能读写；同 bot+slug 覆盖；非法 acc
   })
 })
 
+test('多用户连接：各自连接、默认连接、Bot 可按 connectionId 指定账号', async () => {
+  await withApi(async (fx) => {
+    await connectViaApi(fx, 'github', TOKEN)
+    await connectViaApi(fx, 'github', VIEWER_TOKEN)
+
+    const connections = fx.store.db
+      .prepare('SELECT id, account_id, alias, is_default FROM connections WHERE workspace_id = ? ORDER BY account_id')
+      .all(fx.wsId) as Array<{ id: string; account_id: string; alias: string; is_default: number }>
+    assert.equal(connections.length, 2)
+    assert.deepEqual(connections.map((row) => row.account_id), [ACCOUNT, VIEWER])
+    assert.equal(connections.filter((row) => row.is_default === 1).length, 1)
+    assert.ok(connections.every((row) => /^roost_[a-f0-9]{24}$/.test(row.alias)))
+
+    const viewerView = await fx.call('GET', `/api/connectors?workspaceId=${fx.wsId}`, { token: VIEWER_TOKEN })
+    assert.equal(viewerView.status, 200)
+    assert.equal(viewerView.json.connectors[0].isMine, true)
+    assert.equal(viewerView.json.connectors[0].connectionOwner, VIEWER)
+    assert.equal(viewerView.json.connectors[0].connectionCount, 2)
+
+    const ownerView = await fx.call('GET', `/api/connectors?workspaceId=${fx.wsId}`, { token: TOKEN })
+    assert.equal(ownerView.json.connectors[0].connectionOwner, ACCOUNT)
+    assert.equal(ownerView.json.connectors[0].isDefault, true)
+
+    const viewerConnection = connections.find((row) => row.account_id === VIEWER)!
+    const grant = await putGrant(fx, {
+      access: 'read',
+      actions: ['list_issues'],
+      connectionId: viewerConnection.id,
+    })
+    assert.equal(grant.status, 200, JSON.stringify(grant.json))
+    assert.equal(grant.json.grant.connectionId, viewerConnection.id)
+
+    const called = await fx.call('POST', '/api/internal/connectors/call', {
+      body: callBody({ workspaceId: fx.wsId }),
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(called.status, 200, JSON.stringify(called.json))
+    assert.equal(fx.backendCalls.calls.at(-1)?.accountId, VIEWER)
+    assert.equal(fx.backendCalls.calls.at(-1)?.connectionAlias, viewerConnection.alias)
+  })
+})
+
 test('内部调用：runtime token、未连接、无授权、动作不在 allowlist 全拒绝并审计', async () => {
   await withApi(async (fx) => {
     const missing = await fx.call('POST', '/api/internal/connectors/call', { body: callBody({ workspaceId: fx.wsId }) })
@@ -326,6 +399,14 @@ test('内部调用：runtime token、未连接、无授权、动作不在 allowl
     })
     assert.equal(wrong.status, 401)
 
+    const noGrant = await fx.call('POST', '/api/internal/connectors/call', {
+      body: callBody({ workspaceId: fx.wsId }),
+      runtimeToken: RUNTIME_TOKEN,
+    })
+    assert.equal(noGrant.status, 403)
+    assert.equal(noGrant.json.deniedReason, 'no_grant')
+
+    await putGrant(fx, { access: 'read', actions: ['list_issues'] })
     const notConnected = await fx.call('POST', '/api/internal/connectors/call', {
       body: callBody({ workspaceId: fx.wsId }),
       runtimeToken: RUNTIME_TOKEN,
@@ -335,15 +416,6 @@ test('内部调用：runtime token、未连接、无授权、动作不在 allowl
     assert.equal(notConnected.json.deniedReason, 'not_connected')
 
     await connectViaApi(fx)
-
-    const noGrant = await fx.call('POST', '/api/internal/connectors/call', {
-      body: callBody({ workspaceId: fx.wsId }),
-      runtimeToken: RUNTIME_TOKEN,
-    })
-    assert.equal(noGrant.status, 403)
-    assert.equal(noGrant.json.deniedReason, 'no_grant')
-
-    await putGrant(fx, { access: 'read', actions: ['list_issues'] })
     const notAllowed = await fx.call('POST', '/api/internal/connectors/call', {
       body: callBody({ workspaceId: fx.wsId, action: 'create_pr' }),
       runtimeToken: RUNTIME_TOKEN,
@@ -352,7 +424,7 @@ test('内部调用：runtime token、未连接、无授权、动作不在 allowl
     assert.equal(notAllowed.json.deniedReason, 'action_not_granted')
 
     const rows = callsRows(fx.store)
-    assert.deepEqual(rows.map((row) => row.denied_reason), ['not_connected', 'no_grant', 'action_not_granted'])
+    assert.deepEqual(rows.map((row) => row.denied_reason), ['no_grant', 'not_connected', 'action_not_granted'])
     const kinds = connectorKinds(fx.store)
     assert.equal(kinds.filter((kind) => kind === 'connector.call').length, 3)
   })

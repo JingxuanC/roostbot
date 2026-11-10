@@ -1,0 +1,240 @@
+/*
+ * Roost 白色统一主题（2026-11-07）。
+ *
+ * 在 styles-blue.css / styles-grok.css 之后加载：
+ *   - 全局换成白底、浅灰分区、深色正文；
+ *   - 房间保留 Grok 布局，但不再使用黑色外壳；
+ *   - 所有页面共用一套 token，避免“房间黑、其他页面浅蓝”的割裂。
+ *
+ * 单文件覆盖，不改行为；布局仍由 styles-blue / styles-grok 提供。
+ */
+
+:root {
+  --roost-bg: #f5f6f8;
+  --roost-surface: #ffffff;
+  --roost-border: #dfe3e8;
+  --roost-ink: #17191e;
+  --roost-muted: #66707c;
+  --roost-accent: #1f5c86;
+  --roost-ok: #3f7a57;
+  --roost-warn: #a26a1f;
+  --roost-danger: #b23b36;
+
+  --roost-shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --roost-shadow-md: 0 10px 28px rgba(17, 24, 39, 0.09);
+  --roost-shadow-lg: 0 22px 56px rgba(17, 24, 39, 0.14);
+
+  --hover: #eceff3;
+  --hover-surface: #f4f6f8;
+  --accent-weak: rgba(31, 92, 134, 0.12);
+  --on-accent: #ffffff;
+}
+
+html { color-scheme: light; }
+
+body {
+  background: var(--roost-bg);
+  color: var(--roost-ink);
+}
+
+::selection {
+  background: #d8e8f3;
+  color: var(--roost-ink);
+}
+
+/* 非房间页面：白卡片 + 浅灰底，不再用蓝底铺满。 */
+.card,
+.panel,
+.pair-card,
+.auth-card,
+.bot-card,
+.room-card,
+.settings-card,
+.usage-card,
+.marketplace-card {
+  background: var(--roost-surface);
+  border-color: var(--roost-border);
+}
+
+.btn-primary {
+  background: var(--roost-accent);
+  border-color: var(--roost-accent);
+}
+.btn-primary:hover:not(:disabled) {
+  background: #174b70;
+  border-color: #174b70;
+}
+
+/* ---------- 房间：同布局，白色外壳 ---------- */
+#room-view,
+.image-viewer {
+  --bg: #ffffff;
+  --surface: #f3f4f6;
+  --surface-2: #e9edf1;
+  --text: #17191e;
+  --text-2: #66707c;
+  --text-3: #98a1ac;
+  --accent: #1f5c86;
+  --accent-soft: rgba(31, 92, 134, 0.12);
+  --danger: #b23b36;
+  --ok: #3f7a57;
+  --warn: #a26a1f;
+  --hairline: rgba(17, 24, 39, 0.09);
+  background: var(--bg);
+  color: var(--text);
+}
+
+#room-view .sidebar,
+#room-view .main,
+#room-view .room-head,
+#room-view .messages,
+#room-view .composer {
+  background: var(--bg);
+  color: var(--text);
+}
+
+#room-view .sidebar {
+  background: #fafbfc;
+}
+
+#room-view .room-head {
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--hairline);
+}
+
+#room-view .messages {
+  background: #ffffff;
+}
+
+#room-view .room-head-main {
+  background: #f1f3f5;
+}
+
+#room-view .head-icon:active,
+#room-view .card-x:active {
+  background: #e9edf1;
+}
+
+#room-view .home-head .head-icon {
+  background: #f1f3f5;
+}
+
+#room-view .bubble-user {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+#room-view .bubble-bot,
+#room-view .msg-bot .bubble {
+  color: var(--text);
+}
+
+#room-view .opt:hover { background: #f4f6f8; }
+#room-view .opt:active { background: #eceff3; }
+#room-view .opt-letter { border-color: rgba(17, 24, 39, 0.22); }
+
+#room-view .approval-fields {
+  background: #f5f6f8;
+}
+
+#room-view .room-menu {
+  background: #ffffff;
+  border: 1px solid var(--hairline);
+  box-shadow: var(--roost-shadow-md);
+}
+
+#room-view .grok-composer {
+  background: linear-gradient(to top, #ffffff 65%, rgba(255, 255, 255, 0));
+}
+
+#room-view .composer-plus {
+  background: #f1f3f5;
+}
+
+#room-view .composer-pill {
+  background: #f3f4f6;
+}
+
+#room-view .voice-btn {
+  background: #17191e;
+  color: #ffffff;
+}
+
+#room-view .voice-btn:disabled {
+  background: var(--surface);
+  color: var(--text-3);
+}
+
+#room-view .home-row:hover,
+#room-view .home-row:active {
+  background: #f4f6f8;
+}
+
+#room-view .home-dock {
+  background: linear-gradient(to top, #ffffff 70%, rgba(255, 255, 255, 0));
+}
+
+#room-view .room-row[aria-current='true'],
+#room-view .room-row[aria-current='true'] .home-row {
+  background: #eceff3;
+}
+
+#room-view .side-search,
+#room-view .search-pill,
+#room-view .dock-grid {
+  background: #f3f4f6;
+}
+
+#room-view .typing-indicator {
+  background: #f3f4f6;
+}
+
+/* 图片查看也走白色，不再黑屏。 */
+.image-viewer { background: #ffffff; }
+.image-viewer-bar button,
+.image-viewer-actions button span {
+  background: #f1f3f5;
+  color: #17191e;
+}
+.image-viewer-bar h2,
+.image-detail { color: var(--text-2); }
+.image-viewer-actions button { color: var(--text); }
+
+/* 诊断浮层：白底，避免在白色页面里突然出现一块黑。 */
+.trace-panel {
+  background: rgba(255, 255, 255, 0.98);
+  color: #3a414b;
+  border-color: rgba(17, 24, 39, 0.12);
+  box-shadow: 0 12px 40px rgba(17, 24, 39, 0.14);
+}
+.trace-head { border-bottom-color: rgba(17, 24, 39, 0.1); }
+.trace-head button { color: #3a414b; }
+
+@media (min-width: 900px) {
+  #room-view.room {
+    background: #ffffff;
+  }
+
+  #room-view .room-head {
+    background: #ffffff;
+  }
+
+  #room-view .messages {
+    background: #ffffff;
+  }
+}
+
+/* 桌面侧栏品牌区：Bot 入口与“新建房间”加号明确分开，不再放两个加号。 */
+#room-view .brand-bots {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f1f3f5;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+#room-view .brand-bots:hover { background: #e9edf1; color: var(--text); }

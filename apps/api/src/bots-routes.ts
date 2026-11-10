@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { BOT_LIMITS } from '../../../packages/contract/src/index.ts'
 import type { Bot, UpdateBotInput } from '../../../packages/contract/src/index.ts'
+import { isAgentRuntimeKind } from '../../../packages/agent-runtime/src/index.ts'
 import { StoreError } from '../../../packages/store/src/index.ts'
 import {
   authenticate,
@@ -49,6 +50,10 @@ const BOT_EDITABLE_KEYS = [
   'memoryScopes',
   'model',
   'status',
+  'runtimeKind',
+  'runtimeConfig',
+  'credentialRef',
+  'capabilities',
 ] as const
 
 export async function handleListBots(
@@ -128,9 +133,11 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
   if (body['avatar'] !== undefined && !isPlainObject(body['avatar'])) {
     return sendError(res, 400, 'bot.invalid', 'avatar must be an object')
   }
+  const runtime = readRuntimeFields(body, false)
+  if (!runtime.ok) return sendError(res, 400, 'bot.invalid', runtime.message)
 
   try {
-    const bot = await ctx.store.createBot({
+    const created = await ctx.store.createBot({
       accountId: auth.session.accountId,
       workspaceId,
       name,
@@ -144,6 +151,15 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
       ...(body['avatar'] === undefined ? {} : { avatar: body['avatar'] as Bot['avatar'] }),
       now: ctx.now(),
     })
+    // CreateBotPortInput in the API port predates runtime fields (control-plane
+    // scope); the store-adapter's create mapping is explicit. Persist the new
+    // runtime fields through updateBot on the same row so the raw SQLite store is
+    // authoritative immediately after create. A future adapter can pass them
+    // directly; this update is then a no-op.
+    const bot =
+      Object.keys(runtime.patch).length === 0
+        ? created
+        : await ctx.store.updateBot({ accountId: auth.session.accountId, botId: created.id, patch: runtime.patch as UpdateBotInput })
     // 建 Bot 后建 DM 并开一场 kickoff：Bot 先介绍自己、问用户想让它做什么。
     if (ctx.rawStore !== undefined) {
       try {
@@ -153,7 +169,51 @@ export async function handleCreateBot(ctx: BotsRouteContext, req: IncomingMessag
         console.error('roost api: failed to open bot kickoff', error)
       }
     }
-    sendJson(res, 201, { bot })
+    sendJson(res, 201, { bot: publicBot(bot) })
+  } catch (err) {
+    sendBotFailure(res, err)
+  }
+}
+
+export async function handleOpenBotDm(
+  ctx: BotsRouteContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const auth = await authenticate(ctx, req)
+  if (!auth.ok) return sendError(res, auth.status, auth.code, auth.message, { 'www-authenticate': 'Bearer' })
+  const match = /^\/api\/bots\/([^/]+)\/dm$/.exec(url.pathname)
+  let botId = null
+  if (match !== null) {
+    try { botId = decodeURIComponent(match[1]) } catch { botId = null }
+  }
+  if (botId === null || botId === '') return sendError(res, 404, 'not_found', 'malformed bot path')
+  if (ctx.rawStore === undefined) {
+    return sendError(res, 503, 'runtime.not_configured', 'direct messages need the SQLite store')
+  }
+  try {
+    const bot = await ctx.store.getBot({ accountId: auth.session.accountId, botId })
+    if (bot === null) return sendError(res, 404, 'bot.not_found', `unknown bot ${botId}`)
+    const dm = createDmRoom(ctx.rawStore, {
+      workspaceId: bot.workspaceId,
+      botId,
+      createdBy: auth.session.accountId,
+      at: ctx.now(),
+    })
+    sendJson(res, 200, {
+      room: {
+        id: dm.id,
+        workspaceId: dm.workspaceId,
+        name: dm.name,
+        replyMode: dm.replyMode,
+        responder: { kind: 'member', botId },
+        members: [{ botId, role: 'host' }],
+        hostBotId: botId,
+        dm: true,
+        createdAt: dm.createdAt,
+      },
+    })
   } catch (err) {
     sendBotFailure(res, err)
   }
@@ -173,7 +233,7 @@ export async function handleGetBot(
   try {
     const bot = await ctx.store.getBot({ accountId: auth.session.accountId, botId })
     if (bot === null) return sendError(res, 404, 'bot.not_found', `unknown bot ${botId}`)
-    sendJson(res, 200, { bot })
+    sendJson(res, 200, { bot: publicBot(bot) })
   } catch (err) {
     sendBotFailure(res, err)
   }
@@ -197,6 +257,8 @@ export async function handlePatchBot(
     return sendError(res, 400, 'invalid_body', 'request body must be a JSON object')
   }
 
+  const runtime = readRuntimeFields(parsed.value, true)
+  if (!runtime.ok) return sendError(res, 400, 'bot.invalid', runtime.message)
   const patch: Record<string, unknown> = {}
   for (const key of BOT_EDITABLE_KEYS) {
     if (parsed.value[key] !== undefined) patch[key] = parsed.value[key]
@@ -211,7 +273,7 @@ export async function handlePatchBot(
       botId,
       patch: patch as UpdateBotInput,
     })
-    sendJson(res, 200, { bot })
+    sendJson(res, 200, { bot: publicBot(bot) })
   } catch (err) {
     sendBotFailure(res, err)
   }
@@ -272,7 +334,7 @@ async function listBotsInWorkspace(
       accountId,
       ...(workspaceId === undefined ? {} : { workspaceId }),
     })
-    sendJson(res, 200, { bots })
+    sendJson(res, 200, { bots: bots.map(publicBot) })
   } catch (err) {
     sendBotFailure(res, err)
   }
@@ -354,6 +416,98 @@ function authorizeBotWrite(
     return false
   }
   return true
+}
+
+type RuntimeRead =
+  | { ok: true; patch: Record<string, unknown> }
+  | { ok: false; message: string }
+
+const RUNTIME_CONFIG_MAX = 32 * 1024
+const CAPABILITIES_MAX = 64 * 1024
+const CREDENTIAL_REF_MAX = 500
+const SECRET_KEY = /(secret|token|password|passwd|api[_-]?key|apikey|credential|cookie|authorization|private[_-]?key)/i
+
+/**
+ * Runtime fields are validated at the API boundary too (the store repeats it):
+ * runtimeKind must come from packages/agent-runtime; runtimeConfig/capabilities
+ * must be JSON-safe objects; credentialRef is a non-empty opaque reference.
+ * `partial=true` is PATCH: absent fields stay untouched, null clears an optional
+ * field, runtimeKind cannot be cleared.
+ */
+function readRuntimeFields(body: Record<string, unknown>, partial: boolean): RuntimeRead {
+  const patch: Record<string, unknown> = {}
+  if (body['runtimeKind'] !== undefined) {
+    if (!isAgentRuntimeKind(body['runtimeKind'])) {
+      return { ok: false, message: 'runtimeKind must be one of dsh|grok-build|claude-code|codex|hermes' }
+    }
+    patch['runtimeKind'] = body['runtimeKind']
+  }
+  if (body['runtimeConfig'] !== undefined) {
+    if (body['runtimeConfig'] === null) {
+      if (partial) patch['runtimeConfig'] = null
+    } else {
+      const checked = readJsonRecord(body['runtimeConfig'], 'runtimeConfig', RUNTIME_CONFIG_MAX)
+      if (!checked.ok) return checked
+      patch['runtimeConfig'] = checked.value
+    }
+  }
+  if (body['credentialRef'] !== undefined) {
+    if (body['credentialRef'] === null) {
+      if (partial) patch['credentialRef'] = null
+    } else {
+      if (typeof body['credentialRef'] !== 'string') return { ok: false, message: 'credentialRef must be a string' }
+      const ref = body['credentialRef'].trim()
+      if (ref === '' || ref.length > CREDENTIAL_REF_MAX) {
+        return { ok: false, message: `credentialRef must be 1..${CREDENTIAL_REF_MAX} characters` }
+      }
+      if (/[\u0000-\u001f\u007f]/.test(ref)) return { ok: false, message: 'credentialRef contains control characters' }
+      patch['credentialRef'] = ref
+    }
+  }
+  if (body['capabilities'] !== undefined) {
+    if (body['capabilities'] === null) {
+      if (partial) patch['capabilities'] = null
+    } else {
+      const checked = readJsonRecord(body['capabilities'], 'capabilities', CAPABILITIES_MAX)
+      if (!checked.ok) return checked
+      patch['capabilities'] = checked.value
+    }
+  }
+  return { ok: true, patch }
+}
+
+function readJsonRecord(
+  value: unknown,
+  label: string,
+  maxBytes: number,
+): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
+  if (!isPlainObject(value)) return { ok: false, message: `${label} must be a JSON object` }
+  let encoded: string
+  try {
+    encoded = JSON.stringify(value)
+  } catch {
+    return { ok: false, message: `${label} must be JSON-serializable` }
+  }
+  if (encoded.length > maxBytes) return { ok: false, message: `${label} is too large (max ${maxBytes} bytes)` }
+  return { ok: true, value: value as Record<string, unknown> }
+}
+
+/** Never return secret material in runtimeConfig/capabilities. */
+function publicBot(bot: Bot): Bot {
+  const copy: Bot = { ...bot }
+  if (copy.runtimeConfig !== undefined) copy.runtimeConfig = redact(copy.runtimeConfig) as Bot['runtimeConfig']
+  if (copy.capabilities !== undefined) copy.capabilities = redact(copy.capabilities) as Bot['capabilities']
+  return copy
+}
+
+function redact(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redact)
+  if (value === null || typeof value !== 'object') return value
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = SECRET_KEY.test(key) ? '[redacted]' : redact(item)
+  }
+  return out
 }
 
 function sendBotFailure(res: ServerResponse, err: unknown): void {

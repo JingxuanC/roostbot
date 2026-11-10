@@ -19,7 +19,7 @@ import { renderAttachmentList, resetAttachmentUrls } from './lib/attachments.js'
 import { GLYPH_FAMILIES, PALETTES, glyphSvg, hashId, specFor } from './lib/glyph.js'
 import { createApiClient, isAuthError } from './lib/api-client.js'
 import { resolveApiBase } from './lib/api-base.js'
-import { isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
+import { csrfHeaders, csrfTokenFromCookie, isAuthRouteName, pendingRouteAfter } from './lib/auth-flow.js'
 import {
   clearSessionToken,
   readLastRoom,
@@ -47,13 +47,14 @@ import {
 } from './lib/rooms.js'
 import * as ui from './lib/ui.js'
 import { mountApprovalsPage } from './views/approvals.js'
-import { mountBotSettingsPage, mountBotsPage } from './views/bots.js'
+import { mountBotSettingsPage, mountBotsPage } from './views/bots.js?v=20261107d'
 import { mountNewRoomPage, mountRoomSettingsPage } from './views/rooms.js'
 import { mountPanelsPage } from './views/panels.js'
 import { mountMarketplacePage } from './views/marketplace.js'
 import { mountConnectorsPage } from './views/connectors.js'
 import { mountPluginsPage } from './views/plugins.js'
 import { mountSchedulesPage } from './views/schedules.js'
+import { mountRoutinesPage } from './views/routines.js'
 import { mountSettingsPage } from './views/settings.js'
 import { mountUsagePage } from './views/usage.js'
 import { mountInstallsPage } from './views/installs.js'
@@ -406,7 +407,7 @@ function renderSidebarRooms() {
   const list = $('#room-list')
   if (!list) return
   list.replaceChildren()
-  if (!LIVE.active) {
+  if (!LIVE.active && !STORE.roomsLoaded) {
     const row = el('li', { class: 'room-row room-row-empty' })
     row.append(el('span', { class: 'muted', text: '登录后显示房间' }))
     list.append(row)
@@ -418,19 +419,10 @@ function renderSidebarRooms() {
     list.append(row)
     return
   }
-  for (const room of STORE.rooms) {
-    const current = room.id === LIVE.roomId
+  for (const entry of conversationEntries()) {
+    const current = entry.room !== null && entry.room.id === LIVE.roomId
     const row = el('li', { class: 'room-row', 'aria-current': current ? 'true' : null })
-    const link = el('a', { class: 'room-link', href: `#/rooms/${encodeURIComponent(room.id)}` })
-    link.append(el('span', { class: 'room-mark', 'aria-hidden': 'true' }))
-    const flock = roomFlock(room, 26)
-    if (flock) link.append(flock)
-    link.append(el('span', { class: 'room-name-text', text: room.name || '未命名房间' }))
-    const origin = roomOriginLabel(room)
-    if (origin !== '') {
-      link.append(el('span', { class: 'room-origin', text: origin, title: roomOriginTitle(room) }))
-    }
-    row.append(link)
+    row.append(renderChatRow(entry))
     list.append(row)
   }
 }
@@ -438,7 +430,7 @@ function renderSidebarRooms() {
 /** Bot 名字/角色：真实列表优先，样例兜底，最后才是成员名；绝不显示内部 id。 */
 function botIdentity(id) {
   const stored = STORE.bots.find((bot) => bot.id === id)
-  if (stored) return { name: stored.name || 'Bot', role: stored.role || '' }
+  if (stored) return { name: stored.name || 'Bot', role: stored.role || '', runtimeKind: stored.runtimeKind || '' }
   const sample = BOTS[id]
   if (sample) return { name: sample.name, role: sample.role }
   const member = LIVE.room ? roomMembers(LIVE.room).find((item) => item.botId === id) : null
@@ -449,41 +441,338 @@ function botLabel(id) {
   return botIdentity(id).name
 }
 
+/** Full Bot shape for an avatar, including runtimeKind when the list has it. */
+function botForAvatar(id) {
+  const stored = STORE.bots.find((bot) => bot.id === id)
+  if (stored) return stored
+  const identity = botIdentity(id)
+  return { id, name: identity.name, role: identity.role, runtimeKind: identity.runtimeKind }
+}
+
 /** 附件渲染上下文：只有实时房间才画附件区；预览模式没有后端。 */
 function attachmentContext() {
   return { live: LIVE.active, api, requirePair }
 }
 
-/** 用户气泡：主色、右对齐，绝不和 Bot 消息混淆（messaging.md §14）。 */
+/** 用户气泡：灰色胶囊，右对齐。 */
 function renderUserMessage(event) {
   const payload = event.payload
   const row = el('div', { class: 'msg msg-user' })
   const body = el('div', { class: 'msg-user-body' })
   body.append(el('span', { class: 'sr-only', text: '你：' }))
-  const bubble = el('div', { class: 'bubble bubble-user' })
-  bubble.append(markdownFragment(payload.text))
-  body.append(bubble)
-  const attachments = renderAttachmentList(payload.attachments, attachmentContext())
-  if (attachments) body.append(attachments)
+  if (typeof payload.text === 'string' && payload.text.trim() !== '') {
+    const bubble = el('div', { class: 'bubble bubble-user' })
+    bubble.append(markdownFragment(payload.text))
+    body.append(bubble)
+  }
+  appendRichParts(body, event, true)
+  if (!hasImagePart(payload)) {
+    const attachments = renderAttachmentList(payload.attachments, attachmentContext())
+    if (attachments) body.append(attachments)
+  }
   row.append(body)
   return row
 }
 
-/** 房间里的 Bot 消息：中性底，气泡上方「头像 名字 · 角色」，没有标签行。 */
+/** Resolve `@name` mentions of current room members to Bot ids. */
+function mentionedBotIds(text, exceptId) {
+  const source = typeof text === 'string' ? text : ''
+  if (source === '') return []
+  const ids = []
+  for (const member of roomMembers(LIVE.room)) {
+    const id = member.botId
+    if (!id || id === exceptId) continue
+    const name = member.name || botLabel(id)
+    if (name && source.includes(`@${name}`)) ids.push(id)
+  }
+  return ids
+}
+
+function botNameById(id) {
+  return STORE.bots.find((bot) => bot.id === id)?.name || botLabel(id)
+}
+
+/** A compact transcript of the handoffs between two Bots in this room. */
+function openExchangeDialog(leftId, rightId) {
+  if (!LIVE.active || typeof leftId !== 'string' || typeof rightId !== 'string' || leftId === rightId) return
+  document.querySelector('.exchange-overlay')?.remove()
+  const overlay = el('div', { class: 'exchange-overlay', role: 'presentation' })
+  const dialog = el('section', { class: 'exchange-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bot 对话' })
+  const head = el('header', { class: 'exchange-head' })
+  const left = el('span', { class: 'exchange-who' })
+  left.append(botAvatar(botForAvatar(leftId), 22, { round: true }))
+  left.append(el('span', { text: botNameById(leftId) }))
+  const right = el('span', { class: 'exchange-who' })
+  right.append(botAvatar(botForAvatar(rightId), 22, { round: true }))
+  right.append(el('span', { text: botNameById(rightId) }))
+  head.append(left, el('span', { class: 'exchange-swap', 'aria-hidden': 'true', text: '⇄' }), right)
+  const close = el('button', { class: 'exchange-close', type: 'button', 'aria-label': '关闭', text: '×' })
+  head.append(close)
+
+  const log = el('div', { class: 'exchange-log' })
+  const entries = ROOM.events.filter((item) => {
+    if (!item || item.domain !== 'chat' || !item.actor || item.actor.kind !== 'bot') return false
+    const text = item.payload && typeof item.payload.text === 'string' ? item.payload.text : ''
+    if (item.actor.id === leftId && mentionedBotIds(text, leftId).includes(rightId)) return true
+    if (item.actor.id === rightId && mentionedBotIds(text, rightId).includes(leftId)) return true
+    return false
+  })
+  if (entries.length === 0) {
+    log.append(el('p', { class: 'exchange-empty', text: '这两个 Bot 还没有直接交接。' }))
+  } else {
+    for (const item of entries) {
+      const row = el('div', { class: 'exchange-line' })
+      row.append(botAvatar(botForAvatar(item.actor.id), 20, { round: true }))
+      const body = el('div', { class: 'exchange-body' })
+      body.append(el('strong', { text: botNameById(item.actor.id) }))
+      const text = item.payload && typeof item.payload.text === 'string' ? item.payload.text : ''
+      const p = el('div', { class: 'exchange-text' })
+      p.append(markdownFragment(text))
+      body.append(p)
+      row.append(body)
+      log.append(row)
+    }
+  }
+  const foot = el('footer', { class: 'exchange-foot' })
+  const dm = el('button', { class: 'btn btn-quiet', type: 'button', text: '打开右侧 Bot 私聊' })
+  dm.addEventListener('click', () => {
+    overlay.remove()
+    void openBotDm(rightId).catch(() => {})
+  })
+  foot.append(dm)
+  close.addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove() })
+  document.addEventListener('keydown', function onEscape(event) {
+    if (event.key !== 'Escape') return
+    document.removeEventListener('keydown', onEscape)
+    overlay.remove()
+  })
+  dialog.append(head, log, foot)
+  overlay.append(dialog)
+  document.body.append(overlay)
+  close.focus()
+}
+
+/** 房间里的 Bot 消息：圆头像 + 名字，正文不套气泡。 */
 function renderRoomMessage(event) {
   const bot = botIdentity(event.actor.id)
-  const article = el('article', { class: 'msg msg-bot' })
+  const primary = LIVE.room && LIVE.room.hostBotId === event.actor.id
+  const article = el('article', { class: primary ? 'msg msg-bot is-primary' : 'msg msg-bot' })
   const head = el('header', { class: 'msg-head' })
-  head.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 24))
-  head.append(el('span', { class: 'msg-name', text: bot.name }))
-  if (bot.role) head.append(el('span', { class: 'msg-role', text: bot.role }))
+  const headButton = el('button', { class: 'msg-head-button', type: 'button', title: `打开 ${bot.name} 的私聊` })
+  headButton.append(botAvatar({ ...bot, id: event.actor.id }, 28, { round: true, primary }))
+  headButton.append(el('span', { class: 'msg-name', text: bot.name }))
+  headButton.addEventListener('click', () => void openBotDm(event.actor.id).catch(() => {}))
+  head.append(headButton)
   article.append(head)
+  const text = typeof event.payload.text === 'string' ? event.payload.text.trim() : ''
+  const targets = mentionedBotIds(text, event.actor.id)
+  if (targets.length > 0) {
+    const handoff = el('button', { class: 'msg-handoff', type: 'button', title: '查看两个 Bot 的交接' })
+    handoff.append(el('span', { text: bot.name }))
+    handoff.append(el('span', { class: 'handoff-swap', 'aria-hidden': 'true', text: '⇄' }))
+    handoff.append(el('span', { text: botNameById(targets[0]) }))
+    handoff.addEventListener('click', () => openExchangeDialog(event.actor.id, targets[0]))
+    article.append(handoff)
+  }
   const bubble = el('div', { class: 'bubble bubble-bot' })
-  bubble.append(markdownFragment(event.payload.text))
-  article.append(bubble)
-  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
-  if (attachments) article.append(attachments)
+  const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
+  const titles = cardTitles(parts)
+  if (text !== '' && !titles.includes(text)) bubble.append(markdownFragment(event.payload.text))
+  if (bubble.childNodes.length > 0) article.append(bubble)
+  appendRichParts(article, event, false)
+  if (!hasImagePart(event.payload)) {
+    const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+    if (attachments) article.append(attachments)
+  }
   return article
+}
+
+const CHOICE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+/** 卡片标题已经画在卡片上。正文如果只是同一句话，就不再画一条气泡。 */
+function cardTitles(parts) {
+  const titles = []
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    if (typeof part.title === 'string' && part.title.trim() !== '') titles.push(part.title.trim())
+    if (typeof part.prompt === 'string' && part.prompt.trim() !== '') titles.push(part.prompt.trim())
+  }
+  return titles
+}
+
+function hasImagePart(payload) {
+  return Array.isArray(payload?.parts) && payload.parts.some((part) => part && part.type === 'image')
+}
+
+function appendRichParts(parent, event, fromUser) {
+  const parts = Array.isArray(event.payload.parts) ? event.payload.parts : []
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    if (part.type === 'image' && !fromUser) parent.append(renderImagePart(part, event))
+    if (part.type === 'image' && fromUser) parent.append(renderImagePart(part, event))
+    if (part.type === 'choice' && !fromUser) parent.append(renderChoicePart(part))
+    if (part.type === 'approval' && !fromUser) parent.append(renderApprovalPart(part))
+    if (part.type === 'tool') {
+      parent.append(el('p', { class: 'muted', text: `工具 ${part.name || ''}${part.summary ? ' · ' + part.summary : ''}` }))
+    }
+  }
+  if (fromUser) {
+    const shown = new Set(parts.filter((part) => part && part.type === 'image').map((part) => part.artifactId))
+    const images = (event.payload.attachments || []).filter((item) => item && (String(item.mime || item.kind || '').includes('image') || item.kind === 'image'))
+    for (const item of images) {
+      if (shown.has(item.artifactId)) continue
+      parent.append(renderImagePart({ artifactId: item.artifactId, name: item.name, url: item.url }, event))
+    }
+  }
+}
+
+function attachmentUrl(event, artifactId, part) {
+  if (part && typeof part.url === 'string' && part.url !== '') return part.url
+  const list = Array.isArray(event.payload.attachments) ? event.payload.attachments : []
+  const found = list.find((item) => item && item.artifactId === artifactId)
+  if (found && typeof found.url === 'string' && found.url !== '') return found.url
+  if (event.seq) return `/api/messages/${encodeURIComponent(String(event.seq))}/files/${encodeURIComponent(artifactId)}`
+  return ''
+}
+
+function renderImagePart(part, event) {
+  const src = attachmentUrl(event, part.artifactId, part)
+  const card = el('button', { class: 'img-card', type: 'button' })
+  const img = el('img', { alt: part.name || '图片' })
+  card.append(img)
+  const caption = typeof part.caption === 'string' ? part.caption.trim() : ''
+  if (caption !== '') card.append(el('span', { class: 'cap', text: caption }))
+  const title = part.name || '图片'
+  const open = () => openImageViewer({ src: img.src || src, title, detail: part.artifactId || '' })
+  card.addEventListener('click', open)
+  const signed = typeof src === 'string' && src.includes('token=')
+  if (src && LIVE.token && src.startsWith('/api/') && !signed) {
+    fetch(src, { headers: { authorization: `Bearer ${LIVE.token}` } })
+      .then((response) => (response.ok ? response.blob() : Promise.reject(new Error('image'))))
+      .then((blob) => {
+        img.src = URL.createObjectURL(blob)
+      })
+      .catch(() => {
+        img.alt = '图片加载失败'
+      })
+  } else if (src) {
+    img.src = src
+  }
+  return card
+}
+
+function renderChoicePart(part) {
+  const card = el('div', { class: 'card choice-card' })
+  const head = el('div', { class: 'card-head' })
+  head.append(el('div', { class: 'card-title', text: part.prompt || '' }))
+  const close = el('button', { type: 'button', class: 'card-x', 'aria-label': '关闭', text: '✕' })
+  close.addEventListener('click', () => { card.hidden = true })
+  head.append(close)
+  card.append(head)
+  const options = Array.isArray(part.options) ? part.options : []
+  const answered = Boolean(part.selectedOptionId)
+  options.forEach((option, index) => {
+    const selected = answered && part.selectedOptionId === option.id
+    const button = el('button', { type: 'button', class: selected ? 'opt selected' : 'opt' })
+    const letter = CHOICE_LETTERS[index] || String(index + 1)
+    button.append(el('span', { class: 'opt-letter', text: letter }))
+    button.append(el('span', { text: option.label || option.id }))
+    if (answered) button.disabled = true
+    button.addEventListener('click', () => {
+      void answerChoice(part.cardId, option.id, button)
+    })
+    card.append(button)
+  })
+  if (answered) {
+    const index = options.findIndex((option) => option.id === part.selectedOptionId)
+    const chosen = options[index]
+    const letter = CHOICE_LETTERS[index] || ''
+    card.append(el('p', { class: 'choice-status', text: `已选 ${letter}${chosen ? ' · ' + (chosen.label || chosen.id) : ''}` }))
+  }
+  return card
+}
+
+function renderApprovalPart(part) {
+  const resolved = part.status === 'approved' || part.status === 'rejected'
+  const card = el('div', { class: resolved ? 'card approval-card is-resolved' : 'card approval-card' })
+  const head = el('div', { class: 'card-head' })
+  head.append(el('div', { class: 'card-title', text: part.title || part.action || '需要你确认' }))
+  const close = el('button', { type: 'button', class: 'card-x', 'aria-label': '关闭', text: '✕' })
+  if (resolved) close.disabled = true
+  else close.addEventListener('click', () => { card.hidden = true })
+  head.append(close)
+  card.append(head)
+  if (part.consequence) card.append(el('p', { class: 'approval-meta', text: part.consequence }))
+  if (part.target) {
+    const fields = el('div', { class: 'approval-fields' })
+    const row = el('div', { class: 'row' })
+    row.append(el('span', { class: 'k', text: '对象' }))
+    row.append(el('span', { class: 'v', text: part.target }))
+    fields.append(row)
+    card.append(fields)
+  }
+  if (resolved) {
+    const line = el('p', {
+      class: part.status === 'approved' ? 'resolved' : 'resolved denied',
+      text: part.status === 'approved' ? '✓ 已允许' : '✕ 已拒绝',
+    })
+    card.append(line)
+    return card
+  }
+  const actions = el('div', { class: 'approval-actions' })
+  const deny = el('button', { type: 'button', class: 'btn-deny', text: '拒绝' })
+  const allow = el('button', { type: 'button', class: 'btn-approve', text: '允许这一次' })
+  deny.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'rejected') })
+  allow.addEventListener('click', () => { void decideApprovalCard(part.approvalId, 'approved') })
+  actions.append(deny, allow)
+  card.append(actions)
+  return card
+}
+
+async function answerChoice(cardId, optionId, button) {
+  if (!LIVE.active || !LIVE.roomId || !cardId) return
+  button.disabled = true
+  try {
+    await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/cards/${encodeURIComponent(cardId)}/answer`, { optionId })
+    await refreshMessages()
+  } catch (error) {
+    button.disabled = false
+    showComposerError(error instanceof Error ? error.message : '没能提交选项')
+  }
+}
+
+async function decideApprovalCard(approvalId, decision) {
+  if (!approvalId) return
+  try {
+    await api.post(`/api/approvals/${encodeURIComponent(approvalId)}`, { decision })
+    await refreshMessages()
+  } catch (error) {
+    showComposerError(error instanceof Error ? error.message : '没能提交决定')
+  }
+}
+
+function openImageViewer(info) {
+  const viewer = $('#image-viewer')
+  const img = $('#image-viewer-img')
+  const title = $('#image-viewer-title')
+  const detail = $('#image-detail-text')
+  if (!viewer || !img) return
+  img.src = info.src
+  img.alt = info.title || '图片'
+  if (title) title.textContent = info.title || '图片'
+  if (detail) {
+    detail.hidden = true
+    detail.textContent = info.detail || ''
+  }
+  viewer.hidden = false
+  viewer.dataset.src = info.src
+  viewer.dataset.title = info.title || '图片'
+}
+
+function closeImageViewer() {
+  const viewer = $('#image-viewer')
+  if (viewer) viewer.hidden = true
 }
 
 /**
@@ -498,7 +787,7 @@ function collapsedByDefault(delivery) {
 function renderPeerMessage(event, delivery) {
   const bot = botIdentity(event.actor.id)
   const text = event.payload.text
-  const summary = text.length > PEER_SUMMARY_CHARS ? `${text.slice(0, PEER_SUMMARY_CHARS)}…` : text
+  const summary = text.length > PEER_SUMMARY_CHARS ? `${text.slice(0, PEER_SUMMARY_CHARS)}…` : (text || (hasImagePart(event.payload) ? '图片' : ''))
   const bodyId = `peer-${event.seq}`
   const verb = PEER_VERBS[delivery] || ''
 
@@ -510,7 +799,7 @@ function renderPeerMessage(event, delivery) {
   })
   const chev = el('span', { class: 'chev', 'aria-hidden': 'true', text: '▸' })
   toggle.append(chev)
-  toggle.append(botAvatar({ id: event.actor.id, name: bot.name, role: bot.role }, 16))
+  toggle.append(botAvatar({ ...bot, id: event.actor.id }, 16))
   toggle.append(el('span', { class: 'peer-name', text: event.peer.from || bot.name }))
   if (verb) toggle.append(el('span', { class: 'peer-verb', text: ` · ${verb}` }))
   toggle.append(el('span', { class: 'peer-summary', text: ` · ${summary}` }))
@@ -520,16 +809,34 @@ function renderPeerMessage(event, delivery) {
   const peerText = el('div', { class: 'peer-text' })
   peerText.append(markdownFragment(text))
   body.append(peerText)
-  const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
-  if (attachments) body.append(attachments)
+  // DM/私聊的正文默认折叠；图片、选项卡和审批卡也要进折叠体，
+  // 否则图片消息只显示一行空摘要。
+  appendRichParts(body, event, false)
+  if (!hasImagePart(event.payload)) {
+    const attachments = renderAttachmentList(event.payload.attachments, attachmentContext())
+    if (attachments) body.append(attachments)
+  }
   const meta = []
   if (event.peer.source) meta.push(`来源：${event.peer.source}`)
   if (event.peer.doneWhen) meta.push(`完成条件：${event.peer.doneWhen}`)
   if (event.peer.reason) meta.push(`为什么现在说话：${event.peer.reason}`)
   if (meta.length) body.append(el('p', { class: 'peer-meta', text: meta.join(' · ') }))
 
+  const targetName = typeof event.peer.from === 'string' ? event.peer.from : ''
+  const target = targetName === '' ? null : STORE.bots.find((item) => item.name === targetName) || null
+  const open = el('button', {
+    class: 'peer-open',
+    type: 'button',
+    'aria-label': '打开消息对话',
+    text: '打开对话',
+  })
+  open.addEventListener('click', (event_) => {
+    event_.stopPropagation()
+    if (target) openExchangeDialog(event.actor.id, target.id)
+    else void openBotDm(event.actor.id).catch(() => {})
+  })
   const article = el('article', { class: 'msg msg-peer' })
-  article.append(toggle, body)
+  article.append(toggle, open, body)
 
   toggle.addEventListener('click', () => {
     const open = toggle.getAttribute('aria-expanded') !== 'true'
@@ -774,144 +1081,6 @@ async function serverMessage(response) {
   return `配对失败（HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}）`
 }
 
-function setupPairing() {
-  const form = $('#pair-form')
-  const boxes = Array.from(document.querySelectorAll('.code-digit'))
-  const error = $('#pair-error')
-  const submit = $('#pair-submit')
-  const note = $('#api-note')
-
-  note.textContent = API_BASE ? `API：${API_BASE}` : 'API：同源（?api=http://127.0.0.1:8787 可指定）'
-
-  const code = () => boxes.map((box) => box.value).join('')
-  const focusBox = (index) => {
-    const target = boxes[Math.max(0, Math.min(boxes.length - 1, index))]
-    if (target) target.focus()
-  }
-  const clearError = () => {
-    error.hidden = true
-    error.textContent = ''
-    ui.setFieldInvalid(boxes, false, error)
-  }
-  const showError = (message) => {
-    error.textContent = message
-    error.hidden = false
-    // 错误作用于整组配对码：六个输入都标红，读屏读到一致的原因。
-    ui.setFieldInvalid(boxes, true, error)
-  }
-  const setBusy = (busy) => {
-    submit.disabled = busy
-    submit.textContent = busy ? '配对中…' : '配对'
-    form.setAttribute('aria-busy', String(busy))
-  }
-
-  boxes.forEach((box, index) => {
-    box.addEventListener('focus', () => box.select())
-    box.addEventListener('input', () => {
-      clearError()
-      const digits = box.value.replace(/\D/g, '')
-      box.value = ''
-      if (!digits) return
-      let cursor = index
-      for (const digit of digits) {
-        if (cursor >= boxes.length) break
-        boxes[cursor].value = digit
-        cursor += 1
-      }
-      focusBox(cursor)
-    })
-    box.addEventListener('keydown', (event) => {
-      if (event.key === 'Backspace') {
-        event.preventDefault()
-        clearError()
-        if (box.value) {
-          box.value = ''
-        } else if (index > 0) {
-          boxes[index - 1].value = ''
-          focusBox(index - 1)
-        }
-      } else if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        focusBox(index - 1)
-      } else if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        focusBox(index + 1)
-      }
-    })
-    box.addEventListener('paste', (event) => {
-      const pasted = (event.clipboardData && event.clipboardData.getData('text')) || ''
-      const digits = pasted.replace(/\D/g, '').slice(0, boxes.length)
-      if (!digits) return
-      event.preventDefault()
-      clearError()
-      for (const target of boxes) target.value = ''
-      digits.split('').forEach((digit, offset) => {
-        boxes[offset].value = digit
-      })
-      focusBox(digits.length)
-    })
-  })
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault()
-    const value = code()
-    if (value.length !== boxes.length) {
-      showError(`请输入 ${boxes.length} 位数字`)
-      focusBox(boxes.findIndex((box) => !box.value))
-      return
-    }
-
-    clearError()
-    setBusy(true)
-    try {
-      const response = await fetch(API_BASE ? `${API_BASE}/api/pairing/claim` : '/api/pairing/claim', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: value }),
-      })
-
-      if (!response.ok) {
-        // 服务端的 message 原样显示（auth.md §8 的失败话术由服务端给）。
-        showError(await serverMessage(response))
-        return
-      }
-
-      let body = null
-      try {
-        body = await response.json()
-      } catch {
-        // 204 或空 body 也算成功
-      }
-      // 会话正常情况下在 HttpOnly cookie 里，前端看不到；真返回了 token 也只在内存。
-      const token = body && (body.token || body.sessionToken || (body.session && body.session.token))
-      if (typeof token === 'string' && token) {
-        sessionToken = token
-        writeSessionToken(token)
-      }
-
-      try {
-        await enterLiveRoom(token)
-      } catch (cause) {
-        const reason = cause instanceof Error ? cause.message : String(cause)
-        showError(`配对成功，但房间没载入（${reason}）。可以点「预览房间」，或稍后刷新重试。`)
-      }
-    } catch (cause) {
-      // fetch 本身失败（没服务、file://、CORS）——把原因摊开说，不假装成功。
-      const reason = cause instanceof Error ? cause.message : String(cause)
-      showError(`连不上 API（${reason}）。检查控制面是否在跑，或用 ?api= 指定地址；也可以先「预览房间」。`)
-    } finally {
-      setBusy(false)
-    }
-  })
-
-  const preview = $('#preview-btn')
-  preview.addEventListener('click', () => {
-    if (location.hash === '#room') renderRoute()
-    else navigate('#room')
-  })
-}
-
 
 // ---------------------------------------------------------------------------
 // 四、状态、API 客户端与会话
@@ -938,6 +1107,72 @@ const LIVE = {
   // 房间日志裁剪投影（rooms.md §3）：首看 12 条，before 向前翻到 60 条。
   logHasMore: false,
   logBefore: null,
+}
+
+// 轻量端到端 trace：?trace=1 打开面板，记录发送 → 服务端确认 → SSE → 首 token/首条 Bot 消息。
+const TRACE = {
+  enabled: (() => {
+    try { return new URLSearchParams(location.search).has('trace') || localStorage.getItem('roostTrace') === '1' } catch { return false }
+  })(),
+  id: '',
+  startedAt: 0,
+  marks: [],
+  spans: [],
+}
+
+function traceReset() {
+  TRACE.id = ''
+  TRACE.startedAt = 0
+  TRACE.marks = []
+  TRACE.spans = []
+}
+
+function traceMark(name, detail) {
+  if (!TRACE.enabled) return
+  const now = performance.now()
+  if (TRACE.startedAt === 0) TRACE.startedAt = now
+  TRACE.marks.push({ name, ms: now - TRACE.startedAt, detail: detail === undefined ? '' : String(detail) })
+  renderTracePanel()
+}
+
+async function traceFetchSpans() {
+  if (!TRACE.enabled) return
+  try {
+    const data = await api.get('/api/debug/traces?limit=40')
+    TRACE.spans = Array.isArray(data?.spans) ? data.spans : []
+    renderTracePanel()
+  } catch {
+    // trace 只是诊断，不能影响聊天。
+  }
+}
+
+function renderTracePanel() {
+  if (!TRACE.enabled) return
+  let panel = document.getElementById('trace-panel')
+  if (panel === null) {
+    panel = document.createElement('aside')
+    panel.id = 'trace-panel'
+    panel.className = 'trace-panel'
+    document.body.append(panel)
+  }
+  const lines = []
+  for (const mark of TRACE.marks) lines.push(`${mark.ms.toFixed(0).padStart(5)}ms  ${mark.name}${mark.detail ? `  ${mark.detail}` : ''}`)
+  const recent = TRACE.spans.slice(-12)
+  if (recent.length > 0) {
+    lines.push('')
+    lines.push('server spans')
+    for (const span of recent) {
+      const attrs = span.attrs || {}
+      lines.push(`${String(span.durationMs).padStart(5)}ms  ${attrs.method || ''} ${attrs.path || span.name}  ${attrs.status || ''}`)
+    }
+  }
+  panel.replaceChildren(
+    el('div', { class: 'trace-head' }, [
+      el('strong', { text: `trace ${TRACE.id || '—'}` }),
+      el('button', { type: 'button', text: '关闭', onclick: () => { TRACE.enabled = false; panel.remove() } }),
+    ]),
+    el('pre', { class: 'trace-body', text: lines.join('\n') || '等待发送…' }),
+  )
 }
 
 const STORE = {
@@ -1044,7 +1279,7 @@ function requirePair(message = '') {
   resetApprovalNotifyState()
   authNotice =
     message ||
-    '会话已失效或还没登录。登录成功后会回到刚才的页面；也可以用配对码登录。'
+    '会话已失效或还没登录。登录成功后会回到刚才的页面。'
   navigate('#/login')
   setTitle('登录')
 }
@@ -1109,6 +1344,21 @@ async function loadBots(options = {}) {
   }
 }
 
+/** Open (or create) the private room for one Bot, then enter it. */
+async function openBotDm(botId) {
+  if (typeof botId !== 'string' || botId === '') throw new Error('unknown bot')
+  const data = await api.post(`/api/bots/${encodeURIComponent(botId)}/dm`, {})
+  const room = data && data.room ? data.room : null
+  if (!room || typeof room.id !== 'string' || room.id === '') throw new Error('私聊房间创建失败')
+  try {
+    await loadRooms({ force: true })
+  } catch {
+    // 侧栏刷新失败不影响打开 DM。
+  }
+  navigate(`#/rooms/${encodeURIComponent(room.id)}`)
+  return room
+}
+
 function normalizeRoom(payload) {
   const room = payload && typeof payload === 'object' && payload.room ? payload.room : payload
   if (!room || typeof room !== 'object') return null
@@ -1170,6 +1420,7 @@ function pageContext() {
     loadBots,
     loadRooms,
     loadRoom,
+    openBotDm,
     requirePair,
     hasToken,
     authState: () => authState,
@@ -1318,11 +1569,9 @@ function updatePageBackLink() {
 }
 
 function showView(name) {
-  const pair = $('#pair-view')
   const auth = $('#auth-view')
   const room = $('#room-view')
   const page = $('#page-view')
-  if (pair) pair.hidden = name !== 'pair'
   if (auth) auth.hidden = name !== 'auth'
   if (room) room.hidden = name !== 'room'
   if (page) page.hidden = name !== 'page'
@@ -1330,13 +1579,6 @@ function showView(name) {
   document.body.dataset.view = name
 }
 
-function focusPairCode() {
-  const pair = $('#pair-view')
-  if (!pair) return
-  if (pair.contains(document.activeElement)) return
-  const firstEmpty = Array.from(document.querySelectorAll('.code-digit')).find((box) => box.value === '') || $('.code-digit')
-  if (firstEmpty) firstEmpty.focus()
-}
 
 function renderNotFound(main) {
   const hash = location.hash || '#/'
@@ -1358,7 +1600,7 @@ function renderWorkspaceMismatch(main, workspaceId) {
       title: '工作区不匹配',
       body: `链接里的工作区 ${workspaceId || '（空）'} 不属于当前账号。为免把内容误跳到别的工作区，这里不自动打开。`,
       action: ui.linkButton('回到当前工作区', '#/bots', { variant: 'primary' }),
-      secondary: ui.linkButton('去配对', '#/', { variant: 'ghost' }),
+      secondary: ui.linkButton('去登录', '#/login', { variant: 'ghost' }),
     })
   )
 }
@@ -1433,9 +1675,17 @@ async function renderRoute() {
   const route = routeMatch(location.hash)
   // 离开房间页就断开 SSE 并清掉重连定时器，别在后台一直收消息/重连。
   if (route.name !== 'room') stopStream()
+  const roomView = $('#room-view')
+  if (roomView) roomView.classList.toggle('is-home', route.name === 'home')
 
   if (isAuthRouteName(route.name)) {
     await ensureAuthProbe()
+    // 刷新时 URL 还停在 #/login，但 cookie 会话已经有效：直接回到工作区，
+    // 不再让用户每次刷新都点一次「进入工作区」。
+    if (route.name === 'login' && authState.status === 'authenticated') {
+      await enterLiveRoom('')
+      return
+    }
     const authMain = $('#auth-main')
     if (!authMain) return
     showView('auth')
@@ -1468,17 +1718,9 @@ async function renderRoute() {
     return
   }
 
-  if (route.name === 'pair') {
-    showView('pair')
-    setTitle('配对')
-    focusPairCode()
-    return
-  }
-
   // cookie 模式下先问一次 /api/auth/me；账号接口未上线（unavailable）时不拦截，保留旧配对流程。
   await ensureAuthProbe()
-  const previewRoom = route.name === 'room' && route.params.id === null
-  if (!previewRoom && !hasToken() && authState.available) {
+  if (!hasToken()) {
     requirePair()
     return
   }
@@ -1489,6 +1731,12 @@ async function renderRoute() {
     route.name === 'workspaceApprovals'
   ) {
     await openWorkspaceDeepLink(route, seq)
+    return
+  }
+  if (route.name === 'home') {
+    showView('room')
+    setTitle('Roost')
+    await openHome(seq)
     return
   }
   if (route.name === 'room') {
@@ -1551,6 +1799,10 @@ async function renderRoute() {
       setTitle('定时任务')
       await mountSchedulesPage(main, ctx)
       break
+    case 'routines':
+      setTitle('房间定时')
+      await mountRoutinesPage(main, ctx)
+      break
     case 'connectors':
       setTitle('连接器')
       await mountConnectorsPage(main, ctx)
@@ -1591,7 +1843,9 @@ function toEvent(message, roomId) {
       framing: isUser ? 'user' : 'room',
       // 无附件时后端也会给 []；历史/翻页/补拉都走这里，形状保持一致。
       attachments: Array.isArray(message.attachments) ? message.attachments : [],
+      ...(Array.isArray(message.parts) ? { parts: message.parts } : {}),
     },
+    ...(message.peer !== undefined && message.peer !== null ? { peer: message.peer } : {}),
   }
 }
 
@@ -1659,7 +1913,9 @@ function applyLiveRoomChrome(room) {
   const name = room.name || '房间'
   ROOM.name = name
   const heading = $('#room-name')
-  if (heading) heading.textContent = name
+  const host = room.hostBotId ? (STORE.bots.find((bot) => bot.id === room.hostBotId) || null) : null
+  if (heading) heading.textContent = host && host.name ? host.name : name
+  paintRoomPill(room)
   const flockHolder = $('#room-flock')
   if (flockHolder) {
     const flock = roomFlock(room, 40)
@@ -1725,6 +1981,233 @@ function enterPreviewRoom() {
   if (composer) composer.focus()
 }
 
+const roomPreviews = new Map()
+
+function conversationEntries() {
+  const entries = []
+  // Groups first, like a chat app: a room is a conversation, not a folder.
+  for (const room of STORE.rooms) {
+    if (room.dm === true) continue
+    const hostId = room.hostBotId || (room.members && room.members[0] && room.members[0].botId) || room.id
+    entries.push({
+      kind: 'group',
+      bot: { id: hostId, name: room.name || '房间' },
+      room,
+      title: room.name || '房间',
+      primary: true,
+      dm: false,
+    })
+  }
+  // One private conversation per Bot. This is the DSBot-style list: creating a
+  // Bot creates its chat and it appears here immediately.
+  for (const bot of STORE.bots) {
+    const dm = STORE.rooms.find(
+      (item) => item.dm === true && (item.members || []).some((member) => member.botId === bot.id)
+    )
+    entries.push({
+      kind: dm === undefined ? 'bot' : 'dm',
+      bot,
+      room: dm || null,
+      title: bot.name || 'Bot',
+      primary: false,
+      dm: dm !== undefined,
+    })
+  }
+  return entries
+}
+
+function messagePreviewText(message) {
+  if (!message) return '还没有消息'
+  const text = typeof message.text === 'string' ? message.text.trim() : ''
+  if (text !== '') return text
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  if (parts.some((part) => part && part.type === 'image')) return '图片'
+  if (parts.some((part) => part && part.type === 'choice')) return '请选择'
+  if (parts.some((part) => part && part.type === 'approval')) return '需要你确认'
+  return '还没有消息'
+}
+
+function formatShanghai(iso) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const delta = Date.now() - date.getTime()
+  if (delta >= 0 && delta < 60_000) return '刚刚'
+  if (delta >= 0 && delta < 60 * 60_000) return `${Math.max(1, Math.floor(delta / 60_000))} 分钟前`
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
+  const today = day.format(new Date())
+  const that = day.format(date)
+  if (that === today) return `今天 ${clock.format(date)}`
+  const yesterday = day.format(new Date(Date.now() - 24 * 60 * 60 * 1000))
+  if (that === yesterday) return '昨天'
+  return `${Number(that.slice(5, 7))}月${Number(that.slice(8, 10))}日`
+}
+
+function previewLine(message, entry) {
+  const body = messagePreviewText(message)
+  const actor = message && message.actor
+  if (!actor) return body
+  if (actor.kind === 'user') return `你：${body}`
+  if (actor.kind === 'bot' && entry && entry.bot && actor.id !== entry.bot.id) {
+    return `${botIdentity(actor.id).name}：${body}`
+  }
+  return body
+}
+
+async function loadRoomPreview(roomId) {
+  if (roomPreviews.has(roomId)) return roomPreviews.get(roomId)
+  const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages?limit=1`)
+  const messages = Array.isArray(data?.messages) ? data.messages : []
+  const last = messages[messages.length - 1]
+  const preview = { message: last || null, at: last && last.at ? formatShanghai(last.at) : '' }
+  roomPreviews.set(roomId, preview)
+  return preview
+}
+
+function roomsForBot(bot) {
+  if (!bot) return []
+  const hosted = STORE.rooms.filter((item) => item.hostBotId === bot.id)
+  if (hosted.length > 0) return hosted
+  return STORE.rooms.filter((item) => (item.members || []).some((member) => member.botId === bot.id))
+}
+
+function renderChatRow(entry) {
+  const href = entry.room ? `#/rooms/${encodeURIComponent(entry.room.id)}` : `#/bots/${encodeURIComponent(entry.bot.id)}`
+  const row = el('a', { class: 'home-row', href })
+  const flock = entry.kind === 'group' && entry.room ? roomFlock(entry.room, 48) : null
+  row.append(flock || botAvatar(entry.bot, 48, { round: true, primary: entry.primary === true }))
+  const text = el('div', { class: 'home-copy' })
+  const titleLine = el('div', { class: 'home-title' })
+  titleLine.append(el('strong', { text: entry.title }))
+  titleLine.append(
+    el('span', {
+      class: 'home-kind',
+      text: entry.kind === 'group' ? '群' : entry.kind === 'dm' ? 'Bot' : '设置',
+    })
+  )
+  text.append(titleLine)
+  const preview = el('span', { class: 'home-preview', text: '…' })
+  text.append(preview)
+  row.append(text)
+  const time = el('time', { class: 'home-time', text: '' })
+  row.append(time)
+  const candidates = entry.room ? [entry.room] : roomsForBot(entry.bot)
+  if (candidates.length === 0) {
+    preview.textContent = entry.kind === 'bot' ? '点开设置' : '还没有消息'
+    return row
+  }
+  void (async () => {
+    let best = null
+    for (const room of candidates) {
+      const item = await loadRoomPreview(room.id)
+      const at = item.message && item.message.at ? Date.parse(item.message.at) : 0
+      if (!best || at >= best.at) best = { room, item, at }
+    }
+    if (!preview.isConnected || !best) return
+    row.href = `#/rooms/${encodeURIComponent(best.room.id)}`
+    preview.textContent = best.item.message ? previewLine(best.item.message, entry) : '还没有消息'
+    time.textContent = best.item.at
+  })().catch(() => {
+    if (preview.isConnected) preview.textContent = '点开看看'
+  })
+  return row
+}
+
+function paintRoomPill(room) {
+  const slot = $('#room-pill-avatar')
+  if (!slot) return
+  const hostId = room && (room.hostBotId || (room.members && room.members[0] && room.members[0].botId))
+  if (!hostId) {
+    slot.replaceChildren()
+    return
+  }
+  const stored = STORE.bots.find((bot) => bot.id === hostId)
+  const bot = stored || { id: hostId, name: room.name || 'Bot' }
+  slot.replaceChildren(botAvatar(bot, 28, { round: true, primary: room.hostBotId === hostId }))
+  const subtitle = $('#room-subtitle')
+  if (subtitle) subtitle.textContent = room.name ? `房间：${room.name}` : ''
+}
+
+function setupRoomMenu() {
+  const button = $('#room-more')
+  const menu = $('#room-menu')
+  if (!button || !menu) return
+  button.addEventListener('click', () => {
+    const open = menu.hidden
+    menu.hidden = !open
+    button.setAttribute('aria-expanded', open ? 'true' : 'false')
+  })
+  const grid = $('#home-grid')
+  if (grid) {
+    grid.addEventListener('click', () => {
+      const open = menu.hidden
+      menu.hidden = !open
+      grid.setAttribute('aria-expanded', open ? 'true' : 'false')
+      button.setAttribute('aria-expanded', open ? 'true' : 'false')
+    })
+  }
+  const filterRows = (query) => {
+    const needle = query.trim().toLowerCase()
+    document.querySelectorAll('#room-view .home-row').forEach((row) => {
+      const text = (row.textContent || '').toLowerCase()
+      row.hidden = needle !== '' && !text.includes(needle)
+    })
+  }
+  const homeSearch = $('#home-search')
+  const sideSearch = $('#side-search')
+  if (homeSearch) homeSearch.addEventListener('input', () => filterRows(homeSearch.value))
+  if (sideSearch) sideSearch.addEventListener('input', () => filterRows(sideSearch.value))
+  document.addEventListener('click', (event) => {
+    if (menu.hidden) return
+    const target = event.target
+    if (button.contains(target) || menu.contains(target) || (grid && grid.contains(target))) return
+    menu.hidden = true
+    button.setAttribute('aria-expanded', 'false')
+    if (grid) grid.setAttribute('aria-expanded', 'false')
+  })
+}
+
+async function openHome(seq) {
+  resetRoomChrome()
+  stopStream()
+  const list = $('#messages')
+  if (!list) return
+  list.replaceChildren(el('p', { class: 'muted', text: '正在载入…' }))
+  try {
+    if (!STORE.botsLoaded) {
+      const data = await api.get('/api/bots')
+      STORE.bots = Array.isArray(data?.bots) ? data.bots : []
+      STORE.botsLoaded = true
+    }
+    if (!STORE.roomsLoaded) {
+      STORE.rooms = await ensureRoom()
+      STORE.roomsLoaded = true
+    }
+  } catch (error) {
+    if (isAuthError(error)) {
+      requirePair()
+      return
+    }
+  }
+  if (seq !== routeSeq) return
+  list.replaceChildren()
+  const heroHost = STORE.bots.find((bot) => STORE.rooms.some((room) => room.hostBotId === bot.id && (room.members || []).length >= 2)) || STORE.bots[0]
+  if (heroHost) {
+    const hero = el('div', { class: 'home-hero' })
+    hero.append(botAvatar(heroHost, 96, { round: true, primary: true }))
+    hero.append(el('div', { class: 'hero-name', text: `${heroHost.name || 'Roost'} · 主 Bot` }))
+    list.append(hero)
+  }
+  const entries = conversationEntries()
+  if (entries.length === 0) {
+    list.append(el('p', { class: 'muted', text: '还没有 Bot。' }))
+    renderSidebarRooms()
+    return
+  }
+  for (const entry of entries) list.append(renderChatRow(entry))
+  renderSidebarRooms()
+}
+
 async function openRoomRoute(id, seq) {
   resetRoomChrome()
   if (!id) {
@@ -1768,9 +2251,26 @@ async function openRoomRoute(id, seq) {
     events.sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0))
     ROOM.events = events
 
+    if (!STORE.roomsLoaded) {
+      try {
+        STORE.rooms = await ensureRoom()
+        STORE.roomsLoaded = true
+      } catch {
+        // 侧栏没有房间列表时，对话本身仍然打开。
+      }
+    }
+    if (!STORE.botsLoaded) {
+      try {
+        await loadBots()
+      } catch {
+        // 名字解析失败时侧栏用房间名。
+      }
+    }
+    if (seq !== routeSeq) return
     applyLiveRoomChrome(room)
     renderMessages()
-    setComposerEnabled(true)
+    const hostName = room.hostBotId ? (STORE.bots.find((bot) => bot.id === room.hostBotId)?.name || '') : ''
+    setComposerEnabled(true, hostName ? `向${hostName}提问` : '发一条消息')
     openStream()
     const composer = $('#composer')
     if (composer) composer.focus()
@@ -1848,13 +2348,29 @@ function markThinkingAvatar(botId) {
   }
 }
 
+function syncTypingIndicator() {
+  const pill = $('#typing-indicator')
+  const text = $('#typing-text')
+  const working = $('#working')
+  const source = $('#working-text')
+  if (!pill || !text || !working || !source) return
+  const show = !working.hidden && LIVE.active && !working.classList.contains('is-offline')
+  pill.hidden = !show
+  if (!show) return
+  text.textContent = source.textContent || '正在思考…'
+  pill.classList.toggle('is-thinking', working.classList.contains('is-thinking'))
+}
+
 function renderWorking() {
   const working = $('#working')
   const text = $('#working-text')
   if (!working || !text) return
+  // Grok 布局隐藏了顶栏状态区；用消息/输入框之间的 typing pill 显示同一状态。
+  queueMicrotask(() => syncTypingIndicator())
   working.classList.remove('is-thinking')
   markThinkingAvatar('')
   if (!LIVE.active) {
+    clearThinkingPlaceholder()
     working.hidden = false
     working.classList.remove('is-offline')
     text.textContent = ROOM.working.text
@@ -1862,6 +2378,7 @@ function renderWorking() {
   }
   // 离线或流断开时，状态区优先说明连接问题；恢复 open 后回到轮次状态。
   if (LIVE.streamState === 'reconnecting') {
+    clearThinkingPlaceholder()
     working.hidden = false
     working.classList.add('is-offline')
     text.textContent = '离线，正在重连…'
@@ -1873,10 +2390,12 @@ function renderWorking() {
     working.classList.add('is-thinking')
     text.textContent = '正在思考…'
     markThinkingAvatar(LIVE.pendingReplyBotId)
+    renderThinkingPlaceholder(LIVE.pendingReplyBotId)
     return
   }
   const round = LIVE.room && LIVE.room.round
   if (!round) {
+    clearThinkingPlaceholder()
     working.hidden = true
     working.classList.remove('is-thinking')
     markThinkingAvatar('')
@@ -1890,19 +2409,24 @@ function renderWorking() {
   if (slot) {
     working.hidden = false
     text.textContent = `${botLabel(slot.botId)} 正在说`
+    renderThinkingPlaceholder(slot.botId)
     return
   }
   if (liveSpeaking !== '') {
     working.hidden = false
     text.textContent = `${botLabel(liveSpeaking)} 正在说`
+    renderThinkingPlaceholder(liveSpeaking)
     return
   }
   if (round.state === 'running') {
     const waiting = roundStatusItems(round, (botId) => botLabel(botId)).find((item) => item.status === 'waiting')
     working.hidden = false
     text.textContent = waiting ? `轮到 ${waiting.name}…` : '本轮进行中'
+    if (waiting && waiting.botId) renderThinkingPlaceholder(waiting.botId)
+    else clearThinkingPlaceholder()
     return
   }
+  clearThinkingPlaceholder()
   working.hidden = true
 }
 
@@ -1913,6 +2437,7 @@ function appendLiveEvent(message) {
     LIVE.seen.add(seq)
     LIVE.lastSeq = Math.max(LIVE.lastSeq, seq)
   }
+  clearStreaming()
   insertEvent(toEvent(message, LIVE.roomId))
   return true
 }
@@ -1939,8 +2464,12 @@ function insertEvent(event) {
   const placeholder = list.querySelector('.messages-empty')
   if (placeholder) placeholder.remove()
   if (event && event.payload && event.payload.role === 'bot') {
+    clearThinkingPlaceholder()
     LIVE.pendingReply = false
     renderWorking()
+    if (!TRACE.marks.some((mark) => mark.name === 'first.bot')) traceMark('first.bot', event.seq ?? '')
+    else traceMark('bot.message', event.seq ?? '')
+    void traceFetchSpans()
   }
   const node = renderEvent(event)
   if (Number.isFinite(seq)) node.dataset.seq = String(seq)
@@ -1963,20 +2492,36 @@ function insertEvent(event) {
  * 用 after=LIVE.lastSeq 补拉断线期间的消息。
  * 返回是否成功；重连状态机据此决定继续退避还是重新开流。
  */
+let refreshMessagesInFlight = null
+let refreshMessagesAt = 0
+
+/**
+ * SSE 是主通道；这里只做断线补拉。多个触发源（重连、可见性、卡片事件）可能同时
+ * 调用，必须合并，否则界面会在同一秒打出一串 /messages?after=…。
+ */
 async function refreshMessages() {
   if (!LIVE.active || !LIVE.roomId) return false
+  if (refreshMessagesInFlight) return refreshMessagesInFlight
+  const now = Date.now()
+  if (now - refreshMessagesAt < 400) return true
+  refreshMessagesAt = now
   const roomId = LIVE.roomId
-  try {
-    const query = LIVE.lastSeq > 0 ? `?after=${encodeURIComponent(String(LIVE.lastSeq))}` : ''
-    const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages${query}`)
-    if (!LIVE.active || LIVE.roomId !== roomId) return false
-    const list = Array.isArray(data?.messages) ? data.messages : []
-    for (const message of list) appendLiveEvent(message)
-    return true
-  } catch (error) {
-    if (isAuthError(error)) requirePair()
-    return false
-  }
+  refreshMessagesInFlight = (async () => {
+    try {
+      const query = LIVE.lastSeq > 0 ? `?after=${encodeURIComponent(String(LIVE.lastSeq))}` : ''
+      const data = await api.get(`/api/rooms/${encodeURIComponent(roomId)}/messages${query}`)
+      if (!LIVE.active || LIVE.roomId !== roomId) return false
+      const list = Array.isArray(data?.messages) ? data.messages : []
+      for (const message of list) appendLiveEvent(message)
+      return true
+    } catch (error) {
+      if (isAuthError(error)) requirePair()
+      return false
+    } finally {
+      refreshMessagesInFlight = null
+    }
+  })()
+  return refreshMessagesInFlight
 }
 
 /** 发消息后短轮询房间轮次；让「正在思考」和头像动画跟真实 turn 同步。 */
@@ -2003,7 +2548,7 @@ function watchRound(roomId) {
       renderWorking()
       return
     }
-    roundWatchTimer = setTimeout(tick, 800)
+    roundWatchTimer = setTimeout(tick, 1500)
   }
   roundWatchTimer = setTimeout(tick, 250)
 }
@@ -2034,6 +2579,82 @@ function handleRoundEvent(event) {
   } catch {
     // 坏帧不打断整条流。
   }
+}
+
+let streamingText = ''
+
+function clearThinkingPlaceholder() {
+  document.getElementById('thinking-placeholder')?.remove()
+}
+
+/** Show the waiting Bot in the conversation itself, not only in the header. */
+function renderThinkingPlaceholder(botId) {
+  const list = $('#messages')
+  const id = typeof botId === 'string' ? botId : ''
+  if (!list || !LIVE.active || id === '') {
+    clearThinkingPlaceholder()
+    return
+  }
+  let node = document.getElementById('thinking-placeholder')
+  if (node === null) {
+    node = el('article', { class: 'msg msg-bot thinking-placeholder', id: 'thinking-placeholder', 'aria-live': 'polite' })
+    list.append(node)
+  }
+  const identity = botIdentity(id)
+  if (node.dataset.botId !== id) {
+    node.dataset.botId = id
+    const head = el('header', { class: 'msg-head' })
+    head.append(botAvatar({ id, ...identity }, 22, { round: true }))
+    head.append(el('span', { class: 'msg-name', text: identity.name }))
+    if (identity.role !== '') head.append(el('span', { class: 'msg-role', text: identity.role }))
+    const label = el('div', { class: 'thinking-label' })
+    label.append(el('span', { class: 'thinking-dots', 'aria-hidden': 'true' }, [el('i'), el('i'), el('i')]))
+    label.append(el('span', { text: '正在思考…' }))
+    node.replaceChildren(head, label)
+  }
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 100
+  if (nearBottom) list.scrollTop = list.scrollHeight
+}
+
+function clearStreaming() {
+  streamingText = ''
+  document.getElementById('streaming-line')?.remove()
+  clearThinkingPlaceholder()
+}
+
+function handleDeltaEvent(event) {
+  let payload
+  try {
+    payload = JSON.parse(event.data)
+  } catch {
+    return
+  }
+  const delta = payload && typeof payload.delta === 'string' ? payload.delta : ''
+  if (delta === '') return
+  // 最终消息已经落地后，迟到的 delta 不能再在它下面新建一条流式行。
+  if (!LIVE.pendingReply) return
+  clearThinkingPlaceholder()
+  streamingText += delta
+  if (!TRACE.marks.some((mark) => mark.name === 'first.delta')) traceMark('first.delta')
+  const list = $('#messages')
+  if (!list) return
+  let node = document.getElementById('streaming-line')
+  if (!node) {
+    node = el('article', { class: 'msg msg-bot streaming-line', id: 'streaming-line' })
+    const identity = botIdentity(LIVE.pendingReplyBotId)
+    const head = el('header', { class: 'msg-head' })
+    head.append(botAvatar({ id: LIVE.pendingReplyBotId, ...identity }, 22, { round: true }))
+    head.append(el('span', { class: 'msg-name', text: identity.name }))
+    const body = el('div', { class: 'bubble bubble-bot streaming-body' })
+    body.append(el('p', { class: 'streaming-text', text: '' }))
+    node.append(head, body)
+    list.append(node)
+  }
+  const line = node.querySelector('.streaming-text')
+  if (line) line.textContent = streamingText
+  list.scrollTop = list.scrollHeight
+  LIVE.pendingReply = true
+  renderWorking()
 }
 
 function handleSpeakingEvent(event) {
@@ -2126,6 +2747,7 @@ async function openStream() {
     if (stream !== LIVE.stream) return
     LIVE.reconnectAttempt = 0
     setStreamState('open')
+    traceMark('stream.open')
   })
   stream.addEventListener('message', (event) => {
     try {
@@ -2135,8 +2757,13 @@ async function openStream() {
     }
   })
   stream.addEventListener('round', handleRoundEvent)
+  stream.addEventListener('round.started', handleRoundEvent)
+  stream.addEventListener('round.ended', handleRoundEvent)
   stream.addEventListener('status', handleRoundEvent)
   stream.addEventListener('speaking', handleSpeakingEvent)
+  stream.addEventListener('message.delta', handleDeltaEvent)
+  stream.addEventListener('card.answered', () => { void refreshMessages() })
+  stream.addEventListener('approval.decided', () => { void refreshMessages() })
   stream.addEventListener('error', () => {
     if (stream !== LIVE.stream) return
     // 关掉浏览器自动重连：它会带着旧的 after 重放，可能漏掉断线期间的消息。
@@ -2202,6 +2829,22 @@ function handleVisibilityChange() {
   void refreshMessages()
 }
 
+let runtimeStart = null
+/** 进入 workspace 时确保远端沙箱启动；失败不阻塞进入房间。 */
+async function ensureRuntimeStarted() {
+  if (runtimeStart !== null) return runtimeStart
+  runtimeStart = (async () => {
+    try {
+      const workspaceId = await ensureWorkspaceId()
+      await api.post(`/api/workspaces/${encodeURIComponent(workspaceId)}/start`, {})
+      return true
+    } catch {
+      return false
+    }
+  })()
+  return runtimeStart
+}
+
 /** 配对成功后进入：有房间去房间，没房间先去建 Bot。 */
 async function enterLiveRoom(token) {
   if (typeof token === 'string' && token !== '') {
@@ -2260,8 +2903,10 @@ async function enterLiveRoom(token) {
 function syncSend() {
   const input = $('#composer')
   const send = $('#send')
+  const files = $('#composer-files')
   if (!input || !send) return
-  send.disabled = input.disabled || input.value.trim() === ''
+  const hasFile = Boolean(files && !files.hidden && files.childElementCount > 0)
+  send.disabled = input.disabled || (input.value.trim() === '' && !hasFile)
 }
 
 function growComposer() {
@@ -2279,7 +2924,7 @@ function setComposerEnabled(enabled, placeholder) {
   const send = $('#send')
   if (!input || !send) return
   input.disabled = !enabled
-  input.placeholder = placeholder || '说点什么…'
+  input.placeholder = placeholder || '发一条消息'
   if (!enabled) {
     send.disabled = true
     send.title = '房间还没载入'
@@ -2499,14 +3144,16 @@ function setupSidebarDrawer() {
   if (!room || !toggle) return
   let lastFocus = null
   const isOpen = () => room.classList.contains('sidebar-open')
-  // 抽屉关着时不可聚焦，否则键盘会 Tab 进看不见的导航。
-  if (sidebar) sidebar.inert = true
+  const narrow = () => window.innerWidth <= 720
+  // 抽屉只存在于窄屏；桌面侧栏是可点击的常驻导航，不能设 inert，
+  // 否则视觉上还在、实际点击会穿透到 #room-view（表现为“点不动 Bot”）。
+  if (sidebar) sidebar.inert = narrow()
 
   const setOpen = (open, opener) => {
     room.classList.toggle('sidebar-open', open)
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false')
     toggle.setAttribute('aria-label', open ? '收起导航' : '展开导航')
-    if (sidebar) sidebar.inert = !open
+    if (sidebar) sidebar.inert = narrow() ? !open : false
     if (scrim) scrim.hidden = !open
     if (open) {
       lastFocus = opener || document.activeElement
@@ -2523,7 +3170,7 @@ function setupSidebarDrawer() {
   if (sidebar) {
     // 点侧栏里的链接就关掉抽屉，别挡着刚打开的房间/设置页。
     sidebar.addEventListener('click', (event) => {
-      if (event.target instanceof Element && event.target.closest('a')) setOpen(false)
+      if (narrow() && event.target instanceof Element && event.target.closest('a')) setOpen(false)
     })
   }
   document.addEventListener('keydown', (event) => {
@@ -2539,7 +3186,13 @@ function setupSidebarDrawer() {
     ui.trapTabKey(event, sidebar)
   })
   window.addEventListener('resize', () => {
-    if (window.innerWidth > 720 && isOpen()) setOpen(false)
+    if (!narrow()) {
+      if (isOpen()) setOpen(false)
+      else if (sidebar) sidebar.inert = false
+      if (scrim) scrim.hidden = true
+      return
+    }
+    if (!isOpen() && sidebar) sidebar.inert = true
   })
 }
 
@@ -2553,6 +3206,51 @@ function setupSkipLinks() {
       if (!target) return
       target.focus()
       target.scrollIntoView({ block: 'start' })
+    })
+  }
+}
+
+function setupImageViewer() {
+  const close = $('#image-viewer-close')
+  const share = $('#image-share')
+  const save = $('#image-save')
+  const detail = $('#image-detail')
+  if (close) close.addEventListener('click', closeImageViewer)
+  if (share) {
+    share.addEventListener('click', async () => {
+      const viewer = $('#image-viewer')
+      const url = viewer?.dataset.src || location.href
+      const title = viewer?.dataset.title || '图片'
+      if (navigator.share) {
+        try {
+          await navigator.share({ title, url })
+          return
+        } catch {
+          // 用户取消或浏览器拒绝时退回复制链接。
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(url)
+        share.textContent = '已复制'
+      } catch {
+        share.textContent = '无法分享'
+      }
+    })
+  }
+  if (save) {
+    save.addEventListener('click', () => {
+      const url = $('#image-viewer')?.dataset.src
+      if (!url) return
+      const link = document.createElement('a')
+      link.href = url
+      link.download = $('#image-viewer')?.dataset.title || 'image'
+      link.click()
+    })
+  }
+  if (detail) {
+    detail.addEventListener('click', () => {
+      const node = $('#image-detail-text')
+      if (node) node.hidden = !node.hidden
     })
   }
 }
@@ -2575,10 +3273,63 @@ function setupComposer() {
     }
   })
 
+  const plus = $('#composer-plus')
+  const file = $('#composer-file')
+  const mic = $('#composer-mic')
+  const pendingFiles = []
+  if (plus && file) {
+    plus.addEventListener('click', () => file.click())
+    file.addEventListener('change', async () => {
+      const chosen = file.files && file.files[0]
+      file.value = ''
+      if (!chosen || !LIVE.active || !LIVE.roomId) return
+      try {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/artifacts`, {
+          method: 'POST',
+          headers: {
+            authorization: LIVE.token ? `Bearer ${LIVE.token}` : '',
+            'content-type': chosen.type || 'application/octet-stream',
+            'x-artifact-name': chosen.name || 'image',
+            // 账号 cookie 会话的上传也是写请求，必须带 CSRF 头；否则服务端 403。
+            ...csrfHeaders('POST', csrfTokenFromCookie(document.cookie)),
+          },
+          body: chosen,
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload?.error?.message || '上传失败')
+        pendingFiles.push(payload.artifactId)
+        const chips = $('#composer-files')
+        if (chips) {
+          chips.hidden = false
+          chips.append(el('span', { text: chosen.name || '图片' }))
+        }
+        syncSend()
+      } catch (error) {
+        showComposerError(error instanceof Error ? error.message : '上传失败')
+      }
+    })
+  }
+  if (mic) {
+    mic.addEventListener('click', () => {
+      const Speech = window.SpeechRecognition || window.webkitSpeechRecognition
+      if (!Speech) {
+        showComposerError('这台浏览器没有语音输入')
+        return
+      }
+      const recognition = new Speech()
+      recognition.lang = 'zh-CN'
+      recognition.onresult = (event) => {
+        const said = event.results?.[0]?.[0]?.transcript
+        if (typeof said === 'string' && said !== '') input.value = `${input.value} ${said}`.trim()
+      }
+      recognition.start()
+    })
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     const text = input.value.trim()
-    if (!text || input.disabled) return
+    if ((!text && pendingFiles.length === 0) || input.disabled) return
     clearComposerError()
 
     if (LIVE.active && LIVE.roomId) {
@@ -2586,11 +3337,24 @@ function setupComposer() {
       syncSend()
       growComposer()
       input.focus()
+      LIVE.pendingReply = true
+      LIVE.pendingReplyBotId = LIVE.room?.responder?.botId || LIVE.room?.hostBotId || ''
+      renderWorking()
       try {
+        traceReset()
+        TRACE.id = `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        traceMark('send.submit')
         const posted = await api.post(`/api/rooms/${encodeURIComponent(LIVE.roomId)}/messages`, {
           text,
+          ...(pendingFiles.length > 0 ? { artifactIds: pendingFiles.splice(0, pendingFiles.length) } : {}),
           idem: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        })
+        }, { headers: { 'x-request-id': TRACE.id } })
+        const chips = $('#composer-files')
+        if (chips) {
+          chips.replaceChildren()
+          chips.hidden = true
+        }
+        traceMark('send.ack', posted?.message?.seq ?? '')
         if (posted && posted.message) appendLiveEvent(posted.message)
         else await refreshMessages()
         LIVE.pendingReply = true
@@ -2598,6 +3362,9 @@ function setupComposer() {
         renderWorking()
         watchRound(LIVE.roomId)
       } catch (error) {
+        LIVE.pendingReply = false
+        LIVE.pendingReplyBotId = ''
+        renderWorking()
         if (isAuthError(error)) {
           requirePair()
           return
@@ -2644,7 +3411,6 @@ function boot() {
   renderSidebarBots()
   renderSidebarRooms()
   renderNeeds()
-  setupPairing()
   const pageBack = $('#page-back')
   if (pageBack) {
     // href 在渲染时可能还没拿到房间；点击时按当前状态再决定一次，保证「← 房间」不会回到配对页。
@@ -2657,6 +3423,8 @@ function boot() {
   setupSidebarDrawer()
   setupSkipLinks()
   setupComposer()
+  setupImageViewer()
+  setupRoomMenu()
   setupMentionMenu()
   window.addEventListener('hashchange', () => {
     void renderRoute().then(() => {

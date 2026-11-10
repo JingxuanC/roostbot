@@ -18,11 +18,12 @@ interface Ctx {
   close: () => Promise<void>
 }
 
-async function withApi(fn: (ctx: Ctx) => Promise<void>, options: { now?: () => number } = {}): Promise<void> {
+async function withApi(fn: (ctx: Ctx) => Promise<void>, options: { now?: () => number; rawStore?: boolean } = {}): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'roost-api-bots-'))
   const store = openStore(join(dir, 'workspace.db'))
   const { url, close } = await startServer({
     store: createStorePort(store),
+    ...(options.rawStore === true ? { rawStore: store } : {}),
     port: 0,
     host: '127.0.0.1',
     ...(options.now === undefined ? {} : { now: options.now })
@@ -320,4 +321,22 @@ test('跨账号不能读别人的 Bot（当作不存在）', async () => {
     const list = await call(base, 'GET', '/api/bots', { token: other.token })
     assert.deepEqual(((await list.json()) as { bots: unknown[] }).bots, [])
   })
+})
+
+test('POST /api/bots/:id/dm 返回可复用的私聊房间', async () => {
+  await withApi(async ({ base }) => {
+    const { token, workspaceId } = await pairWithWorkspace(base)
+    const bot = await createBot(base, token, workspaceId, '私聊对象')
+    const first = await call(base, 'POST', `/api/bots/${bot.id}/dm`, { token, body: {} })
+    const firstText = await first.text()
+    assert.equal(first.status, 200, firstText)
+    const firstBody = JSON.parse(firstText) as { room: { id: string; dm: boolean; members: Array<{ botId: string }> } }
+    assert.equal(firstBody.room.dm, true)
+    assert.equal(firstBody.room.members[0]?.botId, bot.id)
+
+    const second = await call(base, 'POST', `/api/bots/${bot.id}/dm`, { token, body: {} })
+    assert.equal(second.status, 200)
+    const secondBody = (await second.json()) as { room: { id: string } }
+    assert.equal(secondBody.room.id, firstBody.room.id)
+  }, { rawStore: true })
 })

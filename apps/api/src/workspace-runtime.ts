@@ -29,6 +29,10 @@ export interface RuntimeManager {
   ensure(workspaceId: string, context?: { store?: Store }): Promise<RuntimeEnsureResult>
   /** 只看状态，不创建。 */
   status(workspaceId: string): Promise<{ sandbox: string; phase: RuntimePhase } | null>
+  /** 停止并清理运行时；不存在时返回 false。 */
+  stop?(workspaceId: string, context?: { store?: Store }): Promise<boolean>
+  /** 运行时候选日志，用于诊断；没有日志能力的 provider 省略。 */
+  logs?(workspaceId: string, options?: { tail?: number }): Promise<string>
 }
 
 export interface StartRuntimeResult {
@@ -86,6 +90,28 @@ function revokeIssuedToken(store: Store, tokenId: string | undefined): void {
   } catch {
     // 回收失败不能盖住原始错误：token 会自然过期（TTL 24h）。
   }
+}
+
+
+/** Stop a workspace runtime, revoke its runtime tokens and persist the stopped phase. */
+export async function stopWorkspaceRuntime(
+  store: Store,
+  workspaceId: string,
+  manager: RuntimeManager
+): Promise<{ stopped: boolean; runtime: WorkspaceRuntime | null }> {
+  const existing = getWorkspaceRuntime(store, workspaceId)
+  let stopped = false
+  if (manager.stop !== undefined) {
+    stopped = await manager.stop(workspaceId, { store })
+  }
+  revokeWorkspaceRuntimeTokens(store, workspaceId)
+  const runtime = saveWorkspaceRuntime(store, {
+    workspaceId,
+    sandbox: existing?.sandbox ?? 'none',
+    phase: 'stopped',
+    ...(existing === null ? {} : { startedAt: existing.startedAt })
+  })
+  return { stopped, runtime }
 }
 
 export async function readWorkspaceRuntime(

@@ -3,7 +3,22 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { BIRD_ACCESSORIES, BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, accessoryForId, accessoryForRole, birdSpecFor, birdSvg } from '../lib/bird.js'
+import { BIRD_ACCESSORIES, BIRD_MOODS, BIRD_PALETTES, BIRD_SPECIES, BIRD_STATES, ROUND_BIRD_COLORS, accessoryForId, accessoryForRole, birdSpecFor, birdSvg, roundBirdColor, roundBirdSvg } from '../lib/bird.js'
+
+test('圆鸟是稿子里的简笔：额羽、两只竖眼、喙；主 Bot 白身', () => {
+  const colored = roundBirdSvg('selector', { size: 40 })
+  const primary = roundBirdSvg('host', { primary: true, size: 56 })
+  assert.equal(colored, roundBirdSvg('selector', { size: 40 }))
+  assert.match(colored, /viewBox="0 0 72 64"/)
+  assert.match(colored, /rx="4\.6" ry="7\.6"/)
+  assert.match(colored, /M26 12c2-7 8-7 10 0/)
+  assert.match(colored, /M46 31\.5 L64 36\.2 L46 42 Z/)
+  assert.ok(ROUND_BIRD_COLORS.includes(roundBirdColor('selector', false)))
+  assert.equal(roundBirdColor('host', true), '#f5f5f7')
+  assert.match(primary, /fill="#f5f5f7"/)
+  assert.match(primary, /fill="#ff9f0a"/)
+  assert.match(roundBirdSvg('id', { size: 32 }), /width="32"/)
+})
 
 test('同一个 id 永远得到同一只鸟（改名不影响形象的前提）', () => {
   const a = birdSpecFor('bot_01M6KMHFHMNJ4S8286D7VS8MEQ')

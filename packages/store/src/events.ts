@@ -189,6 +189,47 @@ export function readEvents(store: Store, query: ReadEventsQuery = {}): Event[] {
   return rows.map(rowToEvent)
 }
 
+/**
+ * 某个 workspace 的房间日志：audience 为 `room:<id>` 且房间属于该 workspace。
+ * 给沙箱的 workspace 级长轮询用，避免每个房间各开一条连接。
+ */
+export function readWorkspaceRoomEvents(
+  store: Store,
+  input: { workspaceId?: string | null; afterSeq?: number; limit?: number },
+): Event[] {
+  assertOpen(store)
+  const afterSeq =
+    input.afterSeq === undefined || input.afterSeq === null ? 0 : asInteger(input.afterSeq, 'query.afterSeq', 0)
+  const limit =
+    input.limit === undefined || input.limit === null
+      ? 200
+      : Math.min(1000, asInteger(input.limit, 'query.limit', 1))
+  const columns = COLUMNS.split(', ')
+    .map((column) => `e.${column}`)
+    .join(', ')
+  const workspaceId = input.workspaceId
+  const rows =
+    workspaceId === undefined || workspaceId === null || workspaceId === ''
+      ? store.db
+          .prepare(
+            `SELECT ${columns} FROM events e
+              WHERE e.audience LIKE 'room:%' AND e.seq > ?
+              ORDER BY e.seq ASC
+              LIMIT ?`,
+          )
+          .all(afterSeq, limit)
+      : store.db
+          .prepare(
+            `SELECT ${columns} FROM events e
+              JOIN rooms r ON e.audience = ('room:' || r.id)
+             WHERE r.workspace_id = ? AND e.seq > ?
+             ORDER BY e.seq ASC
+             LIMIT ?`,
+          )
+          .all(asNonEmptyString(workspaceId, 'query.workspaceId'), afterSeq, limit)
+  return rows.map(rowToEvent)
+}
+
 export function latestSeq(store: Store): number {
   assertOpen(store)
   const row = store.db.prepare('SELECT MAX(seq) AS seq FROM events').get() as

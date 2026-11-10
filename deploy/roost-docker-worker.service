@@ -1,0 +1,17 @@
+[Unit]
+Description=Roost Docker runtime worker
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/root
+EnvironmentFile=/etc/roost/docker-worker.env
+ExecStart=/usr/local/bin/node /opt/roost/docker-worker.mjs
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

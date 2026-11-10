@@ -11,7 +11,7 @@ import { StoreError } from './errors.ts'
 import { asInteger, asNonEmptyString, asOptionalString, asRecord, assertOpen, errorMessage, toNumber } from './internal.ts'
 import { newRoostId } from './ids.ts'
 import { appendEvent, readEvents } from './events.ts'
-import type { Actor, SendMessageInput, Store, Room, RoomMessage } from './types.ts'
+import type { Actor, MessagePart, SendMessageInput, Store, Room, RoomMessage } from './types.ts'
 
 export const REPLY_MODES = ['admin', 'everyone', 'mentions'] as const
 
@@ -82,7 +82,15 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
   assertOpen(store)
   const req = asRecord(input, 'message', 'INVALID_MESSAGE')
   const roomId = asNonEmptyString(req.roomId, 'message.roomId', 'INVALID_MESSAGE')
-  const text = asNonEmptyString(req.text, 'message.text', 'INVALID_MESSAGE')
+  if (req.text !== undefined && req.text !== null && typeof req.text !== 'string') {
+    throw new StoreError('INVALID_MESSAGE', 'message.text must be a string')
+  }
+  const text = typeof req.text === 'string' ? req.text : ''
+  const parts = normalizeParts(req.parts)
+  if (text.trim() === '' && parts.length === 0) {
+    throw new StoreError('INVALID_MESSAGE', 'message text is empty')
+  }
+  if (text.length > 8000) throw new StoreError('INVALID_MESSAGE', 'message.text is too long')
   const actor = asActor(req.actor)
   const at =
     req.at === undefined || req.at === null ? Date.now() : asInteger(req.at, 'message.at', 0, 'INVALID_MESSAGE')
@@ -99,11 +107,31 @@ export function sendMessage(store: Store, input: SendMessageInput): RoomMessage 
     idem: asOptionalString(req.idem, 'message.idem', 'INVALID_MESSAGE'),
     // events.at 是 ISO 字符串（events.md §3）；调用方传毫秒。
     at: new Date(at).toISOString(),
-    payload: { roomId, text, role: actor.kind === 'user' ? 'user' : 'bot' },
+    payload: {
+      roomId,
+      text,
+      role: actor.kind === 'user' ? 'user' : 'bot',
+      ...(parts.length === 0 ? {} : { parts }),
+      ...(req.routine === undefined ? {} : { routine: req.routine }),
+    },
   })
 
-  const storedText = typeof event.payload['text'] === 'string' ? event.payload['text'] : text
-  return { seq: event.seq, at: event.at, actor: event.actor ?? actor, roomId, text: storedText }
+  // 幂等重放必须回放已经落库的正文、parts 和 routine，不能回放这次请求里的新内容。
+  const payload = event.payload
+  const storedText = typeof payload['text'] === 'string' ? payload['text'] : text
+  const storedParts = Array.isArray(payload['parts']) ? (payload['parts'] as MessagePart[]) : []
+  const storedRoutine = payload['routine']
+  return {
+    seq: event.seq,
+    at: event.at,
+    actor: event.actor ?? actor,
+    roomId,
+    text: storedText,
+    ...(storedParts.length === 0 ? {} : { parts: storedParts }),
+    ...(storedRoutine !== undefined && storedRoutine !== null && typeof storedRoutine === 'object'
+      ? { routine: storedRoutine as NonNullable<RoomMessage['routine']> }
+      : {}),
+  }
 }
 
 /** 读房间消息，按 seq 升序；afterSeq 用于增量补拉（SSE 断线重连）。 */
@@ -128,16 +156,11 @@ export function readMessages(
     audience: `room:${roomId}`,
     limit,
   })
-  return events.map((event) => {
-    const payload = event.payload as { text?: unknown }
-    return {
-      seq: event.seq,
-      at: event.at,
-      actor: event.actor,
-      roomId,
-      text: typeof payload.text === 'string' ? payload.text : '',
-    }
-  })
+  // 房间日志只投影真正的 chat.message；chat.message.delta 是流式片段，
+  // 混进消息列表会渲染成一条条空消息。
+  return events
+    .filter((event) => event.kind === 'chat.message')
+    .map((event) => messageFromPayload(event.seq, event.at, event.actor, roomId, event.payload))
 }
 
 export interface RoomLogPage {
@@ -183,12 +206,12 @@ export function readRoomLogPage(
   // 窗口下界 = 第 logMax 新的一条的 seq；不足 logMax 条时从头（seq 1）起。
   const floorRow = store.db
     .prepare(
-      `SELECT seq FROM events WHERE domain = 'chat' AND audience = ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
+      `SELECT seq FROM events WHERE domain = 'chat' AND kind = 'chat.message' AND audience = ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
     )
     .get(audience, ROUND_LIMITS.logMax - 1) as { seq: number | bigint } | undefined
   const floorSeq = floorRow === undefined || floorRow === null ? 1 : toNumber(floorRow.seq)
 
-  const clauses = [`domain = 'chat'`, 'audience = ?', 'seq >= ?']
+  const clauses = [`domain = 'chat'`, `kind = 'chat.message'`, 'audience = ?', 'seq >= ?']
   const params: unknown[] = [audience, floorSeq]
   if (beforeSeq !== null) {
     clauses.push('seq < ?')
@@ -202,19 +225,55 @@ export function readRoomLogPage(
 
   const messages = rows.reverse().map((row) => {
     const actor = parseLogActor(row.actor_json, toNumber(row.seq))
-    let text = ''
+    let payload: Record<string, unknown> = {}
     try {
-      const payload = JSON.parse(row.payload_json) as { text?: unknown }
-      text = typeof payload.text === 'string' ? payload.text : ''
+      payload = JSON.parse(row.payload_json) as Record<string, unknown>
     } catch (err) {
       throw new StoreError('EVENT_CORRUPT', `event seq=${row.seq}: payload_json is not valid JSON`, {
         cause: err,
       })
     }
-    return { seq: toNumber(row.seq), at: row.at, actor, roomId, text }
+    return messageFromPayload(toNumber(row.seq), row.at, actor, roomId, payload)
   })
   const oldestSeq = messages.length === 0 ? null : messages[0]!.seq
   return { messages, hasMore: oldestSeq !== null && oldestSeq > floorSeq, oldestSeq, floorSeq }
+}
+
+function normalizeParts(value: unknown): MessagePart[] {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw new StoreError('INVALID_MESSAGE', 'message.parts must be an array')
+  if (value.length > 12) throw new StoreError('INVALID_MESSAGE', 'message.parts is too long')
+  return value.map((part, index) => {
+    if (part === null || typeof part !== 'object' || Array.isArray(part)) {
+      throw new StoreError('INVALID_MESSAGE', `message.parts[${index}] must be an object`)
+    }
+    const record = part as Record<string, unknown>
+    const type = record.type
+    if (type !== 'text' && type !== 'image' && type !== 'choice' && type !== 'approval' && type !== 'tool') {
+      throw new StoreError('INVALID_MESSAGE', `message.parts[${index}].type is invalid`)
+    }
+    return record as MessagePart
+  })
+}
+
+function messageFromPayload(
+  seq: number,
+  at: string,
+  actor: Actor | null,
+  roomId: string,
+  payload: Record<string, unknown>,
+): RoomMessage {
+  const parts = Array.isArray(payload.parts) ? (payload.parts as MessagePart[]) : undefined
+  const routine = payload.routine
+  return {
+    seq,
+    at,
+    actor: actor ?? { kind: 'system', id: 'unknown' },
+    roomId,
+    text: typeof payload.text === 'string' ? payload.text : '',
+    ...(parts === undefined || parts.length === 0 ? {} : { parts }),
+    ...(routine !== undefined && routine !== null && typeof routine === 'object' ? { routine: routine as RoomMessage['routine'] } : {}),
+  }
 }
 
 function parseLogActor(raw: string | null, seq: number): Actor {

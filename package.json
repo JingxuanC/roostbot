@@ -2,7 +2,7 @@
   "name": "roostbot",
   "private": true,
   "version": "0.1.0",
-  "description": "Roost Bot — a team of bots that lives on a cloud machine and can reach back into your local DSH.",
+  "description": "Roost Bot \u2014 multi-agent rooms with heterogeneous Agent runtimes (DSH, Claude Code, Codex, Grok Build) on a Docker workspace.",
   "packageManager": "pnpm@11.28.5",
   "engines": {
     "node": ">=22.18.0"
@@ -14,8 +14,13 @@
     "errors": "node scripts/error-codes.mjs",
     "release": "node scripts/release.mjs",
     "e2e": "sh scripts/e2e-cloud.sh",
-    "site": "node scripts/serve-site.mjs"
+    "site": "node scripts/serve-site.mjs",
+    "package:cli": "node scripts/package-cli.mjs",
+    "package:npm": "node scripts/package-cli.mjs"
   },
   "license": "Apache-2.0",
-  "type": "module"
+  "type": "module",
+  "bin": {
+    "roost": "apps/cli/roost.mjs"
+  }
 }

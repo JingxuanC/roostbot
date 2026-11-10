@@ -1,0 +1,34 @@
+{
+  "name": "roost-cli",
+  "version": "0.1.0",
+  "description": "Connect your local computer to a Roost workspace and run agents locally.",
+  "type": "module",
+  "bin": {
+    "roost": "./bin/roost"
+  },
+  "files": [
+    "roost.mjs",
+    "bin/roost",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JingxuanC/roostbot.git",
+    "directory": "apps/cli"
+  },
+  "homepage": "https://roostbots.com",
+  "keywords": [
+    "roost",
+    "agents",
+    "cli",
+    "local-computer"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

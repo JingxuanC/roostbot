@@ -1,0 +1,40 @@
+# Prometheus rules for the Roost Docker runtime.
+# Assumes:
+#   - roost-api /metrics is scraped as job="roost-api"
+#   - roost-docker-worker /metrics is scraped as job="roost-docker-worker"
+#     with authorization.credentials_file pointing at the worker token.
+groups:
+  - name: roost-runtime
+    rules:
+      - alert: RoostDockerWorkerDown
+        expr: up{job="roost-docker-worker"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Roost Docker worker is down"
+          description: "Workspace containers cannot be created or restarted."
+      - alert: RoostDockerWorkerFailures
+        expr: increase(roost_docker_worker_failures_total[10m]) > 3
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Roost Docker worker is failing ensures"
+          description: "More than 3 runtime ensure failures in 10 minutes."
+      - alert: RoostRuntimeStartFailures
+        expr: increase(roost_http_requests_total{route="/api/workspaces/:id/:action",status=~"5.."}[10m]) > 2
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Workspace runtime start/stop is failing"
+          description: "Check CP logs and the Docker worker."
+      - alert: RoostEgressAllowlistStale
+        expr: time() - node_systemd_unit_state{name="roost-egress-allowlist.service",state="active"} > 1200
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Egress allowlist has not refreshed"
+          description: "Model API DNS changes could break external Agent calls."
