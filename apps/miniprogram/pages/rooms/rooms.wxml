@@ -1,0 +1,23 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="empty">正在加载房间…</view>
+
+  <view wx:elif="{{error}}" class="card">
+    <text class="error">{{error}}</text>
+    <button class="btn primary" bindtap="load">重试</button>
+  </view>
+
+  <block wx:else>
+    <view wx:if="{{rooms.length === 0}}" class="empty">还没有房间。在 Web 控制面创建一个，或下拉刷新。</view>
+
+    <view wx:for="{{rooms}}" wx:key="id" class="room-card" data-id="{{item.id}}" bindtap="onRoomTap">
+      <view class="room-head">
+        <text class="room-name">{{item.name}}</text>
+        <text class="room-mode">{{item.replyMode}}</text>
+      </view>
+      <text wx:if="{{item.notice}}" class="room-notice">{{item.notice}}</text>
+      <text class="hint">{{item.memberCount}} 位成员</text>
+    </view>
+
+    <button class="btn logout" bindtap="onLogout">退出登录</button>
+  </block>
+</view>

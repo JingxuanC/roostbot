@@ -120,6 +120,8 @@ export interface OidcUserInfo {
   email: string
   /** 提供方是否验证过邮箱；false 时拒绝登录。undefined 视为已验证（多数提供方只在 false 时给值）。 */
   emailVerified?: boolean
+  /** Roost Console organization id, optional for generic OIDC providers. */
+  orgId?: string
 }
 
 /**
@@ -914,9 +916,11 @@ export function oidcProviderFromEnv(
       const subject = payload['sub'] ?? payload['id']
       const email = payload['email']
       const verified = payload['email_verified'] ?? payload['verified_email']
+      const orgId = payload['org_id']
       return {
         subject: typeof subject === 'string' ? subject : String(subject ?? ''),
         email: typeof email === 'string' ? email : '',
+        ...(typeof orgId === 'string' && orgId !== '' ? { orgId } : {}),
         ...(typeof verified === 'boolean' ? { emailVerified: verified } : {}),
       }
     },
@@ -1088,7 +1092,7 @@ export async function handleOidcCallback(
 
   let account: Account
   try {
-    account = upsertOidcAccount(store, { subject: info.subject, email: info.email, now })
+    account = upsertOidcAccount(store, { subject: info.subject, email: info.email, ...(info.orgId ? { orgId: info.orgId } : {}), now })
   } catch (err) {
     if (isStoreError(err) && err.code === 'ACCOUNT_EXISTS') {
       sendError(res, 409, 'auth.email_taken', '这个邮箱已有密码账号：请使用密码登录；当前版本不支持自动合并 OIDC 账号')

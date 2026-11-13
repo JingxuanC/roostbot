@@ -125,6 +125,8 @@ export interface Account {
   /** OIDC-only 账号为 null。 */
   passwordHash: string | null
   oidcSubject: string | null
+  /** Roost Console organization id, set by the OIDC bridge. */
+  roostOrgId: string | null
   createdAt: number
   disabledAt: number | null
   /** null = 邮箱还没验证。 */
@@ -137,13 +139,14 @@ interface AccountRow {
   email: string
   password_hash: string | null
   oidc_subject: string | null
+  roost_org_id: string | null
   created_at: number | bigint
   disabled_at: number | bigint | null
   email_verified_at: number | bigint | null
   password_updated_at: number | bigint | null
 }
 
-const ACCOUNT_COLUMNS = `id, email, password_hash, oidc_subject, created_at, disabled_at,
+const ACCOUNT_COLUMNS = `id, email, password_hash, oidc_subject, roost_org_id, created_at, disabled_at,
        email_verified_at, password_updated_at`
 
 function rowToAccount(row: unknown): Account {
@@ -153,6 +156,7 @@ function rowToAccount(row: unknown): Account {
     email: r.email,
     passwordHash: r.password_hash,
     oidcSubject: r.oidc_subject,
+    roostOrgId: r.roost_org_id,
     createdAt: toNumber(r.created_at),
     disabledAt: r.disabled_at === null ? null : toNumber(r.disabled_at),
     emailVerifiedAt: r.email_verified_at === null ? null : toNumber(r.email_verified_at),
@@ -215,6 +219,7 @@ export function createAccountWithPassword(store: Store, input: CreateAccountInpu
     email,
     passwordHash,
     oidcSubject: null,
+    roostOrgId: null,
     createdAt: now,
     disabledAt: null,
     emailVerifiedAt: null,
@@ -258,6 +263,18 @@ export function markEmailVerified(store: Store, accountId: string, at: number): 
   return { ...current, emailVerifiedAt: now }
 }
 
+/** Bind a Roost Console organization to an OIDC account. Idempotent. */
+export function setAccountRoostOrg(store: Store, accountId: string, orgId: string): Account {
+  assertOpen(store)
+  const id = asNonEmptyString(accountId, 'accountId', 'INVALID_ACCOUNT')
+  const org = asNonEmptyString(orgId, 'orgId', 'INVALID_ACCOUNT')
+  const current = findAccountById(store, id)
+  if (current === null) throw new StoreError('ACCOUNT_NOT_FOUND', `unknown account ${id}`)
+  if (current.roostOrgId === org) return current
+  store.db.prepare('UPDATE accounts SET roost_org_id = ? WHERE id = ?').run(org, id)
+  return { ...current, roostOrgId: org }
+}
+
 /** 设/重置密码；同时刷新 password_updated_at（会话是否早于改密由调用方判断）。 */
 export function setPassword(store: Store, accountId: string, password: string, at: number): Account {
   assertOpen(store)
@@ -275,6 +292,8 @@ export interface UpsertOidcAccountInput {
   /** OIDC 提供方的 `sub`（稳定、不随邮箱变）。 */
   subject: string
   email: string
+  /** Roost Console org id from userinfo; enables shared billing. */
+  orgId?: string
   now: number
 }
 
@@ -292,9 +311,17 @@ export function upsertOidcAccount(store: Store, input: UpsertOidcAccountInput): 
   const subject = asNonEmptyString(req.subject, 'oidcAccount.subject', 'INVALID_ACCOUNT')
   const email = parseEmail(req.email)
   const now = asInteger(req.now, 'oidcAccount.now', 0, 'INVALID_ACCOUNT')
+  const orgId =
+    typeof req.orgId === 'string' && req.orgId.trim() !== '' ? req.orgId.trim() : null
 
   const linked = findAccountByOidcSubject(store, subject)
-  if (linked !== null) return linked
+  if (linked !== null) {
+    if (orgId !== null && linked.roostOrgId !== orgId) {
+      store.db.prepare('UPDATE accounts SET roost_org_id = ? WHERE id = ?').run(orgId, linked.id)
+      return { ...linked, roostOrgId: orgId }
+    }
+    return linked
+  }
 
   const existing = findAccountByEmail(store, email)
   if (existing !== null) {
@@ -311,8 +338,8 @@ export function upsertOidcAccount(store: Store, input: UpsertOidcAccountInput): 
       )
     }
     store.db
-      .prepare('UPDATE accounts SET oidc_subject = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?')
-      .run(subject, now, existing.id)
+      .prepare('UPDATE accounts SET oidc_subject = ?, roost_org_id = COALESCE(?, roost_org_id), email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?')
+      .run(subject, orgId, now, existing.id)
     const updated = findAccountById(store, existing.id)
     if (updated === null) throw new StoreError('ACCOUNT_NOT_FOUND', `unknown account ${existing.id}`)
     return updated
@@ -322,11 +349,11 @@ export function upsertOidcAccount(store: Store, input: UpsertOidcAccountInput): 
   try {
     store.db
       .prepare(
-        `INSERT INTO accounts (id, email, password_hash, oidc_subject, created_at, disabled_at,
+        `INSERT INTO accounts (id, email, password_hash, oidc_subject, roost_org_id, created_at, disabled_at,
                                email_verified_at, password_updated_at)
-         VALUES (?, ?, NULL, ?, ?, NULL, ?, NULL)`,
+         VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, NULL)`,
       )
-      .run(id, email, subject, now, now)
+      .run(id, email, subject, orgId, now, now)
   } catch (err) {
     const message = errorMessage(err)
     if (message.includes('UNIQUE')) {
@@ -340,6 +367,7 @@ export function upsertOidcAccount(store: Store, input: UpsertOidcAccountInput): 
     email,
     passwordHash: null,
     oidcSubject: subject,
+    roostOrgId: orgId,
     createdAt: now,
     disabledAt: null,
     emailVerifiedAt: now,

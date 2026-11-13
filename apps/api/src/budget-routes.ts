@@ -48,6 +48,7 @@ import { USAGE_DAILY_MAX_DAYS, usageDaily } from '../../../packages/store/src/bu
 import type { Store } from '../../../packages/store/src/types.ts'
 import type { SessionRecord, StorePort, WorkspaceRole } from './port.ts'
 import { authenticate, isPlainObject, readJsonBody, sendError, sendJson } from './server.ts'
+import { reserveRoostCredits, RoostBudgetDenied, settleRoostCredits } from './roost-budget-billing.ts'
 import { authorizeRuntimeHttp, ensureRuntimeWorkspace } from './runtime-auth.ts'
 import type { RuntimeRequestAuth } from './runtime-auth.ts'
 
@@ -118,6 +119,20 @@ export async function handleInternalBudgetReserve(
       amount,
       at: ctx.now(),
     })
+    try {
+      await reserveRoostCredits(store, workspaceId, {
+        id: result.reservation.id,
+        metric: result.reservation.metric,
+      }, amount)
+    } catch (err) {
+      // Undo the local hold; if Roost denied, the product must not spend.
+      settle(store, { reservationId: result.reservation.id, actual: 0, at: ctx.now() })
+      if (err instanceof RoostBudgetDenied) {
+        sendError(res, 402, 'insufficient_credits', err.message)
+        return
+      }
+      throw err
+    }
     sendJson(res, 201, {
       reservation: reservationJson(result.reservation),
       remaining: result.remaining,
@@ -160,6 +175,16 @@ export async function handleInternalBudgetSettle(
 
   try {
     const result = settle(store, { reservationId, actual, at: ctx.now() })
+    if (reservation !== null) {
+      try {
+        await settleRoostCredits(store, reservation.workspaceId, {
+          id: reservation.id,
+          metric: reservation.metric,
+        }, actual)
+      } catch (err) {
+        console.error('roost-budget settle failed', err)
+      }
+    }
     sendJson(res, 200, {
       reservation: reservationJson(result.reservation),
       remaining: result.remaining,

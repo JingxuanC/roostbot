@@ -100,6 +100,7 @@ import type { ModelSettingsContext } from './model-settings-routes.ts'
 import { readModelKeyMaster } from './model-key-crypto.ts'
 import { resolveModelProxy } from './model-proxy-resolver.ts'
 import { handleMemoryClaims, handleMemoryCleanup } from './memory-claims-routes.ts'
+import { handleRoostBilling } from './roost-billing-routes.ts'
 import { createModelProxy } from '../../../packages/budget/src/index.ts'
 import type { ModelProxyHandler } from '../../../packages/budget/src/index.ts'
 import { handleModelProxy, type ModelProxyRouteContext } from './model-proxy-routes.ts'
@@ -2965,6 +2966,15 @@ async function handleRequest(ctx: HandlerContext, req: IncomingMessage, res: Ser
       return
     }
     await handleInternalMeter(ctx, req, res)
+    return
+  }
+
+  if (path === '/api/roost/billing') {
+    if (method !== 'GET') {
+      notFound(req, res, method, path)
+      return
+    }
+    await handleRoostBilling(ctx as never, req, res)
     return
   }
 
