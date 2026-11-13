@@ -1,0 +1,6 @@
+{
+  "name": "roostbot-miniprogram",
+  "private": true,
+  "type": "commonjs",
+  "description": "微信原生小程序端（零依赖）。type=commonjs 仅用于让 node:test 直接跑 utils 单测；微信小程序运行时使用自己的 CommonJS 模块系统，不受此文件影响。"
+}
